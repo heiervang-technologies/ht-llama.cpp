@@ -1,3 +1,5 @@
+![ht-llama.cpp](media/ht-llama-banner.png)
+
 # ht-llama.cpp
 
 _Heiervang Technologies fork of [llama.cpp](https://github.com/ggml-org/llama.cpp)_
@@ -26,8 +28,6 @@ Feature branches are created from `ht` and squash-merged back via PR.
 For questions or inquiries, use the [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) page. For details on fork workflow and sync procedures, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
 
 ---
-
-![ht-llama.cpp](media/ht-llama-banner.png)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
