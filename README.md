@@ -1,4 +1,31 @@
-# llama.cpp
+# ht-llama.cpp
+
+_Heiervang Technologies fork of [llama.cpp](https://github.com/ggml-org/llama.cpp)_
+
+[HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) | [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3) | [Upstream: llama.cpp](https://github.com/ggml-org/llama.cpp)
+
+---
+
+## HT Fork Changes
+
+This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [llama.cpp](https://github.com/ggml-org/llama.cpp). The `ht` branch contains the following changes on top of upstream `master`:
+
+| Change | Description | Contributed back? |
+|--------|-------------|-------------------|
+| _(none yet)_ | Fork just initialized | N/A |
+
+### Branch Strategy
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Clean fast-forward mirror of upstream `master` — never commit directly |
+| `ht` | HT-specific changes on top of `master` — **default branch** |
+
+Feature branches are created from `ht` and squash-merged back via PR.
+
+For questions or inquiries, use the [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) page. For details on fork workflow and sync procedures, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+---
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
