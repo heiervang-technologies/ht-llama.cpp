@@ -446,6 +446,37 @@ if __name__ == '__main__':
                     yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+                # MLA kv_b_proj: the base model splits this into k_b_proj (transposed) and v_b_proj,
+                # but LoraTorchTensor can't handle the required split+transpose on 3D tensors.
+                # Decompose the LoRA and apply split/transpose to the raw A/B tensors directly.
+                if name.endswith("kv_b_proj.weight") and isinstance(data_torch, LoraTorchTensor):
+                    lora_a, lora_b = data_torch.get_lora_A_B()
+
+                    n_head_kv = self.hparams["num_key_value_heads"]
+                    v_head_dim = self.hparams["v_head_dim"]
+                    qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+
+                    if lora_b.shape[0] != n_head_kv * (qk_nope_head_dim + v_head_dim):
+                        raise ValueError(f"unexpected kv_b_proj lora_B shape: {lora_b.shape}")
+                    lora_b_3d = lora_b.view(n_head_kv, qk_nope_head_dim + v_head_dim, -1)
+                    k_b_B, v_b_B = torch.split(lora_b_3d, [qk_nope_head_dim, v_head_dim], dim=1)
+
+                    # k_b is transposed in the base model: delta_k_b^T = A^T @ B^T
+                    k_lora_a = k_b_B.transpose(1, 2).contiguous()
+                    k_lora_b = lora_a.T.unsqueeze(0).contiguous()
+
+                    # v_b is not transposed: delta_v_b = B @ A
+                    v_lora_a = lora_a.unsqueeze(0).contiguous()
+                    v_lora_b = v_b_B.contiguous()
+
+                    name_kb = self.map_tensor_name(name.replace("kv_b_proj", "k_b_proj"))
+                    name_vb = self.map_tensor_name(name.replace("kv_b_proj", "v_b_proj"))
+                    yield (name_kb + ".lora_a", k_lora_a)
+                    yield (name_kb + ".lora_b", k_lora_b)
+                    yield (name_vb + ".lora_a", v_lora_a)
+                    yield (name_vb + ".lora_b", v_lora_b)
+                    return
+
                 dest = list(super().modify_tensors(data_torch, name, bid))
                 # some archs may have the same tensor for lm_head and output (tie word embeddings)
                 # in this case, adapters targeting lm_head will fail when using llama-export-lora
