@@ -1,3 +1,40 @@
+# HT Fork Management
+
+This is a [Heiervang Technologies](https://github.com/heiervang-technologies) fork. For full details on fork workflow, sync procedures, and contribution process, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+## Branch Conventions
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Clean fast-forward mirror of upstream — never commit directly |
+| `ht` | HT-specific changes — **default branch**, all PRs target this |
+| `feat/*` | Feature branches created from `ht`, squash-merged back via PR |
+
+## Sync Workflow
+
+```bash
+# Update master from upstream
+git checkout master
+git fetch upstream
+git merge --ff-only upstream/master
+git push origin master
+
+# Rebase ht onto updated master
+git checkout ht
+git rebase master
+git push --force-with-lease origin ht
+```
+
+## Commit Standards
+
+- Use [conventional commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `chore:`)
+- Maintain clean, linear history — one commit per logical change
+- Squash fix-up commits before merging
+
+For all questions and inquiries about this fork, use [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions).
+
+---
+
 # Contributors
 
 The project differentiates between 3 levels of contributors:
