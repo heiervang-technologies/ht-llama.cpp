@@ -287,6 +287,7 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool remap_developer_role = false;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;
@@ -303,7 +304,7 @@ json oaicompat_chat_params_parse(
     std::vector<raw_buffer> & out_files);
 
 // convert OpenAI Responses API format to OpenAI Chat Completions API format
-json convert_responses_to_chatcmpl(const json & body);
+json convert_responses_to_chatcmpl(const json & body, bool remap_developer_role = false);
 
 // convert Anthropic Messages API format to OpenAI Chat Completions API format
 json convert_anthropic_to_oai(const json & body);
