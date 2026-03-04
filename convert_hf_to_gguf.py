@@ -3942,12 +3942,14 @@ class PaddleOCRVisionModel(MmprojModel):
     "Qwen2VLForConditionalGeneration",
     "Qwen2_5_VLForConditionalGeneration",
     "Qwen2_5OmniModel",
+    "Qwen2_5OmniThinkerForConditionalGeneration",
 )
 class Qwen2VLModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2VL
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self._try_set_pooling_type()
 
     def set_vocab(self):
         try:
@@ -3985,8 +3987,8 @@ class Qwen2VLVisionModel(MmprojModel):
         model_type = self.global_config['model_type']
         if model_type == 'qwen2_vl':
             self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN2VL)
-        elif model_type == 'qwen2_5_vl' or model_type == 'qwen2_5_omni':
-            if model_type == 'qwen2_5_omni':
+        elif model_type in ('qwen2_5_vl', 'qwen2_5_omni', 'qwen2_5_omni_thinker'):
+            if model_type in ('qwen2_5_omni', 'qwen2_5_omni_thinker'):
                 self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25O)
             else:
                 self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25VL)
@@ -4038,7 +4040,7 @@ class Qwen2VLVisionModel(MmprojModel):
                 yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen2_5OmniModel")
+@ModelBase.register("Qwen2_5OmniModel", "Qwen2_5OmniThinkerForConditionalGeneration")
 class Qwen25OmniModel(Qwen2VLVisionModel):
     has_vision_encoder = True
     has_audio_encoder = True
@@ -4057,10 +4059,14 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
 
     def get_vision_config(self) -> dict[str, Any] | None:
-        return self.global_config["thinker_config"].get("vision_config")
+        if "thinker_config" in self.global_config:
+            return self.global_config["thinker_config"].get("vision_config")
+        return self.global_config.get("vision_config")
 
     def get_audio_config(self) -> dict[str, Any] | None:
-        return self.global_config["thinker_config"].get("audio_config")
+        if "thinker_config" in self.global_config:
+            return self.global_config["thinker_config"].get("audio_config")
+        return self.global_config.get("audio_config")
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # SinusoidsPositionEmbedding
