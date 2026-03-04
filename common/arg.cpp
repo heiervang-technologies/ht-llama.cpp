@@ -3038,6 +3038,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
+        {"--remap-developer-role"},
+        "remap the OpenAI \"developer\" role to \"system\" before applying chat templates "
+        "(needed for models whose templates reject unknown roles, e.g. Qwen3.5)",
+        [](common_params & params) {
+            params.remap_developer_role = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REMAP_DEVELOPER_ROLE"));
+    add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
