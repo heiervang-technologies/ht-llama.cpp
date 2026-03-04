@@ -4098,6 +4098,10 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
                 # this tensor is left unused in transformers code
                 # https://github.com/huggingface/transformers/blob/6e3063422c4b1c014aa60c32b9254fd2902f0f28/src/transformers/models/qwen2_5_omni/modular_qwen2_5_omni.py#L1809
                 return
+            # audio tensors go directly to base class (skip Qwen2VLVisionModel
+            # which only handles visual.* tensors)
+            yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
+            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 
