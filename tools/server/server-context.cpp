@@ -907,6 +907,7 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* media_path            */ params_base.media_path,
             };
         }
@@ -3639,7 +3640,7 @@ void server_routes::init_routes() {
     this->post_responses_oai = [this](const server_http_req & req) {
         auto res = create_response();
         std::vector<raw_buffer> files;
-        json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        json body = convert_responses_to_chatcmpl(json::parse(req.body), meta->chat_params.remap_developer_role);
         SRV_DBG("%s\n", "Request converted: OpenAI Responses -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         json body_parsed = oaicompat_chat_params_parse(
