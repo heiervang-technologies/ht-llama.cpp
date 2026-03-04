@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - ht
     paths: ['.github/workflows/python-lint.yml', '**/*.py']
   pull_request:
     types: [opened, synchronize, reopened]
