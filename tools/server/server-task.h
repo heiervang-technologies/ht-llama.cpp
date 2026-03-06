@@ -36,6 +36,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_OAI_RESP,
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
+    TASK_RESPONSE_TYPE_GEMINI,
 };
 
 enum stop_type {
@@ -398,6 +399,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_anthropic();
 
     json to_json_anthropic_stream();
+
+    json to_json_gemini();
+
+    json to_json_gemini_stream();
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
@@ -451,6 +456,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_resp();
 
     json to_json_anthropic();
+
+    json to_json_gemini();
 };
 
 struct server_task_result_embd : server_task_result {

@@ -146,6 +146,8 @@ int main(int argc, char ** argv) {
         routes.post_responses_oai          = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
+        routes.post_gemini_generate = models_routes->proxy_post;
+        routes.post_gemini_stream = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
         routes.post_embeddings             = models_routes->proxy_post;
         routes.post_embeddings_oai         = models_routes->proxy_post;
@@ -184,6 +186,11 @@ int main(int argc, char ** argv) {
     ctx_http.post("/responses",           ex_wrapper(routes.post_responses_oai));
     ctx_http.post("/v1/messages",         ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
     ctx_http.post("/v1/messages/count_tokens", ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
+    // Gemini API endpoints
+    ctx_http.post("/v1beta/models/:model:generateContent", ex_wrapper(routes.post_gemini_generate)); // Gemini generateContent
+    ctx_http.post("/v1beta/models/:model:streamGenerateContent", ex_wrapper(routes.post_gemini_stream)); // Gemini streaming
+    ctx_http.post("/v1/models/:model:generateContent", ex_wrapper(routes.post_gemini_generate)); // Gemini generateContent (v1)
+    ctx_http.post("/v1/models/:model:streamGenerateContent", ex_wrapper(routes.post_gemini_stream)); // Gemini streaming (v1)
     ctx_http.post("/infill",              ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",           ex_wrapper(routes.post_embeddings)); // legacy
     ctx_http.post("/embeddings",          ex_wrapper(routes.post_embeddings));

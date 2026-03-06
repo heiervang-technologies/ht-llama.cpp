@@ -630,6 +630,8 @@ json server_task_result_cmpl_final::to_json() {
             return stream ? to_json_oaicompat_resp_stream() : to_json_oaicompat_resp();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return stream ? to_json_gemini_stream() : to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1259,6 +1261,135 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
     return events;
 }
 
+json server_task_result_cmpl_final::to_json_gemini() {
+    // Gemini API response format
+    // https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse
+    
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = oaicompat_msg.tool_calls.empty() ? "STOP" : "FUNCTION_CALL";
+    }
+
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "assistant";
+        msg.content = content;
+    }
+
+    // Build parts array (Gemini's content blocks)
+    json parts = json::array();
+
+    // Text content
+    if (!msg.content.empty()) {
+        parts.push_back({{"text", msg.content}});
+    }
+
+    // Function calls
+    for (const auto & tool_call : msg.tool_calls) {
+        json args = json::object();
+        try {
+            args = json::parse(tool_call.arguments);
+        } catch (const std::exception &) {
+            // Keep empty object if parse fails
+        }
+        parts.push_back({
+            {"functionCall", {
+                {"name", tool_call.name},
+                {"args", args}
+            }}
+        });
+    }
+
+    json res = {
+        {"candidates", json::array({
+            {
+                {"content", {
+                    {"role", "model"},
+                    {"parts", parts}
+                }},
+                {"finishReason", finish_reason}
+            }
+        })},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }},
+        {"model", oaicompat_model}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_gemini_stream() {
+    // Gemini streaming format uses newline-delimited JSON
+    // Each chunk is a GenerateContentResponse
+    json events = json::array();
+
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = oaicompat_msg.tool_calls.empty() ? "STOP" : "FUNCTION_CALL";
+    }
+
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "assistant";
+        msg.content = content;
+    }
+
+    // Build parts from diffs for streaming
+    json parts = json::array();
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            parts.push_back({{"text", diff.content_delta}});
+        }
+        if (!diff.tool_call_delta.name.empty()) {
+            json args = json::object();
+            if (!diff.tool_call_delta.arguments.empty()) {
+                try {
+                    args = json::parse(diff.tool_call_delta.arguments);
+                } catch (...) {}
+            }
+            parts.push_back({
+                {"functionCall", {
+                    {"name", diff.tool_call_delta.name},
+                    {"args", args}
+                }}
+            });
+        }
+    }
+
+    // If no parts, add empty text
+    if (parts.empty()) {
+        parts.push_back({{"text", ""}});
+    }
+
+    json chunk = {
+        {"candidates", json::array({
+            {
+                {"content", {
+                    {"role", "model"},
+                    {"parts", parts}
+                }}
+            }
+        })}
+    };
+
+    // Add finish reason on final chunk
+    if (finish_reason != "MAX_TOKENS" || stop == STOP_TYPE_LIMIT) {
+        chunk["candidates"][0]["finishReason"] = finish_reason;
+    }
+
+    events.push_back(chunk);
+
+    return events;
+}
+
 //
 // server_task_result_cmpl_partial
 //
@@ -1305,6 +1436,8 @@ json server_task_result_cmpl_partial::to_json() {
             return to_json_oaicompat_resp();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1689,6 +1822,49 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
     }
 
     return events;
+}
+
+json server_task_result_cmpl_partial::to_json_gemini() {
+    // Gemini streaming response format
+    json parts = json::array();
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            parts.push_back({{"text", diff.content_delta}});
+        }
+        if (!diff.tool_call_delta.name.empty()) {
+            json args = json::object();
+            if (!diff.tool_call_delta.arguments.empty()) {
+                try {
+                    args = json::parse(diff.tool_call_delta.arguments);
+                } catch (...) {}
+            }
+            parts.push_back({
+                {"functionCall", {
+                    {"name", diff.tool_call_delta.name},
+                    {"args", args}
+                }}
+            });
+        }
+    }
+
+    // If no parts from deltas, use content member
+    if (parts.empty() && !content.empty()) {
+        parts.push_back({{"text", content}});
+    }
+
+    json res = {
+        {"candidates", json::array({
+            {
+                {"content", {
+                    {"role", "model"},
+                    {"parts", parts}
+                }}
+            }
+        })}
+    };
+
+    return res;
 }
 
 //
