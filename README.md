@@ -14,7 +14,9 @@ This is the [Heiervang Technologies](https://github.com/heiervang-technologies) 
 
 | Change | Description | Contributed back? |
 |--------|-------------|-------------------|
-| _(none yet)_ | Fork just initialized | N/A |
+| Agentic contributions policy | We welcome AI-assisted and AI-generated contributions—see [CONTRIBUTING.md](CONTRIBUTING.md) | N/A |
+
+Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship.
 
 ### Branch Strategy
 
