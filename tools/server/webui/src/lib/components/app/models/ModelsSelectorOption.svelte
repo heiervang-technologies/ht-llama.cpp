@@ -35,10 +35,13 @@
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
 	let isCancelling = $derived(modelsStore.isModelCancelling(option.model));
+	let isUnloading = $derived(modelsStore.isModelUnloading(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
 	let isLoading = $derived(
-		(serverStatus === ServerModelStatus.LOADING || isOperationInProgress) && !isCancelling
+		(serverStatus === ServerModelStatus.LOADING || isOperationInProgress) &&
+			!isCancelling &&
+			!isUnloading
 	);
 </script>
 
@@ -93,12 +96,17 @@
 		</div>
 		{#if isCancelling}
 			<div class="flex items-center gap-1.5">
-				<Loader2 class="h-4 w-4 animate-spin text-orange-400" />
+				<Loader2 class="h-4 w-4 animate-spin-reverse text-orange-400" />
 				<span class="text-xs text-orange-400">Cancelling</span>
+			</div>
+		{:else if isUnloading}
+			<div class="flex items-center gap-1.5">
+				<Loader2 class="h-4 w-4 animate-spin-reverse text-red-500" />
+				<span class="text-xs text-red-500">Unloading</span>
 			</div>
 		{:else if isLoading}
 			<div class="flex items-center gap-1">
-				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				<Loader2 class="h-4 w-4 animate-spin text-green-500" />
 
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<!-- svelte-ignore a11y_click_events_have_key_events -->

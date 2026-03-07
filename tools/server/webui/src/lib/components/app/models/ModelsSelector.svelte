@@ -398,9 +398,9 @@
 						{/if}
 
 						{#if isCancellingModel}
-							<Loader2 class="h-3 w-3.5 animate-spin text-orange-400" />
+							<Loader2 class="h-3 w-3.5 animate-spin-reverse text-orange-400" />
 						{:else if isLoadingModel}
-							<Loader2 class="h-3 w-3.5 animate-spin" />
+							<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<!-- svelte-ignore a11y_click_events_have_key_events -->
 							<div onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}>

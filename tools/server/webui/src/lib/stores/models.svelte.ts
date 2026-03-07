@@ -58,6 +58,7 @@ class ModelsStore {
 	private modelLoadingStates = new SvelteMap<string, boolean>();
 	private loadAbortControllers = new Map<string, AbortController>();
 	private modelCancellingStates = new SvelteMap<string, boolean>();
+	private modelUnloadingStates = new SvelteMap<string, boolean>();
 
 	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
 
@@ -226,6 +227,10 @@ class ModelsStore {
 
 	isModelCancelling(modelId: string): boolean {
 		return this.modelCancellingStates.get(modelId) ?? false;
+	}
+
+	isModelUnloading(modelId: string): boolean {
+		return this.modelUnloadingStates.get(modelId) ?? false;
 	}
 
 	getModelStatus(modelId: string): ServerModelStatus | null {
@@ -653,6 +658,7 @@ class ModelsStore {
 		if (this.modelLoadingStates.get(modelId)) return;
 
 		this.modelLoadingStates.set(modelId, true);
+		this.modelUnloadingStates.set(modelId, true);
 		this.error = null;
 
 		try {
@@ -666,6 +672,7 @@ class ModelsStore {
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
+			this.modelUnloadingStates.set(modelId, false);
 		}
 	}
 
@@ -751,6 +758,7 @@ class ModelsStore {
 		this.loadAbortControllers.forEach((c) => c.abort());
 		this.loadAbortControllers.clear();
 		this.modelCancellingStates.clear();
+		this.modelUnloadingStates.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
 	}
