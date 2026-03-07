@@ -57,6 +57,7 @@ class ModelsStore {
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
 	private loadAbortControllers = new Map<string, AbortController>();
+	private modelCancellingStates = new SvelteMap<string, boolean>();
 
 	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
 
@@ -221,6 +222,10 @@ class ModelsStore {
 
 	isModelOperationInProgress(modelId: string): boolean {
 		return this.modelLoadingStates.get(modelId) ?? false;
+	}
+
+	isModelCancelling(modelId: string): boolean {
+		return this.modelCancellingStates.get(modelId) ?? false;
 	}
 
 	getModelStatus(modelId: string): ServerModelStatus | null {
@@ -608,12 +613,31 @@ class ModelsStore {
 			controller.abort();
 		}
 
+		this.modelLoadingStates.set(modelId, false);
+		this.loadAbortControllers.delete(modelId);
+		this.modelCancellingStates.set(modelId, true);
+
 		try {
-			await ModelsService.unload(modelId);
-			await this.fetchRouterModels();
+			const status = this.getModelStatus(modelId);
+			if (status === ServerModelStatus.LOADING || status === ServerModelStatus.LOADED) {
+				await ModelsService.unload(modelId);
+			}
+
+			// Poll until the model is no longer in LOADING state
+			while (true) {
+				await this.fetchRouterModels();
+				const currentStatus = this.getModelStatus(modelId);
+				if (currentStatus !== ServerModelStatus.LOADING) {
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
+			}
+
 			toast.info(`Model loading cancelled: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
 			console.warn(`Failed to cancel model loading: ${modelId}`, error);
+		} finally {
+			this.modelCancellingStates.set(modelId, false);
 		}
 	}
 
@@ -726,6 +750,7 @@ class ModelsStore {
 		this.modelLoadingStates.clear();
 		this.loadAbortControllers.forEach((c) => c.abort());
 		this.loadAbortControllers.clear();
+		this.modelCancellingStates.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
 	}

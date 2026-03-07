@@ -70,6 +70,9 @@
 
 	let isLoadingModel = $state(false);
 	let loadingModelId = $state<string | null>(null);
+	let isCancellingModel = $derived(
+		loadingModelId ? modelsStore.isModelCancelling(loadingModelId) : false
+	);
 
 	let searchTerm = $state('');
 	let highlightedIndex = $state<number>(-1);
@@ -274,11 +277,14 @@
 		}
 	}
 
-	function handleCancelLoad() {
+	async function handleCancelLoad() {
 		if (loadingModelId) {
-			modelsStore.cancelLoadModel(loadingModelId);
+			const cancelId = loadingModelId;
 			isLoadingModel = false;
-			loadingModelId = null;
+			await modelsStore.cancelLoadModel(cancelId);
+			if (loadingModelId === cancelId) {
+				loadingModelId = null;
+			}
 		}
 	}
 
@@ -391,7 +397,9 @@
 							<span class="min-w-0 font-medium">Select model</span>
 						{/if}
 
-						{#if isLoadingModel}
+						{#if isCancellingModel}
+							<Loader2 class="h-3 w-3.5 animate-spin text-orange-400" />
+						{:else if isLoadingModel}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<!-- svelte-ignore a11y_click_events_have_key_events -->

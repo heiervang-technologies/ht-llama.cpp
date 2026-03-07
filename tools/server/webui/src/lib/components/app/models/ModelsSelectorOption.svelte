@@ -34,9 +34,12 @@
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
+	let isCancelling = $derived(modelsStore.isModelCancelling(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isLoaded = $derived(serverStatus === ServerModelStatus.LOADED && !isOperationInProgress);
-	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
+	let isLoading = $derived(
+		(serverStatus === ServerModelStatus.LOADING || isOperationInProgress) && !isCancelling
+	);
 </script>
 
 <div
@@ -88,7 +91,12 @@
 				/>
 			{/if}
 		</div>
-		{#if isLoading}
+		{#if isCancelling}
+			<div class="flex items-center gap-1.5">
+				<Loader2 class="h-4 w-4 animate-spin text-orange-400" />
+				<span class="text-xs text-orange-400">Cancelling</span>
+			</div>
+		{:else if isLoading}
 			<div class="flex items-center gap-1">
 				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
 
