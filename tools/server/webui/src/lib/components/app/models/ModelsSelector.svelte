@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package, X } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -69,6 +69,7 @@
 	});
 
 	let isLoadingModel = $state(false);
+	let loadingModelId = $state<string | null>(null);
 
 	let searchTerm = $state('');
 	let highlightedIndex = $state<number>(-1);
@@ -262,10 +263,22 @@
 
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
+			loadingModelId = option.model;
 			modelsStore
 				.loadModel(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
-				.finally(() => (isLoadingModel = false));
+				.finally(() => {
+					isLoadingModel = false;
+					loadingModelId = null;
+				});
+		}
+	}
+
+	function handleCancelLoad() {
+		if (loadingModelId) {
+			modelsStore.cancelLoadModel(loadingModelId);
+			isLoadingModel = false;
+			loadingModelId = null;
 		}
 	}
 
@@ -378,7 +391,14 @@
 							<span class="min-w-0 font-medium">Select model</span>
 						{/if}
 
-						{#if updating || isLoadingModel}
+						{#if isLoadingModel}
+							<Loader2 class="h-3 w-3.5 animate-spin" />
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<div onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}>
+								<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
+							</div>
+						{:else if updating}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
 						{:else}
 							<ChevronDown class="h-3 w-3.5" />

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw } from '@lucide/svelte';
+	import { CircleAlert, Heart, HeartOff, Loader2, Power, PowerOff, RotateCw, X } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -89,7 +89,21 @@
 			{/if}
 		</div>
 		{#if isLoading}
-			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			<div class="flex items-center gap-1">
+				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<!-- svelte-ignore a11y_click_events_have_key_events -->
+				<div onclick={(e) => e.stopPropagation()}>
+					<ActionIcon
+						iconSize="h-3 w-3"
+						icon={X}
+						tooltip="Cancel loading"
+						class="h-4 w-4 text-muted-foreground hover:text-red-500"
+						onclick={() => modelsStore.cancelLoadModel(option.model)}
+					/>
+				</div>
+			</div>
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />

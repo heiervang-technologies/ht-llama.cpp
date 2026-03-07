@@ -56,6 +56,7 @@ class ModelsStore {
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
+	private loadAbortControllers = new Map<string, AbortController>();
 
 	favouriteModelIds = $state<Set<string>>(this.loadFavouritesFromStorage());
 
@@ -519,10 +520,15 @@ class ModelsStore {
 	 */
 	private async pollForModelStatus(
 		modelId: string,
-		expectedStatus: ServerModelStatus
+		expectedStatus: ServerModelStatus,
+		signal?: AbortSignal
 	): Promise<void> {
 		let attempt = 0;
 		while (true) {
+			if (signal?.aborted) {
+				return;
+			}
+
 			await this.fetchRouterModels();
 
 			const currentStatus = this.getModelStatus(modelId);
@@ -541,6 +547,9 @@ class ModelsStore {
 				currentStatus === ServerModelStatus.UNLOADED &&
 				attempt > 2
 			) {
+				if (signal?.aborted) {
+					return;
+				}
 				throw new Error('Model was unloaded unexpectedly during loading');
 			}
 
@@ -560,21 +569,51 @@ class ModelsStore {
 
 		if (this.modelLoadingStates.get(modelId)) return;
 
+		const controller = new AbortController();
+		this.loadAbortControllers.set(modelId, controller);
 		this.modelLoadingStates.set(modelId, true);
 		this.error = null;
 
 		try {
 			await ModelsService.load(modelId);
-			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
+			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED, controller.signal);
+
+			if (controller.signal.aborted) {
+				return;
+			}
 
 			await this.updateModelModalities(modelId);
 			toast.success(`Model loaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
+			if (controller.signal.aborted) {
+				return;
+			}
 			this.error = error instanceof Error ? error.message : 'Failed to load model';
 			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
+			this.loadAbortControllers.delete(modelId);
+		}
+	}
+
+	/**
+	 * Cancel an in-progress model load (ROUTER mode)
+	 * Aborts the polling loop and sends unload to stop the subprocess
+	 * @param modelId - Model identifier to cancel loading
+	 */
+	async cancelLoadModel(modelId: string): Promise<void> {
+		const controller = this.loadAbortControllers.get(modelId);
+		if (controller) {
+			controller.abort();
+		}
+
+		try {
+			await ModelsService.unload(modelId);
+			await this.fetchRouterModels();
+			toast.info(`Model loading cancelled: ${this.toDisplayName(modelId)}`);
+		} catch (error) {
+			console.warn(`Failed to cancel model loading: ${modelId}`, error);
 		}
 	}
 
@@ -685,6 +724,8 @@ class ModelsStore {
 		this.selectedModelName = null;
 		this.modelUsage.clear();
 		this.modelLoadingStates.clear();
+		this.loadAbortControllers.forEach((c) => c.abort());
+		this.loadAbortControllers.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
 	}
