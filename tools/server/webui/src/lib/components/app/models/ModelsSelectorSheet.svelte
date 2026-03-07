@@ -53,10 +53,12 @@
 	let isRouter = $derived(isRouterMode());
 	let serverModel = $derived(singleModelName());
 
-	let isLoadingModel = $state(false);
-	let loadingModelId = $state<string | null>(null);
+	let triggerModelId = $state<string | null>(null);
+	let isLoadingModel = $derived(
+		triggerModelId ? modelsStore.isModelOperationInProgress(triggerModelId) && !modelsStore.isModelCancelling(triggerModelId) : false
+	);
 	let isCancellingModel = $derived(
-		loadingModelId ? modelsStore.isModelCancelling(loadingModelId) : false
+		triggerModelId ? modelsStore.isModelCancelling(triggerModelId) : false
 	);
 
 	let isHighlightedCurrentModelActive = $derived(
@@ -221,26 +223,22 @@
 		}
 
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
-			isLoadingModel = true;
-			loadingModelId = option.model;
+			triggerModelId = option.model;
 			modelsStore
 				.loadModel(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
 				.finally(() => {
-					isLoadingModel = false;
-					loadingModelId = null;
+					if (triggerModelId === option.model) {
+						triggerModelId = null;
+					}
 				});
 		}
 	}
 
 	async function handleCancelLoad() {
-		if (loadingModelId) {
-			const cancelId = loadingModelId;
-			isLoadingModel = false;
-			await modelsStore.cancelLoadModel(cancelId);
-			if (loadingModelId === cancelId) {
-				loadingModelId = null;
-			}
+		if (triggerModelId) {
+			await modelsStore.cancelLoadModel(triggerModelId);
+			triggerModelId = null;
 		}
 	}
 
@@ -321,11 +319,13 @@
 					<Loader2 class="h-3 w-3.5 animate-spin-reverse text-orange-400" />
 				{:else if isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
-					<!-- svelte-ignore a11y_no_static_element_interactions -->
-					<!-- svelte-ignore a11y_click_events_have_key_events -->
-					<div onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}>
+					<button
+						type="button"
+						aria-label="Cancel loading"
+						onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}
+					>
 						<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
-					</div>
+					</button>
 				{:else if updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}

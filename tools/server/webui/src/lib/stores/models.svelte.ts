@@ -519,6 +519,8 @@ class ModelsStore {
 
 	/** Polling interval in ms for checking model status */
 	private static readonly STATUS_POLL_INTERVAL = 500;
+	/** Maximum number of cancel poll attempts before giving up */
+	private static readonly MAX_CANCEL_POLL_ATTEMPTS = 60;
 
 	/**
 	 * Poll for expected model status after load/unload operation.
@@ -629,11 +631,16 @@ class ModelsStore {
 			}
 
 			// Poll until the model is no longer in LOADING state
-			while (true) {
+			for (let attempt = 0; attempt < ModelsStore.MAX_CANCEL_POLL_ATTEMPTS; attempt++) {
 				await this.fetchRouterModels();
 				const currentStatus = this.getModelStatus(modelId);
 				if (currentStatus !== ServerModelStatus.LOADING) {
 					break;
+				}
+				if (attempt === ModelsStore.MAX_CANCEL_POLL_ATTEMPTS - 1) {
+					console.warn(`Cancel polling timed out for model: ${modelId}`);
+					toast.warning(`Cancel may not have completed for: ${this.toDisplayName(modelId)}`);
+					return;
 				}
 				await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
 			}

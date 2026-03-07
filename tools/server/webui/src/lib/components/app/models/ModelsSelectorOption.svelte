@@ -108,9 +108,7 @@
 			<div class="flex items-center gap-1">
 				<Loader2 class="h-4 w-4 animate-spin text-green-500" />
 
-				<!-- svelte-ignore a11y_no_static_element_interactions -->
-				<!-- svelte-ignore a11y_click_events_have_key_events -->
-				<div onclick={(e) => e.stopPropagation()}>
+				<button type="button" aria-label="Cancel loading" onclick={(e) => e.stopPropagation()}>
 					<ActionIcon
 						iconSize="h-3 w-3"
 						icon={X}
@@ -118,7 +116,7 @@
 						class="h-4 w-4 text-muted-foreground hover:text-red-500"
 						onclick={() => modelsStore.cancelLoadModel(option.model)}
 					/>
-				</div>
+				</button>
 			</div>
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">
