@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import { SvelteMap } from 'svelte/reactivity';
+	import { ChevronDown, Loader2, Package, X } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
@@ -69,7 +70,13 @@
 		return options.some((option) => option.model === currentModel);
 	});
 
-	let isLoadingModel = $state(false);
+	let triggerModelId = $state<string | null>(null);
+	let isLoadingModel = $derived(
+		triggerModelId ? modelsStore.isModelOperationInProgress(triggerModelId) && !modelsStore.isModelCancelling(triggerModelId) : false
+	);
+	let isCancellingModel = $derived(
+		triggerModelId ? modelsStore.isModelCancelling(triggerModelId) : false
+	);
 
 	let searchTerm = $state('');
 	let highlightedIndex = $state<number>(-1);
@@ -192,11 +199,22 @@
 		}
 
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
-			isLoadingModel = true;
+			triggerModelId = option.model;
 			modelsStore
 				.loadModel(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
-				.finally(() => (isLoadingModel = false));
+				.finally(() => {
+					if (triggerModelId === option.model) {
+						triggerModelId = null;
+					}
+				});
+		}
+	}
+
+	async function handleCancelLoad() {
+		if (triggerModelId) {
+			await modelsStore.cancelLoadModel(triggerModelId);
+			triggerModelId = null;
 		}
 	}
 
@@ -309,7 +327,18 @@
 							<span class="min-w-0 font-medium">Select model</span>
 						{/if}
 
-						{#if updating || isLoadingModel}
+						{#if isCancellingModel}
+							<Loader2 class="h-3 w-3.5 animate-spin-reverse text-orange-400" />
+						{:else if isLoadingModel}
+							<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
+							<button
+								type="button"
+								aria-label="Cancel loading"
+								onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}
+							>
+								<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
+							</button>
+						{:else if updating}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
 						{:else}
 							<ChevronDown class="h-3 w-3.5" />
