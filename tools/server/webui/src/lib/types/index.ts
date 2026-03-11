@@ -28,6 +28,7 @@ export type {
 	ApiRouterModelsStatusRequest,
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsListResponse,
+	ApiDiscoveredLoraAdapter,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse
 } from './api';

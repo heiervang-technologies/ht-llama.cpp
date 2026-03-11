@@ -136,6 +136,8 @@ export { DatabaseService } from './database.service';
  *
  * @see modelsStore in stores/models.svelte.ts — primary consumer for reactive model state
  */
+export { LoraService } from './lora.service';
+
 export { ModelsService } from './models.service';
 
 /**

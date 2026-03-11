@@ -432,6 +432,16 @@ export interface ApiRouterModelsStatusResponse {
 export interface ApiRouterModelsListResponse {
 	object: string;
 	data: ApiModelDataEntry[];
+	lora_adapters?: ApiDiscoveredLoraAdapter[];
+}
+
+/**
+ * A LoRA adapter discovered in the models directory
+ */
+export interface ApiDiscoveredLoraAdapter {
+	name: string;
+	path: string;
+	architecture: string;
 }
 
 /**
