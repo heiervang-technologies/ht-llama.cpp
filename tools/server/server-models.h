@@ -98,6 +98,9 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> discovered_adapters;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
@@ -119,6 +122,9 @@ public:
 
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
+
+    // return discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> get_discovered_adapters();
 
     // load and unload model instances
     // these functions are thread-safe

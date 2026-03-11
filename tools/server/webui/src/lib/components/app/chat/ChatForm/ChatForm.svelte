@@ -6,7 +6,8 @@
 		ChatFormFileInputInvisible,
 		ChatFormPromptPicker,
 		ChatFormResourcePicker,
-		ChatFormTextarea
+		ChatFormTextarea,
+		LoraAdapters
 	} from '$lib/components/app';
 	import { DialogMcpResources } from '$lib/components/app/dialogs';
 	import {
@@ -615,6 +616,8 @@
 					}}
 				/>
 			{/if}
+
+			<LoraAdapters class="px-3 pb-1" modelId={isRouter ? activeModelId ?? undefined : undefined} />
 
 			<ChatFormActions
 				class="px-3"

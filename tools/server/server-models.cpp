@@ -3,6 +3,7 @@
 
 #include "preset.h"
 #include "download.h"
+#include "gguf.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <sheredom/subprocess.h>
@@ -244,11 +245,14 @@ void server_models::load_models() {
     // 1. cached models
     common_presets cached_models = ctx_preset.load_from_cache();
     SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
-    // 2. local models from --models-dir
+    // 2. local models from --models-dir (also discovers LoRA adapters)
     common_presets local_models;
     if (!base_params.models_dir.empty()) {
-        local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
-        SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
+        auto dir_result = ctx_preset.load_from_models_dir_with_lora(base_params.models_dir);
+        local_models = std::move(dir_result.presets);
+        discovered_adapters = std::move(dir_result.adapters);
+        SRV_INF("Loaded %zu local model presets and %zu LoRA adapters from %s\n",
+            local_models.size(), discovered_adapters.size(), base_params.models_dir.c_str());
     }
     // 3. custom-path models from presets
     common_preset global = {};
@@ -334,6 +338,13 @@ void server_models::load_models() {
                 info += " [tags: " + join_set(inst.meta.tags) + "]";
             }
             SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
+        }
+
+        if (!discovered_adapters.empty()) {
+            SRV_INF("Available LoRA adapters (%zu)\n", discovered_adapters.size());
+            for (const auto & adapter : discovered_adapters) {
+                SRV_INF("    %s (arch: %s)\n", adapter.name.c_str(), adapter.architecture.c_str());
+            }
         }
     }
 
@@ -492,6 +503,11 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
+std::vector<common_lora_adapter_info> server_models::get_discovered_adapters() {
+    std::lock_guard<std::mutex> lk(mutex);
+    return discovered_adapters;
+}
+
 void server_models::unload_lru() {
     if (base_params.models_max <= 0) {
         return; // no limit
@@ -553,6 +569,58 @@ void server_models::load(const std::string & name) {
     inst.subproc = std::make_shared<subprocess_s>();
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
+
+        // inject discovered LoRA adapters matching the model's architecture
+        if (!discovered_adapters.empty()) {
+            std::string model_path;
+            if (inst.meta.preset.get_option("LLAMA_ARG_MODEL", model_path) && !model_path.empty()) {
+                // read model architecture from GGUF metadata
+                struct gguf_init_params gguf_params = {
+                    /*.no_alloc = */ true,
+                    /*.ctx      = */ nullptr,
+                };
+                struct gguf_context * gguf_ctx = gguf_init_from_file(model_path.c_str(), gguf_params);
+                if (gguf_ctx) {
+                    std::string model_arch;
+                    int64_t arch_key = gguf_find_key(gguf_ctx, "general.architecture");
+                    if (arch_key >= 0) {
+                        const char * arch_val = gguf_get_val_str(gguf_ctx, arch_key);
+                        if (arch_val) {
+                            model_arch = arch_val;
+                        }
+                    }
+                    gguf_free(gguf_ctx);
+
+                    if (!model_arch.empty()) {
+                        // collect matching adapters and add as lora options
+                        std::vector<std::string> matching_lora_paths;
+                        for (const auto & adapter : discovered_adapters) {
+                            if (adapter.architecture == model_arch) {
+                                matching_lora_paths.push_back(adapter.path);
+                                SRV_INF("matching LoRA adapter '%s' with model '%s' (arch: %s)\n",
+                                    adapter.name.c_str(), name.c_str(), model_arch.c_str());
+                            }
+                        }
+                        if (!matching_lora_paths.empty()) {
+                            // set lora-init-without-apply so adapters are loaded but not applied by default
+                            inst.meta.preset.set_option(ctx_preset, "lora-init-without-apply", "true");
+                            // set lora paths as comma-separated value
+                            std::string lora_csv;
+                            for (const auto & p : matching_lora_paths) {
+                                if (!lora_csv.empty()) {
+                                    lora_csv += ",";
+                                }
+                                lora_csv += p;
+                            }
+                            inst.meta.preset.set_option(ctx_preset, "lora", lora_csv);
+                        }
+                    }
+                } else {
+                    SRV_WRN("failed to read GGUF metadata from model '%s', skipping LoRA adapter matching\n",
+                        model_path.c_str());
+                }
+            }
+        }
 
         inst.meta.update_args(ctx_preset, bin_path); // render args
 
@@ -915,7 +983,15 @@ void server_models_routes::init_routes() {
     this->proxy_post = [this](const server_http_req & req) {
         std::string method = "POST";
         json body = json::parse(req.body);
-        std::string name = json_value(body, "model", std::string());
+        std::string name;
+        // try to get model from JSON body (object with "model" field)
+        if (body.is_object()) {
+            name = json_value(body, "model", std::string());
+        }
+        // fallback to query parameter (needed for endpoints like POST /lora-adapters where body is an array)
+        if (name.empty()) {
+            name = req.get_param("model");
+        }
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -976,9 +1052,21 @@ void server_models_routes::init_routes() {
                 // TODO: add other fields, may require reading GGUF metadata
             });
         }
+        // include discovered LoRA adapters
+        json adapters_json = json::array();
+        auto all_adapters = models.get_discovered_adapters();
+        for (const auto & adapter : all_adapters) {
+            adapters_json.push_back(json {
+                {"name",         adapter.name},
+                {"path",         adapter.path},
+                {"architecture", adapter.architecture},
+            });
+        }
+
         res_ok(res, {
             {"data", models_json},
             {"object", "list"},
+            {"lora_adapters", adapters_json},
         });
         return res;
     };
