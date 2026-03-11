@@ -7,14 +7,22 @@
 
 	interface Props {
 		class?: string;
+		modelId?: string;
 	}
 
-	let { class: className = '' }: Props = $props();
+	let { class: className = '', modelId }: Props = $props();
 
 	let isOpen = $state(false);
 
 	onMount(() => {
-		loraStore.fetch();
+		loraStore.fetch(modelId);
+	});
+
+	$effect(() => {
+		// Re-fetch when model changes (e.g. user switches model in router mode)
+		if (modelId) {
+			loraStore.fetch(modelId);
+		}
 	});
 </script>
 

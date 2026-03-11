@@ -983,7 +983,15 @@ void server_models_routes::init_routes() {
     this->proxy_post = [this](const server_http_req & req) {
         std::string method = "POST";
         json body = json::parse(req.body);
-        std::string name = json_value(body, "model", std::string());
+        std::string name;
+        // try to get model from JSON body (object with "model" field)
+        if (body.is_object()) {
+            name = json_value(body, "model", std::string());
+        }
+        // fallback to query parameter (needed for endpoints like POST /lora-adapters where body is an array)
+        if (name.empty()) {
+            name = req.get_param("model");
+        }
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {

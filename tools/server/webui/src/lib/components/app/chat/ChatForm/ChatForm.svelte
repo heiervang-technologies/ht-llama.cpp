@@ -617,7 +617,7 @@
 				/>
 			{/if}
 
-			<LoraAdapters class="px-3 pb-1" />
+			<LoraAdapters class="px-3 pb-1" modelId={isRouter ? activeModelId ?? undefined : undefined} />
 
 			<ChatFormActions
 				class="px-3"

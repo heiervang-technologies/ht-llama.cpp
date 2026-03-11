@@ -81,16 +81,21 @@ class LoraStore {
 		});
 	}
 
+	/** Current model ID for router mode */
+	private modelId: string | undefined = undefined;
+
 	/**
 	 * Fetch LoRA adapters from server.
+	 * In router mode, pass modelId to route the request to the correct child.
 	 * Silently handles errors (no adapters = empty array).
 	 */
-	async fetch(): Promise<void> {
+	async fetch(modelId?: string): Promise<void> {
 		if (this.loading) return;
 		this.loading = true;
+		this.modelId = modelId;
 
 		try {
-			const adapters = await LoraService.list();
+			const adapters = await LoraService.list(modelId);
 
 			this.lastFetchedScales = new Map(adapters.map((a) => [a.id, a.scale]));
 
@@ -144,7 +149,7 @@ class LoraStore {
 		this.applying = true;
 
 		try {
-			await LoraService.update(this.adapterUpdates);
+			await LoraService.update(this.adapterUpdates, this.modelId);
 
 			// Update last fetched scales to reflect applied state
 			this.lastFetchedScales = new Map(
