@@ -14,6 +14,13 @@
 
 constexpr const char * COMMON_PRESET_DEFAULT_NAME = "default";
 
+// discovered LoRA adapter from models directory scanning
+struct common_lora_adapter_info {
+    std::string name;         // derived from filename (without .gguf extension)
+    std::string path;         // full path to the adapter file
+    std::string architecture; // general.architecture from GGUF metadata
+};
+
 struct common_preset_context;
 
 struct common_preset {
@@ -49,6 +56,12 @@ struct common_preset {
 // interface for multiple presets in one file
 using common_presets = std::map<std::string, common_preset>;
 
+// result of scanning a models directory, containing both models and adapters
+struct common_models_dir_result {
+    common_presets                        presets;  // model presets (non-adapter GGUF files)
+    std::vector<common_lora_adapter_info> adapters; // discovered LoRA adapters
+};
+
 // context for loading and editing presets
 struct common_preset_context {
     common_params default_params; // unused for now
@@ -70,6 +83,9 @@ struct common_preset_context {
     // generate presets from local models directory
     // for the directory structure, see "Using multiple models" in server/README.md
     common_presets load_from_models_dir(const std::string & models_dir) const;
+
+    // generate presets from local models directory, also discovering LoRA adapters
+    common_models_dir_result load_from_models_dir_with_lora(const std::string & models_dir) const;
 
     // generate one preset from CLI arguments
     common_preset load_from_args(int argc, char ** argv) const;
