@@ -6,6 +6,7 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		LoraAdapters,
 		McpServersSelector,
 		ModelsSelector,
 		ModelsSelectorSheet
@@ -221,6 +222,11 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
+		<LoraAdapters
+			disabled={disabled || isOffline}
+			modelId={isRouter ? activeModelId ?? undefined : undefined}
+		/>
+
 		{#if isMobile.current}
 			<ModelsSelectorSheet
 				disabled={disabled || isOffline}
