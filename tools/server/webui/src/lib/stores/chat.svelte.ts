@@ -23,6 +23,7 @@ import {
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
+import { loraStore } from '$lib/stores/lora.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -1535,6 +1536,9 @@ class ChatStore {
 			apiOptions.backend_sampling = currentConfig.backend_sampling;
 
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
+
+		const loraPayload = loraStore.getRequestPayload();
+		if (loraPayload) apiOptions.lora = loraPayload;
 
 		return apiOptions;
 	}
