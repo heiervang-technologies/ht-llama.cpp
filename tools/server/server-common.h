@@ -345,6 +345,12 @@ std::string format_oai_resp_sse(const json & data);
 // format Anthropic-style SSE with event types
 std::string format_anthropic_sse(const json & data);
 
+// convert Gemini API format to OpenAI Chat Completions API format
+json convert_gemini_to_oai(const json & body);
+
+// format Gemini-style SSE with event types
+std::string format_gemini_sse(const json & data);
+
 bool is_valid_utf8(const std::string & str);
 
 //

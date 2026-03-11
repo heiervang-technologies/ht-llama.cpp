@@ -1932,6 +1932,216 @@ bool is_valid_utf8(const std::string & str) {
     return true;
 }
 
+
+// Convert Gemini API request format to OpenAI Chat Completions format
+// Gemini format: https://ai.google.dev/api/generate-content
+json convert_gemini_to_oai(const json & body) {
+    json oai_body;
+    json oai_messages = json::array();
+
+    // Convert systemInstruction (Gemini's system prompt)
+    if (body.contains("systemInstruction")) {
+        const json & sys_inst = body.at("systemInstruction");
+        std::string system_content;
+        if (sys_inst.contains("parts") && sys_inst.at("parts").is_array()) {
+            for (const auto & part : sys_inst.at("parts")) {
+                if (part.contains("text")) {
+                    system_content += part.at("text").get<std::string>();
+                }
+            }
+        }
+        if (!system_content.empty()) {
+            oai_messages.push_back({
+                {"role", "system"},
+                {"content", system_content}
+            });
+        }
+    }
+
+    // Convert contents (Gemini's messages array)
+    if (!body.contains("contents")) {
+        throw std::runtime_error("'contents' is required");
+    }
+
+    const json & contents = body.at("contents");
+    if (contents.is_array()) {
+        for (const auto & content : contents) {
+            std::string role = json_value(content, "role", std::string("user"));
+            // Gemini uses "model" for assistant, OAI uses "assistant"
+            if (role == "model") {
+                role = "assistant";
+            }
+
+            if (!content.contains("parts")) {
+                continue;
+            }
+
+            const json & parts = content.at("parts");
+            if (!parts.is_array()) {
+                continue;
+            }
+
+            json converted_content = json::array();
+            json tool_calls = json::array();
+            bool has_tool_calls = false;
+
+            for (const auto & part : parts) {
+                if (part.contains("text")) {
+                    // Simple text part
+                    std::string text = part.at("text").get<std::string>();
+                    converted_content.push_back({
+                        {"type", "text"},
+                        {"text", text}
+                    });
+                } else if (part.contains("inlineData")) {
+                    // Inline base64 data (images, etc.)
+                    const json & inline_data = part.at("inlineData");
+                    std::string mime_type = json_value(inline_data, "mimeType", std::string("image/jpeg"));
+                    std::string data = json_value(inline_data, "data", std::string());
+                    std::ostringstream ss;
+                    ss << "data:" << mime_type << ";base64," << data;
+                    converted_content.push_back({
+                        {"type", "image_url"},
+                        {"image_url", {{"url", ss.str()}}}
+                    });
+                } else if (part.contains("functionCall")) {
+                    // Function call from model
+                    const json & fc = part.at("functionCall");
+                    tool_calls.push_back({
+                        {"id", json_value(fc, "id", std::string("call_" + std::to_string(std::rand())))},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", json_value(fc, "name", std::string())},
+                            {"arguments", json_value(fc, "args", json::object()).dump()}
+                        }}
+                    });
+                    has_tool_calls = true;
+                } else if (part.contains("functionResponse")) {
+                    // Function response (tool result)
+                    const json & fr = part.at("functionResponse");
+                    std::string name = json_value(fr, "name", std::string());
+                    const json & response = json_value(fr, "response", json::object());
+                    // Convert to OAI tool message format
+                    oai_messages.push_back({
+                        {"role", "tool"},
+                        {"tool_call_id", name},  // Gemini doesn't have IDs, use name
+                        {"content", response.dump()}
+                    });
+                }
+            }
+
+            // Build the message
+            json msg;
+            msg["role"] = role;
+
+            if (!converted_content.empty()) {
+                if (converted_content.size() == 1 && converted_content[0].contains("text")) {
+                    // Simple text - use string instead of array
+                    msg["content"] = converted_content[0]["text"];
+                } else {
+                    msg["content"] = converted_content;
+                }
+            } else if (has_tool_calls) {
+                msg["content"] = "";
+            }
+
+            if (!tool_calls.empty()) {
+                msg["tool_calls"] = tool_calls;
+            }
+
+            oai_messages.push_back(msg);
+        }
+    }
+
+    oai_body["messages"] = oai_messages;
+
+    // Convert generationConfig
+    if (body.contains("generationConfig")) {
+        const json & gen_config = body.at("generationConfig");
+        
+        // Map Gemini params to OAI params
+        if (gen_config.contains("temperature")) {
+            oai_body["temperature"] = gen_config.at("temperature");
+        }
+        if (gen_config.contains("maxOutputTokens")) {
+            oai_body["max_tokens"] = gen_config.at("maxOutputTokens");
+        }
+        if (gen_config.contains("topP")) {
+            oai_body["top_p"] = gen_config.at("topP");
+        }
+        if (gen_config.contains("topK")) {
+            oai_body["top_k"] = gen_config.at("topK");
+        }
+        if (gen_config.contains("stopSequences")) {
+            oai_body["stop"] = gen_config.at("stopSequences");
+        }
+    }
+
+    // Convert tools (function declarations)
+    if (body.contains("tools") && body.at("tools").is_array()) {
+        json oai_tools = json::array();
+        for (const auto & tool : body.at("tools")) {
+            if (tool.contains("functionDeclarations")) {
+                for (const auto & func_decl : tool.at("functionDeclarations")) {
+                    oai_tools.push_back({
+                        {"type", "function"},
+                        {"function", {
+                            {"name", json_value(func_decl, "name", std::string())},
+                            {"description", json_value(func_decl, "description", std::string())},
+                            {"parameters", json_value(func_decl, "parameters", json::object())}
+                        }}
+                    });
+                }
+            }
+        }
+        if (!oai_tools.empty()) {
+            oai_body["tools"] = oai_tools;
+        }
+    }
+
+    // Handle toolConfig for function calling mode
+    if (body.contains("toolConfig")) {
+        const json & tool_config = body.at("toolConfig");
+        if (tool_config.contains("functionCallingConfig")) {
+            const json & fc_config = tool_config.at("functionCallingConfig");
+            std::string mode = json_value(fc_config, "mode", std::string("AUTO"));
+            if (mode == "ANY" || mode == "NONE") {
+                // ANY -> required, NONE -> none
+                if (mode == "ANY") {
+                    oai_body["tool_choice"] = "required";
+                } else {
+                    oai_body["tool_choice"] = "none";
+                }
+            }
+            // AUTO is default in OAI, no need to set
+        }
+    }
+
+    // Default max_tokens if not set (Gemini requires it)
+    if (!oai_body.contains("max_tokens")) {
+        oai_body["max_tokens"] = 8192;
+    }
+
+    // Pass through stream if present
+    if (body.contains("stream")) {
+        oai_body["stream"] = body.at("stream");
+    }
+
+    return oai_body;
+}
+
+// Format Gemini-style SSE response
+std::string format_gemini_sse(const json & data) {
+    std::ostringstream ss;
+    
+    // Gemini uses newline-delimited JSON for streaming
+    // Format: data: <json>\n\n
+    ss << "data: " << safe_json_to_str(data) << "\n\n";
+    
+    return ss.str();
+}
+
+
 llama_tokens format_prompt_infill(
         const llama_vocab * vocab,
         const json & input_prefix,

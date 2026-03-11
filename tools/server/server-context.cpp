@@ -3149,6 +3149,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         json first_result_json = first_result->to_json();
         if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
+        } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+            res->data = format_gemini_sse(first_result_json);
         } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
             res->data = format_oai_resp_sse(first_result_json);
         } else {
@@ -3163,6 +3165,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         {"event", "error"},
                         {"data", res_json},
                     });
+                } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                    return format_gemini_sse({{"error", res_json}});
                 } else {
                     return format_oai_sse(json {{ "error", res_json }});
                 }
@@ -3189,6 +3193,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         case TASK_RESPONSE_TYPE_NONE:
                         case TASK_RESPONSE_TYPE_OAI_RESP:
                         case TASK_RESPONSE_TYPE_ANTHROPIC:
+                        case TASK_RESPONSE_TYPE_GEMINI:
                             output = "";
                             break;
 
@@ -3222,6 +3227,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
+                    } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                        output = format_gemini_sse(res_json);
                     } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
                         output = format_oai_resp_sse(res_json);
                     } else {
@@ -3713,6 +3720,45 @@ void server_routes::init_routes() {
         res->ok({{"input_tokens", static_cast<int>(tokens.size())}});
         return res;
     };
+
+    // Gemini API handlers
+    this->post_gemini_generate = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = convert_gemini_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Gemini -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_GEMINI);
+    };
+
+    this->post_gemini_stream = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = convert_gemini_to_oai(json::parse(req.body));
+        SRV_DBG("%s\n", "Request converted: Gemini -> OpenAI Chat Completions (stream)");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_GEMINI);
+    };
+
+
 
     // same with handle_chat_completions, but without inference part
     this->post_apply_template = [this](const server_http_req & req) {
