@@ -26,6 +26,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_STEERING_INJECT,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -166,6 +167,15 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
+
+    // used by SERVER_TASK_TYPE_STEERING_INJECT
+    struct steering_action {
+        int id_slot = -1;
+        std::string text;
+        std::string role;
+        int32_t position = -1; // -1 means inject at current position
+    };
+    steering_action steering_action;
 
     server_task() = default;
 
@@ -552,6 +562,12 @@ struct server_task_result_get_lora : server_task_result {
 };
 
 struct server_task_result_apply_lora : server_task_result {
+    virtual json to_json() override;
+};
+
+struct server_task_result_steering_inject : server_task_result {
+    int32_t n_injected = 0;
+
     virtual json to_json() override;
 };
 

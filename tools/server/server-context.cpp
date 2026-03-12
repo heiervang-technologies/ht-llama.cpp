@@ -1944,6 +1944,73 @@ private:
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_STEERING_INJECT:
+                {
+                    const int id_slot = task.steering_action.id_slot;
+                    server_slot * slot = get_slot_by_id(id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot->state != SLOT_STATE_GENERATING) {
+                        send_error(task, "Slot is not in generating state", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const std::string & text = task.steering_action.text;
+                    const std::string & role = task.steering_action.role;
+                    const int32_t position   = task.steering_action.position;
+
+                    // prepare (wrap + tokenize) the steering hint
+                    const int32_t max_tokens = 1024;
+                    std::vector<llama_token> hint_tokens(max_tokens);
+
+                    const char * tmpl = params_base.chat_template.empty() ? nullptr : params_base.chat_template.c_str();
+
+                    int32_t n_tokens = llama_steering_hint_prepare(
+                        model,
+                        tmpl,
+                        role.c_str(),
+                        text.c_str(),
+                        hint_tokens.data(),
+                        max_tokens);
+
+                    if (n_tokens < 0) {
+                        send_error(task, "Failed to prepare steering hint (token buffer too small or tokenization error)", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    hint_tokens.resize(n_tokens);
+
+                    // inject into KV cache
+                    // position = -1 means inject at current max position (handled by core function)
+                    int32_t rc = llama_steering_hint_inject(
+                        ctx,
+                        slot->id,
+                        (llama_pos) position,
+                        hint_tokens.data(),
+                        n_tokens);
+
+                    if (rc != 0) {
+                        send_error(task, "Failed to inject steering hint into KV cache", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    // Update the slot's token tracking to reflect the injected tokens
+                    // This ensures pos_next() returns the correct position for subsequent generation
+                    for (int32_t i = 0; i < n_tokens; i++) {
+                        slot->prompt.tokens.push_back(hint_tokens[i]);
+                    }
+
+                    SLT_INF(*slot, "steering hint injected: %d tokens at pos %d, role=%s\n",
+                        n_tokens, position, role.c_str());
+
+                    auto res = std::make_unique<server_task_result_steering_inject>();
+                    res->id         = task.id;
+                    res->id_slot    = id_slot;
+                    res->n_injected = n_tokens;
+                    queue_results.send(std::move(res));
+                } break;
         }
     }
 
@@ -3987,6 +4054,48 @@ void server_routes::init_routes() {
         }
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    this->post_steering_inject = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        // validate required fields
+        if (!body.contains("id_slot") || !body["id_slot"].is_number_integer()) {
+            res->error(format_error_response("Missing or invalid 'id_slot' field", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!body.contains("text") || !body["text"].is_string()) {
+            res->error(format_error_response("Missing or invalid 'text' field", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_STEERING_INJECT);
+            task.id = rd.get_new_id();
+            task.steering_action.id_slot  = body.at("id_slot").get<int>();
+            task.steering_action.text     = body.at("text").get<std::string>();
+            task.steering_action.role     = body.value("role", "system");
+            task.steering_action.position = body.value("position", -1);
+            rd.post_task(std::move(task));
+        }
+
+        // get the result
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_steering_inject*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
     };
