@@ -194,6 +194,7 @@ int llama_server(int argc, char ** argv) {
         routes.post_responses_tok_oai      = models_routes->proxy_post;
         routes.get_lora_adapters           = models_routes->proxy_get;
         routes.post_lora_adapters          = models_routes->proxy_post;
+        routes.post_steering_inject        = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
 
@@ -246,6 +247,10 @@ int llama_server(int argc, char ** argv) {
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
+
+    // Steering hints
+    ctx_http.post("/steering/inject",          ex_wrapper(routes.post_steering_inject));
+    ctx_http.post("/v1/steering/inject",       ex_wrapper(routes.post_steering_inject));
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
