@@ -691,6 +691,32 @@ extern "C" {
                          int32_t   il_end);
 
     //
+    // Steering hints
+    //
+
+    // Inject steering hint tokens into active generation at a given context position.
+    // Shifts existing KV cache entries and decodes hint tokens into the gap.
+    // inject_pos = -1 means inject after current max position.
+    // Returns 0 on success, negative on error.
+    LLAMA_API int32_t llama_steering_hint_inject(
+            struct llama_context * ctx,
+            llama_seq_id           seq_id,
+            llama_pos              inject_pos,
+            const llama_token    * tokens,
+            int32_t                n_tokens);
+
+    // Wrap text with chat template and tokenize for use with llama_steering_hint_inject.
+    // If out_tokens is NULL, returns the number of tokens needed.
+    // Returns number of tokens written, or negative on error.
+    LLAMA_API int32_t llama_steering_hint_prepare(
+            const struct llama_model * model,
+            const char               * chat_template,
+            const char               * role,
+            const char               * text,
+            llama_token              * out_tokens,
+            int32_t                    max_tokens);
+
+    //
     // Memory
     //
 
