@@ -3,7 +3,6 @@
 
 #include <vector>
 #include <string>
-#include <cstring>
 
 int32_t llama_steering_hint_inject(
         struct llama_context * ctx,
@@ -48,7 +47,9 @@ int32_t llama_steering_hint_inject(
     llama_batch_free(batch);
 
     if (ret != 0) {
-        LLAMA_LOG_ERROR("%s: failed to decode steering hint tokens (ret=%d)\n", __func__, ret);
+        LLAMA_LOG_ERROR("%s: failed to decode steering hint tokens (ret=%d), rolling back position shift\n", __func__, ret);
+        // Undo the position shift to restore KV cache consistency
+        llama_memory_seq_add(mem, seq_id, inject_pos + n_tokens, -1, -n_tokens);
         return -3;
     }
 

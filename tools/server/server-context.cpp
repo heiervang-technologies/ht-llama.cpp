@@ -1982,6 +1982,12 @@ private:
 
                     hint_tokens.resize(n_tokens);
 
+                    // check that injection won't exceed context size
+                    if (slot->prompt.n_tokens() + n_tokens >= slot->n_ctx) {
+                        send_error(task, "Steering hint would exceed context size", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
                     // inject into KV cache
                     // position = -1 means inject at current max position (handled by core function)
                     int32_t rc = llama_steering_hint_inject(
