@@ -1,5 +1,8 @@
 #include "set-rows.cuh"
 #include "cpy-utils.cuh"
+#include "turboq.cuh"
+
+#include <vector>
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
@@ -309,6 +312,42 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_TBQ3_0 || dst->type == GGML_TYPE_TBQ4_0) {
+        // TBQ requires bulk quantization with rotation matrix.
+        // For KV cache, SET_ROWS typically writes a single row at a time (ne01=1).
+        // We copy row indices to host to resolve indirection, then dispatch GPU quantize.
+        const int64_t n_rows = ne01 * ne02 * ne03;
+
+        // Copy row indices to host (small — typically 1 index for KV cache single-token insert)
+        std::vector<idx_t> h_indices(n_rows);
+        CUDA_CHECK(cudaMemcpyAsync(h_indices.data(), src1_d, n_rows * sizeof(idx_t),
+                                    cudaMemcpyDeviceToHost, stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+
+        int idx_i = 0;
+        for (int64_t i03 = 0; i03 < ne03; i03++) {
+            for (int64_t i02 = 0; i02 < ne02; i02++) {
+                for (int64_t i01 = 0; i01 < ne01; i01++) {
+                    const char * src_row = (const char *)src0_d + i01*nb01 + i02*nb02 + i03*nb03;
+                    const int64_t dst_row_idx = (int64_t)h_indices[idx_i++];
+                    char * dst_row = (char *)dst->data + dst_row_idx*nb1 + i02*nb2 + i03*nb3;
+
+                    if (dst->type == GGML_TYPE_TBQ3_0) {
+                        ggml_cpy_f32_tbq3_0_cuda(
+                            src_row, dst_row, ne00,
+                            ne00, 1, 1, sizeof(float), ne00*sizeof(float), ne00*sizeof(float), ne00*sizeof(float),
+                            ne00, 1, 1, nb1, nb1, nb1, nb1,
+                            stream);
+                    } else {
+                        ggml_cpy_f32_tbq4_0_cuda(
+                            src_row, dst_row, ne00,
+                            ne00, 1, 1, sizeof(float), ne00*sizeof(float), ne00*sizeof(float), ne00*sizeof(float),
+                            ne00, 1, 1, nb1, nb1, nb1, nb1,
+                            stream);
+                    }
+                }
+            }
+        }
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }
