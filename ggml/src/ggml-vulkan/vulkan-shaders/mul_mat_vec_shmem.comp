@@ -1,0 +1,183 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+// Shared-memory staging MatVec kernel
+//
+// Two-phase approach:
+//   Phase 1 (DECODE): All threads cooperatively load and dequantize a tile of
+//                     the A-matrix into shared memory as f32 values.
+//   Phase 2 (DOT):   Each thread computes partial dot products from the staged
+//                     shared memory tile against the B-vector elements.
+//
+// This decouples the memory-bound dequantization from the compute-bound dot
+// products, improving utilization on GPUs where the two phases have different
+// bottlenecks (particularly beneficial on Intel Arc and similar architectures).
+
+#include "mul_mat_vec_base.glsl"
+#include "dequant_funcs.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+#if !defined(DATA_A_F32) && !defined(DATA_A_F16) && !defined(DATA_A_BF16)
+#define K_PER_ITER 8
+#else
+#define K_PER_ITER 2
+#endif
+
+// Tile width: number of K-elements staged per iteration
+// Each iteration, BLOCK_SIZE threads each handle K_PER_ITER elements,
+// so we stage TILE_K = BLOCK_SIZE * K_PER_ITER elements of K per tile.
+// For NUM_ROWS output rows, shared memory = NUM_ROWS * TILE_K * sizeof(float).
+//
+// With BLOCK_SIZE=64, K_PER_ITER=8: TILE_K=512, and for NUM_ROWS=2:
+//   shmem = 2 * 512 * 4 = 4096 bytes (well within 32KB limit)
+
+// Shared memory for staging dequantized A-matrix tile
+// Layout: [NUM_ROWS][BLOCK_SIZE * K_PER_ITER]
+shared float a_staging[NUM_ROWS][BLOCK_SIZE * K_PER_ITER];
+
+uint a_offset, b_offset, d_offset, y_offset;
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid = gl_LocalInvocationID.x;
+
+    get_offsets(a_offset, b_offset, d_offset);
+
+    y_offset = QUANT_R == 1 ? 1 : QUANT_K/2;
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint i = 0; i < NUM_ROWS; ++i) {
+            temp[j][i] = FLOAT_TYPE(0);
+        }
+    }
+
+    uint num_iters = p.ncols / (K_PER_ITER * BLOCK_SIZE);
+    if (num_iters * K_PER_ITER * BLOCK_SIZE + K_PER_ITER*tid < p.ncols) {
+        num_iters++;
+    }
+
+    for (uint i = 0; i < num_iters; ++i) {
+        const uint col = i*BLOCK_SIZE*K_PER_ITER + K_PER_ITER*tid;
+        const bool lastiter = (i == num_iters - 1);
+
+        // ============================================================
+        // Phase 1: DECODE - cooperatively dequantize A-tile into shmem
+        // ============================================================
+        const uint iqs = (col%QUANT_K)/QUANT_R;
+        const uint iybs = col - col%QUANT_K;
+
+        uint ibi = first_row * p.ncols;
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib = (ibi + col)/QUANT_K;
+            ibi += p.ncols;
+
+            const uint shmem_base = K_PER_ITER * tid;
+
+#if K_PER_ITER == 8
+            vec4 v = dequantize4(ib, iqs, a_offset);
+            vec4 v2 = dequantize4(ib, iqs+(4/QUANT_R), a_offset);
+
+            const vec2 dm = get_dm(ib, a_offset);
+            if (dm.y != 0) {
+                v = v * dm.x + dm.y;
+                v2 = v2 * dm.x + dm.y;
+            } else {
+                v *= dm.x;
+                v2 *= dm.x;
+            }
+
+            a_staging[n][shmem_base + 0] = v.x;
+            a_staging[n][shmem_base + 1] = v.y;
+            a_staging[n][shmem_base + 2] = v.z;
+            a_staging[n][shmem_base + 3] = v.w;
+            a_staging[n][shmem_base + 4] = v2.x;
+            a_staging[n][shmem_base + 5] = v2.y;
+            a_staging[n][shmem_base + 6] = v2.z;
+            a_staging[n][shmem_base + 7] = v2.w;
+#else
+            const vec2 v = dequantize(ib, iqs, a_offset);
+
+            a_staging[n][shmem_base + 0] = v.x;
+            a_staging[n][shmem_base + 1] = v.y;
+#endif
+        }
+
+        barrier();
+
+        // ============================================================
+        // Phase 2: DOT - compute dot products from shared memory
+        // ============================================================
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            // Re-derive B-vector access coordinates
+            const uint b_iybs = col - col%QUANT_K;
+            const uint b_iqs = (col%QUANT_K)/QUANT_R;
+
+#if K_PER_ITER == 8
+#if QUANT_R == 2
+            const vec4 bv02 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + b_iybs + b_iqs) / 4]);
+            const vec4 bv13 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + b_iybs + b_iqs + y_offset) / 4]);
+            const vec4 bv0 = vec4(bv02.x, bv13.x, bv02.y, bv13.y);
+            const vec4 bv1 = vec4(bv02.z, bv13.z, bv02.w, bv13.w);
+#else
+            const vec4 bv0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + b_iybs + b_iqs) / 4]);
+            const vec4 bv1 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + b_iybs + b_iqs) / 4 + 1]);
+#endif
+#else
+            const bool OOB = lastiter && (b_iybs + b_iqs + y_offset >= p.ncols);
+
+            FLOAT_TYPE b0 = 0, b1 = 0;
+            b0 = FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + b_iybs + b_iqs]);
+            if (!OOB) {
+                b1 = FLOAT_TYPE(data_b[j*p.batch_stride_b + b_offset + b_iybs + b_iqs + y_offset]);
+            }
+#endif
+
+            const uint shmem_base = K_PER_ITER * tid;
+
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+#if K_PER_ITER == 8
+                vec4 sv0 = vec4(a_staging[n][shmem_base + 0],
+                                a_staging[n][shmem_base + 1],
+                                a_staging[n][shmem_base + 2],
+                                a_staging[n][shmem_base + 3]);
+                vec4 sv1 = vec4(a_staging[n][shmem_base + 4],
+                                a_staging[n][shmem_base + 5],
+                                a_staging[n][shmem_base + 6],
+                                a_staging[n][shmem_base + 7]);
+
+                temp[j][n] += FLOAT_TYPE(dot(bv0, sv0) + dot(bv1, sv1));
+#else
+                temp[j][n] = fma(FLOAT_TYPE(a_staging[n][shmem_base + 0]), b0, temp[j][n]);
+                if (!OOB) {
+                    temp[j][n] = fma(FLOAT_TYPE(a_staging[n][shmem_base + 1]), b1, temp[j][n]);
+                }
+#endif
+            }
+        }
+
+        barrier();
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
+#endif
+
+    // do NUM_ROWS at a time, unless there aren't enough remaining rows
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}
