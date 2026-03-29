@@ -78,6 +78,9 @@
 // Each quantized row is typically 1-4 cache lines, so prefetching 2-4 rows
 // ahead gives the memory subsystem ~200-400 bytes of lead time.
 #define GGML_PREFETCH_ROWS_AHEAD 4
+// Minimum row size (bytes) to enable prefetching. For small models where
+// weights fit in cache, prefetch instructions add overhead without benefit.
+#define GGML_PREFETCH_MIN_ROW_BYTES (4 * GGML_CACHE_LINE)
 
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
@@ -1247,9 +1250,11 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                             (src1_cont || src1->type != vec_dot_type
                                 ? (ni11 + ni12 * ne11 + ni13 * ne12 * ne11) * row_size
                                 : (ni11 * nb11 + ni12 * nb12 + ni13 * nb13));
-                        GGML_PREFETCH_T0(next_src1_col);
-                        if (row_size > GGML_CACHE_LINE) {
-                            GGML_PREFETCH_T0(next_src1_col + GGML_CACHE_LINE);
+                        if (row_size >= GGML_PREFETCH_MIN_ROW_BYTES) {
+                            GGML_PREFETCH_T0(next_src1_col);
+                            if (row_size > GGML_CACHE_LINE) {
+                                GGML_PREFETCH_T0(next_src1_col + GGML_CACHE_LINE);
+                            }
                         }
                     }
                 }
@@ -1262,15 +1267,16 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     // Prefetch src0 rows ahead to hide memory latency.
                     // We prefetch GGML_PREFETCH_ROWS_AHEAD rows into L1 (T0) and the
                     // row after that into L2 (T1), covering ~256-512 bytes of lead time.
-                    const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD * num_rows_per_vec_dot;
-                    if (ir0_prefetch < ir0_end) {
-                        GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01);
-                        // Also prefetch further into the row if rows are wide (> 1 cache line)
-                        if (nb01 > GGML_CACHE_LINE) {
-                            GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01 + GGML_CACHE_LINE);
-                        }
-                        if (nb01 > 2 * GGML_CACHE_LINE) {
-                            GGML_PREFETCH_T1(src0_row + ir0_prefetch * nb01 + 2 * GGML_CACHE_LINE);
+                    if (nb01 >= GGML_PREFETCH_MIN_ROW_BYTES) {
+                        const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD * num_rows_per_vec_dot;
+                        if (ir0_prefetch < ir0_end) {
+                            GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01);
+                            if (nb01 > GGML_CACHE_LINE) {
+                                GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01 + GGML_CACHE_LINE);
+                            }
+                            if (nb01 > 2 * GGML_CACHE_LINE) {
+                                GGML_PREFETCH_T1(src0_row + ir0_prefetch * nb01 + 2 * GGML_CACHE_LINE);
+                            }
                         }
                     }
 
@@ -1283,7 +1289,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
             }
 
             // Prefetch src0 data for the next block of rows in the ir0 dimension
-            if (iir0 + blck_0 < ir0_end) {
+            if (nb01 >= GGML_PREFETCH_MIN_ROW_BYTES && iir0 + blck_0 < ir0_end) {
                 for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
                     const int64_t i13 = (ir1 / (ne12 * ne1));
                     const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
@@ -1557,11 +1563,13 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                     // Prefetch src0 rows ahead to hide memory latency
-                    const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD;
-                    if (ir0_prefetch < ir0_end) {
-                        GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01);
-                        if (nb01 > GGML_CACHE_LINE) {
-                            GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01 + GGML_CACHE_LINE);
+                    if (nb01 >= GGML_PREFETCH_MIN_ROW_BYTES) {
+                        const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD;
+                        if (ir0_prefetch < ir0_end) {
+                            GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01);
+                            if (nb01 > GGML_CACHE_LINE) {
+                                GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01 + GGML_CACHE_LINE);
+                            }
                         }
                     }
 
