@@ -36,6 +36,12 @@
 #include <signal.h>
 #if defined(__gnu_linux__)
 #include <syscall.h>
+#include <sched.h>
+// Memory policy constants for set_mempolicy syscall (avoids libnuma dependency)
+#ifndef MPOL_DEFAULT
+#define MPOL_DEFAULT    0
+#define MPOL_INTERLEAVE 3
+#endif
 #endif
 
 #ifdef GGML_USE_OPENMP
@@ -524,10 +530,18 @@ static inline void ggml_thread_cpu_relax(void) {;}
 
 #define GGML_NUMA_MAX_NODES 8
 #define GGML_NUMA_MAX_CPUS 512
+#define GGML_NUMA_MAX_CCX  64  // max L3 cache clusters (CCX/CCD groups)
 
 struct ggml_numa_node {
     uint32_t cpus[GGML_NUMA_MAX_CPUS]; // hardware threads on this node
     uint32_t n_cpus;
+};
+
+// L3 cache cluster (CCX on AMD, sub-NUMA cluster on Intel)
+struct ggml_numa_ccx {
+    uint32_t cpus[GGML_NUMA_MAX_CPUS]; // cores sharing this L3
+    uint32_t n_cpus;
+    uint32_t node;                      // parent NUMA node
 };
 
 struct ggml_numa_nodes {
@@ -541,6 +555,14 @@ struct ggml_numa_nodes {
 #else
     uint32_t cpuset; // no NUMA support outside of Linux at this time. Use a portable datatype
 #endif
+
+    // CCX/L3 topology for sub-NUMA locality (used by PIN strategy)
+    struct ggml_numa_ccx ccx[GGML_NUMA_MAX_CCX];
+    uint32_t n_ccx;
+    // Sorted CPU list for 1:1 thread pinning: cores ordered by CCX then node
+    uint32_t pin_order[GGML_NUMA_MAX_CPUS];
+    uint32_t n_pin_cpus;
+    bool     pin_initialized;
 };
 
 //
@@ -608,6 +630,151 @@ static cpu_set_t ggml_get_numa_affinity(void) {
     pthread_getaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
     return cpuset;
 }
+// Parse a CPU list string like "0-3,8-11" into individual CPU IDs.
+// Returns the number of CPUs parsed.
+static uint32_t ggml_parse_cpu_list(char * str, uint32_t * out, uint32_t max_out) {
+    uint32_t n = 0;
+    char * p = str;
+    while (*p && n < max_out) {
+        while (*p == ',' || *p == ' ' || *p == '\n') p++;
+        if (!*p) break;
+
+        unsigned long start = strtoul(p, &p, 10);
+        unsigned long end = start;
+        if (*p == '-') {
+            p++;
+            end = strtoul(p, &p, 10);
+        }
+        for (unsigned long c = start; c <= end && n < max_out; c++) {
+            out[n++] = (uint32_t)c;
+        }
+    }
+    return n;
+}
+
+// Detect L3 cache clusters (CCX/CCD on AMD, sub-NUMA clusters on Intel).
+// Reads /sys/devices/system/cpu/cpuN/cache/index3/shared_cpu_list
+static void ggml_numa_detect_ccx(struct ggml_numa_nodes * numa) {
+    numa->n_ccx = 0;
+
+    for (uint32_t c = 0; c < numa->total_cpus && numa->n_ccx < GGML_NUMA_MAX_CCX; c++) {
+        char path[256];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpu%u/cache/index3/shared_cpu_list", c);
+
+        FILE * f = fopen(path, "r");
+        if (!f) continue;
+
+        char buf[256];
+        if (!fgets(buf, sizeof(buf), f)) {
+            fclose(f);
+            continue;
+        }
+        fclose(f);
+
+        uint32_t shared_cpus[GGML_NUMA_MAX_CPUS];
+        uint32_t n_shared = ggml_parse_cpu_list(buf, shared_cpus, GGML_NUMA_MAX_CPUS);
+        if (n_shared == 0) continue;
+
+        // Check if we already have a CCX with the same first CPU
+        uint32_t first_cpu = shared_cpus[0];
+        bool found = false;
+        for (uint32_t i = 0; i < numa->n_ccx; i++) {
+            if (numa->ccx[i].n_cpus > 0 && numa->ccx[i].cpus[0] == first_cpu) {
+                found = true;
+                break;
+            }
+        }
+        if (found) continue;
+
+        struct ggml_numa_ccx * ccx = &numa->ccx[numa->n_ccx];
+        ccx->n_cpus = n_shared;
+        for (uint32_t i = 0; i < n_shared; i++) {
+            ccx->cpus[i] = shared_cpus[i];
+        }
+
+        // Determine which NUMA node this CCX belongs to
+        ccx->node = 0;
+        for (uint32_t nn = 0; nn < numa->n_nodes; nn++) {
+            struct ggml_numa_node * node = &numa->nodes[nn];
+            for (uint32_t i = 0; i < node->n_cpus; i++) {
+                if (node->cpus[i] == first_cpu) {
+                    ccx->node = nn;
+                    goto ccx_node_found;
+                }
+            }
+        }
+        ccx_node_found:
+
+        GGML_PRINT_DEBUG("CCX %u: node %u, %u cpus (first=%u)\n",
+                         numa->n_ccx, ccx->node, ccx->n_cpus, first_cpu);
+        numa->n_ccx++;
+    }
+}
+
+// Build pin_order: cores sorted by CCX cluster then NUMA node for maximum L3 sharing.
+static void ggml_numa_build_pin_order(struct ggml_numa_nodes * numa) {
+    numa->n_pin_cpus = 0;
+    numa->pin_initialized = false;
+
+    if (numa->n_ccx > 0) {
+        // Sort CCX clusters by NUMA node, then by first CPU
+        uint32_t ccx_order[GGML_NUMA_MAX_CCX];
+        for (uint32_t i = 0; i < numa->n_ccx; i++) ccx_order[i] = i;
+        for (uint32_t i = 1; i < numa->n_ccx; i++) {
+            uint32_t key = ccx_order[i];
+            uint32_t j = i;
+            while (j > 0) {
+                uint32_t prev = ccx_order[j - 1];
+                if (numa->ccx[prev].node < numa->ccx[key].node) break;
+                if (numa->ccx[prev].node == numa->ccx[key].node &&
+                    numa->ccx[prev].cpus[0] < numa->ccx[key].cpus[0]) break;
+                ccx_order[j] = ccx_order[j - 1];
+                j--;
+            }
+            ccx_order[j] = key;
+        }
+
+        for (uint32_t i = 0; i < numa->n_ccx; i++) {
+            struct ggml_numa_ccx * ccx = &numa->ccx[ccx_order[i]];
+            for (uint32_t ci = 0; ci < ccx->n_cpus && numa->n_pin_cpus < GGML_NUMA_MAX_CPUS; ci++) {
+                numa->pin_order[numa->n_pin_cpus++] = ccx->cpus[ci];
+            }
+        }
+    } else {
+        // Fallback: order cores by NUMA node
+        for (uint32_t n = 0; n < numa->n_nodes; n++) {
+            struct ggml_numa_node * node = &numa->nodes[n];
+            for (uint32_t ci = 0; ci < node->n_cpus && numa->n_pin_cpus < GGML_NUMA_MAX_CPUS; ci++) {
+                numa->pin_order[numa->n_pin_cpus++] = node->cpus[ci];
+            }
+        }
+    }
+
+    if (numa->n_pin_cpus > 0) {
+        numa->pin_initialized = true;
+        GGML_PRINT_DEBUG("NUMA pin order: %u cpus, %u CCX clusters\n",
+                         numa->n_pin_cpus, numa->n_ccx);
+    }
+}
+
+// Set memory interleave policy across all NUMA nodes via syscall (no libnuma needed).
+static void ggml_numa_set_interleave_policy(struct ggml_numa_nodes * numa) {
+    if (numa->n_nodes <= 1) return;
+
+    unsigned long nodemask = 0;
+    for (uint32_t n = 0; n < numa->n_nodes && n < (uint32_t)(sizeof(unsigned long) * 8); n++) {
+        nodemask |= (1UL << n);
+    }
+
+    long ret = syscall(SYS_set_mempolicy, MPOL_INTERLEAVE, &nodemask, numa->n_nodes + 1);
+    if (ret == 0) {
+        GGML_PRINT_DEBUG("NUMA: set memory interleave policy across %u nodes\n", numa->n_nodes);
+    } else {
+        GGML_PRINT_DEBUG("NUMA: set_mempolicy(MPOL_INTERLEAVE) failed: %s\n", strerror(errno));
+    }
+}
+
 #else
 static uint32_t ggml_get_numa_affinity(void) {
     return 0; // no NUMA support
@@ -625,6 +792,15 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
     struct stat st;
     char path[256];
     int rv;
+
+    // Check GGML_NUMA_PIN env var: if set to "1", override strategy to PIN
+    {
+        const char * pin_env = getenv("GGML_NUMA_PIN");
+        if (pin_env && strcmp(pin_env, "1") == 0) {
+            numa_flag = GGML_NUMA_STRATEGY_PIN;
+            GGML_LOG_INFO("NUMA: GGML_NUMA_PIN=1 detected, using PIN strategy\n");
+        }
+    }
 
     // set numa scheme
     g_state.numa.numa_strategy = numa_flag;
@@ -694,6 +870,25 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
                 GGML_LOG_WARN("/proc/sys/kernel/numa_balancing is enabled, this has been observed to impair performance\n");
             }
             fclose(fptr);
+        }
+    }
+
+    // PIN strategy: detect CCX topology and build optimal pin order
+    if (numa_flag == GGML_NUMA_STRATEGY_PIN) {
+        ggml_numa_detect_ccx(&g_state.numa);
+        ggml_numa_build_pin_order(&g_state.numa);
+
+        if (g_state.numa.pin_initialized) {
+            GGML_LOG_INFO("NUMA PIN: %u cores across %u CCX clusters on %u nodes\n",
+                          g_state.numa.n_pin_cpus, g_state.numa.n_ccx, g_state.numa.n_nodes);
+
+            // Set memory interleave for better bandwidth on multi-node systems
+            if (g_state.numa.n_nodes > 1) {
+                ggml_numa_set_interleave_policy(&g_state.numa);
+            }
+        } else {
+            GGML_LOG_WARN("NUMA PIN: failed to build pin order, falling back to DISTRIBUTE\n");
+            g_state.numa.numa_strategy = GGML_NUMA_STRATEGY_DISTRIBUTE;
         }
     }
 #else
@@ -2101,7 +2296,8 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 // Android's libc implementation "bionic" does not support setting affinity
 #if defined(__gnu_linux__)
 static void set_numa_thread_affinity(int thread_n) {
-    if (!ggml_is_numa()) {
+    // PIN strategy works on single-node multi-CCX systems too
+    if (!ggml_is_numa() && g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_PIN) {
         return;
     }
 
@@ -2125,6 +2321,24 @@ static void set_numa_thread_affinity(int thread_n) {
                 fprintf(stderr, "warning: pthread_setaffinity_np() failed: %s\n",strerror(rv));
             }
             return;
+        case GGML_NUMA_STRATEGY_PIN:
+            // 1:1 thread-to-core pinning using CCX-aware ordering
+            if (g_state.numa.pin_initialized && (uint32_t)thread_n < g_state.numa.n_pin_cpus) {
+                cpu_set_t * pin_cpus = CPU_ALLOC(g_state.numa.total_cpus);
+                CPU_ZERO_S(setsize, pin_cpus);
+                CPU_SET_S(g_state.numa.pin_order[thread_n], setsize, pin_cpus);
+                rv = pthread_setaffinity_np(pthread_self(), setsize, pin_cpus);
+                if (rv) {
+                    fprintf(stderr, "warning: pthread_setaffinity_np() pin failed for thread %d -> cpu %u: %s\n",
+                            thread_n, g_state.numa.pin_order[thread_n], strerror(rv));
+                }
+                CPU_FREE(pin_cpus);
+            } else {
+                // More threads than cores: fall back to distribute across nodes
+                node_num = thread_n % g_state.numa.n_nodes;
+                break;
+            }
+            return;
         default:
             return;
     }
@@ -2146,7 +2360,7 @@ static void set_numa_thread_affinity(int thread_n) {
 }
 
 static void clear_numa_thread_affinity(void) {
-    if (!ggml_is_numa()) {
+    if (!ggml_is_numa() && g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_PIN) {
         return;
     }
 
