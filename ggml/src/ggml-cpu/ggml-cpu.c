@@ -65,6 +65,26 @@
 #define GGML_CACHE_ALIGN __attribute__((aligned(GGML_CACHE_LINE)))
 #endif
 
+// Portable software prefetch hints for cache-aware matmul
+// Prefetch data into L1 cache (temporal, likely to be reused)
+#if defined(__SSE__) || defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__)
+#include <xmmintrin.h>
+#define GGML_PREFETCH_T0(addr) _mm_prefetch((const char *)(addr), _MM_HINT_T0)
+#define GGML_PREFETCH_T1(addr) _mm_prefetch((const char *)(addr), _MM_HINT_T1)
+#elif defined(__GNUC__) || defined(__clang__)
+// Works on ARM NEON, RISC-V, and any GCC/Clang target
+#define GGML_PREFETCH_T0(addr) __builtin_prefetch((const void *)(addr), 0, 3)
+#define GGML_PREFETCH_T1(addr) __builtin_prefetch((const void *)(addr), 0, 2)
+#else
+#define GGML_PREFETCH_T0(addr) ((void)(addr))
+#define GGML_PREFETCH_T1(addr) ((void)(addr))
+#endif
+
+// Prefetch distance: number of rows ahead to prefetch src0 data.
+// Each quantized row is typically 1-4 cache lines, so prefetching 2-4 rows
+// ahead gives the memory subsystem ~200-400 bytes of lead time.
+#define GGML_PREFETCH_ROWS_AHEAD 4
+
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
 #define GGML_TSAN_ENABLED 1
@@ -1380,9 +1400,9 @@ static void ggml_compute_forward_mul_mat_one_chunk(
 
     const size_t src1_col_stride = src1_cont || src1->type != vec_dot_type ? row_size : nb11;
 
-    // attempt to reduce false-sharing (does not seem to make a difference)
+    // Cache-line aligned accumulator to prevent false sharing between threads
     // 16 * 2, accounting for mmla kernels
-    float tmp[32];
+    GGML_CACHE_ALIGN float tmp[32];
 
     for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
@@ -1411,16 +1431,62 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                         : (i11 * nb11 + i12 * nb12 + i13 * nb13));
                 float * dst_col = (float*)((char*)dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
 
+                // Prefetch the next src1 column while we process the current one
+                {
+                    const int64_t ir1_next = ir1 + num_rows_per_vec_dot;
+                    if (ir1_next < iir1 + blck_1 && ir1_next < ir1_end) {
+                        const int64_t ni13 = (ir1_next / (ne12 * ne1));
+                        const int64_t ni12 = (ir1_next - ni13 * ne12 * ne1) / ne1;
+                        const int64_t ni11 = (ir1_next - ni13 * ne12 * ne1 - ni12 * ne1);
+                        const char * next_src1_col = (const char*)wdata +
+                            (src1_cont || src1->type != vec_dot_type
+                                ? (ni11 + ni12 * ne11 + ni13 * ne12 * ne11) * row_size
+                                : (ni11 * nb11 + ni12 * nb12 + ni13 * nb13));
+                        GGML_PREFETCH_T0(next_src1_col);
+                        if (row_size > GGML_CACHE_LINE) {
+                            GGML_PREFETCH_T0(next_src1_col + GGML_CACHE_LINE);
+                        }
+                    }
+                }
+
                 //for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
                 //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
                 //}
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
+                    // Prefetch src0 rows ahead to hide memory latency.
+                    // We prefetch GGML_PREFETCH_ROWS_AHEAD rows into L1 (T0) and the
+                    // row after that into L2 (T1), covering ~256-512 bytes of lead time.
+                    const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD * num_rows_per_vec_dot;
+                    if (ir0_prefetch < ir0_end) {
+                        GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01);
+                        // Also prefetch further into the row if rows are wide (> 1 cache line)
+                        if (nb01 > GGML_CACHE_LINE) {
+                            GGML_PREFETCH_T0(src0_row + ir0_prefetch * nb01 + GGML_CACHE_LINE);
+                        }
+                        if (nb01 > 2 * GGML_CACHE_LINE) {
+                            GGML_PREFETCH_T1(src0_row + ir0_prefetch * nb01 + 2 * GGML_CACHE_LINE);
+                        }
+                    }
+
                     vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
 
                 for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
                     memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
+                }
+            }
+
+            // Prefetch src0 data for the next block of rows in the ir0 dimension
+            if (iir0 + blck_0 < ir0_end) {
+                for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
+                    const int64_t i13 = (ir1 / (ne12 * ne1));
+                    const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
+                    const int64_t i03 = i13 / r3;
+                    const int64_t i02 = i12 / r2;
+                    const char * next_src0_row = (const char*)src0->data + (0 + i02 * nb02 + i03 * nb03);
+                    GGML_PREFETCH_T1(next_src0_row + (iir0 + blck_0) * nb01);
+                    break; // only need to prefetch once per block transition
                 }
             }
         }
@@ -1656,7 +1722,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const int64_t blck_0 = 16;
     const int64_t blck_1 = 16;
 
-    float tmp[16];
+    // Cache-line aligned accumulator to prevent false sharing between threads
+    GGML_CACHE_ALIGN float tmp[16];
 
     for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
@@ -1684,6 +1751,15 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
                 float * dst_col = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2));
 
                 for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ++ir0) {
+                    // Prefetch src0 rows ahead to hide memory latency
+                    const int64_t ir0_prefetch = ir0 + GGML_PREFETCH_ROWS_AHEAD;
+                    if (ir0_prefetch < ir0_end) {
+                        GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01);
+                        if (nb01 > GGML_CACHE_LINE) {
+                            GGML_PREFETCH_T0(src0_cur + ir0_prefetch * nb01 + GGML_CACHE_LINE);
+                        }
+                    }
+
                     vec_dot(ne00, &tmp[ir0 - iir0], 0, src0_cur + ir0*nb01, 0, src1_col, 0, 1);
                 }
 
