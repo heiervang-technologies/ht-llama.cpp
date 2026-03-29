@@ -31,6 +31,7 @@ extern "C" {
         GGML_NUMA_STRATEGY_ISOLATE    = 2,
         GGML_NUMA_STRATEGY_NUMACTL    = 3,
         GGML_NUMA_STRATEGY_MIRROR     = 4,
+        GGML_NUMA_STRATEGY_PIN        = 5, // 1:1 thread-to-core pinning with CCX/L3 locality
         GGML_NUMA_STRATEGY_COUNT
     };
 
