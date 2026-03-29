@@ -3127,6 +3127,33 @@ static void ggml_cuda_graph_update_executable(ggml_backend_cuda_context * cuda_c
         GGML_ASSERT(stat == cudaSuccess);
     }
 }
+
+// Update the overlap (secondary) graph executable instance.
+// Same logic as ggml_cuda_graph_update_executable but targets overlap_instance.
+static void ggml_cuda_graph_update_overlap_executable(ggml_backend_cuda_context * cuda_ctx, const void * graph_key) {
+    ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
+
+#if CUDART_VERSION >= 12000
+    cudaGraphExecUpdateResultInfo result_info;
+    cudaError_t stat = cudaGraphExecUpdate(graph->overlap_instance, graph->graph, &result_info);
+#else
+    cudaGraphNode_t errorNode;
+    cudaGraphExecUpdateResult result_info;
+    cudaError_t stat = cudaGraphExecUpdate(graph->overlap_instance, graph->graph, &errorNode, &result_info);
+#endif // CUDART_VERSION >= 12000
+
+    if (stat == cudaErrorGraphExecUpdateFailure) {
+#ifndef NDEBUG
+        GGML_LOG_DEBUG("%s: CUDA overlap graph update failed, re-instantiating\n", __func__);
+#endif
+        (void)cudaGetLastError();
+        CUDA_CHECK(cudaGraphExecDestroy(graph->overlap_instance));
+        graph->overlap_instance = nullptr;
+        CUDA_CHECK(cudaGraphInstantiate(&graph->overlap_instance, graph->graph, NULL, NULL, 0));
+    } else {
+        GGML_ASSERT(stat == cudaSuccess);
+    }
+}
 #endif // USE_CUDA_GRAPH
 
 static bool ggml_cuda_should_fuse_rope_set_rows(const ggml_tensor * rope,
@@ -4076,9 +4103,49 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         }
         if (cuda_graph_update_required) { // Update graph executable
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
+            // Graph structure changed - invalidate overlap instance
+            if (graph->overlap_instance != nullptr) {
+                CUDA_CHECK(cudaGraphExecDestroy(graph->overlap_instance));
+                graph->overlap_instance = nullptr;
+            }
         }
-        // Launch graph
-        CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+
+        if (ggml_cuda_graph::is_overlap_enabled() && !cuda_graph_update_required) {
+            // Double-buffered overlap path:
+            // While GPU executes the current graph instance, CPU prepares/updates
+            // the overlap instance for the next call. On the next call, we swap
+            // and launch the pre-built instance immediately.
+            //
+            // Timeline (steady state):
+            //   Call N:   Launch instance A (pre-built) -> GPU runs A
+            //             CPU: update/instantiate instance B  (overlaps with GPU)
+            //             Swap A <-> B
+            //   Call N+1: Launch instance B (pre-built) -> GPU runs B
+            //             CPU: update/instantiate instance A  (overlaps with GPU)
+            //             Swap B <-> A
+            //
+            // The key benefit: cudaGraphExecUpdate (CPU work) runs while the GPU
+            // is busy executing the graph, instead of blocking before the launch.
+
+            // Launch the current (primary) graph instance on the main stream
+            CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+
+            // CPU-side: build/update the overlap instance from the same captured graph.
+            // This CPU work overlaps with the GPU executing the primary instance
+            // because cudaGraphLaunch is asynchronous.
+            if (graph->overlap_instance == nullptr) {
+                CUDA_CHECK(cudaGraphInstantiate(&graph->overlap_instance, graph->graph, NULL, NULL, 0));
+            } else {
+                // Update overlap instance to match current graph (handles pointer changes etc.)
+                ggml_cuda_graph_update_overlap_executable(cuda_ctx, graph_key);
+            }
+
+            // Swap: next call will launch the freshly updated instance as primary
+            graph->swap_graph_instances();
+        } else {
+            // Standard path: just launch
+            CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+        }
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;
@@ -4138,6 +4205,12 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
                     // Properties changed - reset warmup, execute directly until stable again
                     graph->warmup_complete = false;
                     GGML_LOG_DEBUG("%s: CUDA graph warmup reset\n", __func__);
+                    // Reset overlap state: the captured graph will change, so any
+                    // pre-built overlap instance is invalid.
+                    if (graph->overlap_instance != nullptr) {
+                        CUDA_CHECK(cudaGraphExecDestroy(graph->overlap_instance));
+                        graph->overlap_instance = nullptr;
+                    }
                 } else {
                     use_cuda_graph = true;
                     cuda_graph_update_required = graph->instance == nullptr;

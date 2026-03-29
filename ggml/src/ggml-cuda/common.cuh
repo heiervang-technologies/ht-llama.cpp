@@ -1166,6 +1166,10 @@ struct ggml_cuda_graph {
         if (graph != nullptr) {
             CUDA_CHECK(cudaGraphDestroy(graph));
         }
+        // Clean up overlap resources
+        if (overlap_instance != nullptr) {
+            CUDA_CHECK(cudaGraphExecDestroy(overlap_instance));
+        }
     }
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t instance = nullptr;
@@ -1181,9 +1185,31 @@ struct ggml_cuda_graph {
     // ref: https://github.com/ggml-org/llama.cpp/pull/19165
     std::vector<ggml_cuda_graph_node_properties> extra;
 
+    // Double-buffered graph overlap: while GPU executes one graph instance,
+    // CPU builds/updates the next. Enabled via GGML_CUDA_GRAPH_OVERLAP=1.
+    // Both instances are built from the same captured graph template.
+    // The overlap is CPU-side only: after launching the primary instance,
+    // the CPU updates the secondary instance while the GPU is busy.
+    // On the next call, the instances are swapped so the pre-built one launches immediately.
+    cudaGraphExec_t overlap_instance = nullptr;
+
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
         return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env);
+    }
+
+    static bool is_overlap_enabled() {
+        static const bool enabled = [] {
+            const char * env = getenv("GGML_CUDA_GRAPH_OVERLAP");
+            return env != nullptr && atoi(env) == 1;
+        }();
+        return enabled;
+    }
+
+    // Swap primary and overlap executable instances.
+    // The captured graph template (graph) is NOT swapped -- only the executables.
+    void swap_graph_instances() {
+        std::swap(instance, overlap_instance);
     }
 #endif
 };
