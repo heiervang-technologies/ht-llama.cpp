@@ -2946,12 +2946,6 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 #endif
         }
 
-        // TBQ SET_ROWS requires host-device sync (cudaMemcpy for row indices), incompatible with graph capture
-        if (node->op == GGML_OP_SET_ROWS &&
-            (node->type == GGML_TYPE_TBQ3_0 || node->type == GGML_TYPE_TBQ4_0)) {
-            use_cuda_graph = false;
-        }
-
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
             const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
