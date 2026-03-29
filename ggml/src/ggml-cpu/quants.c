@@ -536,6 +536,7 @@ static float * tbq_vd_get_scratch(int64_t n) {
     if (n > tbq_vd_buf_size) {
         free(tbq_vd_buf);
         tbq_vd_buf = (float *)malloc(n * sizeof(float));
+        GGML_ASSERT(tbq_vd_buf != NULL);
         tbq_vd_buf_size = n;
     }
     return tbq_vd_buf;

@@ -73,8 +73,10 @@ static void turboq_generate_gaussian(float * out, int64_t n, uint64_t seed) {
 // uniformly distributed on O(d) (Haar measure).
 static void turboq_householder_qr(float * A, float * Q_out, int64_t d) {
     float * tau = (float *)malloc(d * sizeof(float));
+    GGML_ASSERT(tau != NULL);
     // Store sign(R[k,k]) = -sign(alpha_k) for Haar correction
     float * r_sign = (float *)malloc(d * sizeof(float));
+    GGML_ASSERT(r_sign != NULL);
 
     for (int64_t k = 0; k < d; k++) {
         // Compute norm of A[k:d, k]
@@ -174,16 +176,23 @@ static const float * turboq_get_rotation(int64_t d, uint64_t seed) {
     if (tl_Q != NULL && tl_Q_dim == d && tl_Q_seed == seed) {
         return tl_Q;
     }
-    // Regenerate
+    // Regenerate — allocate new buffers before freeing old ones to avoid
+    // a half-updated cache if malloc fails.
+    float * new_Q     = (float *)malloc(d * d * sizeof(float));
+    float * new_Q_row = (float *)malloc(d * d * sizeof(float));
+    float * A         = (float *)malloc(d * d * sizeof(float));
+    GGML_ASSERT(new_Q     != NULL);
+    GGML_ASSERT(new_Q_row != NULL);
+    GGML_ASSERT(A         != NULL);
+
     free(tl_Q);
     free(tl_Q_row);
-    tl_Q = (float *)malloc(d * d * sizeof(float));
-    tl_Q_row = (float *)malloc(d * d * sizeof(float));
-    tl_Q_dim = d;
+    tl_Q      = new_Q;
+    tl_Q_row  = new_Q_row;
+    tl_Q_dim  = d;
     tl_Q_seed = seed;
 
     // Generate d×d Gaussian random matrix (column-major)
-    float * A = (float *)malloc(d * d * sizeof(float));
     turboq_generate_gaussian(A, d * d, seed);
 
     // Compute QR, store Q in tl_Q
@@ -224,11 +233,17 @@ static const float * turboq_get_projection(int64_t d, uint64_t seed) {
     if (tl_S != NULL && tl_S_dim == d && tl_S_seed == s_seed) {
         return tl_S;
     }
+    // Allocate new buffers before freeing old ones to avoid partial-failure
+    float * new_S     = (float *)malloc(d * d * sizeof(float));
+    float * new_S_row = (float *)malloc(d * d * sizeof(float));
+    GGML_ASSERT(new_S     != NULL);
+    GGML_ASSERT(new_S_row != NULL);
+
     free(tl_S);
     free(tl_S_row);
-    tl_S = (float *)malloc(d * d * sizeof(float));
-    tl_S_row = (float *)malloc(d * d * sizeof(float));
-    tl_S_dim = d;
+    tl_S      = new_S;
+    tl_S_row  = new_S_row;
+    tl_S_dim  = d;
     tl_S_seed = s_seed;
 
     // Generate d×d Gaussian random matrix (column-major), no QR
@@ -361,6 +376,7 @@ static float * turboq_get_scratch(int64_t n) {
     if (n > tl_buf_size) {
         free(tl_buf);
         tl_buf = (float *)malloc(n * sizeof(float));
+        GGML_ASSERT(tl_buf != NULL);
         tl_buf_size = n;
     }
     return tl_buf;
@@ -375,6 +391,7 @@ static float * turboq_get_scratch2(int64_t n) {
     if (n > tl_buf2_size) {
         free(tl_buf2);
         tl_buf2 = (float *)malloc(n * sizeof(float));
+        GGML_ASSERT(tl_buf2 != NULL);
         tl_buf2_size = n;
     }
     return tl_buf2;
@@ -389,6 +406,7 @@ static float * turboq_get_scratch3(int64_t n) {
     if (n > tl_buf3_size) {
         free(tl_buf3);
         tl_buf3 = (float *)malloc(n * sizeof(float));
+        GGML_ASSERT(tl_buf3 != NULL);
         tl_buf3_size = n;
     }
     return tl_buf3;
