@@ -34,3 +34,22 @@ void ggml_cpy_f32_tbq4_0_cuda(
     int64_t ne10, int64_t ne11, int64_t ne12,
     int64_t nb10, int64_t nb11, int64_t nb12, int64_t nb13,
     cudaStream_t stream);
+
+// SET_ROWS dispatch for TBQ types (fused, no host-device sync)
+template<typename idx_t>
+void ggml_set_rows_tbq3_0_cuda(
+    const float * src0_d, const idx_t * src1_d, char * dst_d,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    size_t nb01, size_t nb02, size_t nb03,
+    size_t nb10, size_t nb11, size_t nb12,
+    size_t nb1, size_t nb2, size_t nb3,
+    cudaStream_t stream);
+
+template<typename idx_t>
+void ggml_set_rows_tbq4_0_cuda(
+    const float * src0_d, const idx_t * src1_d, char * dst_d,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    size_t nb01, size_t nb02, size_t nb03,
+    size_t nb10, size_t nb11, size_t nb12,
+    size_t nb1, size_t nb2, size_t nb3,
+    cudaStream_t stream);

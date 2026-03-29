@@ -465,3 +465,308 @@ void ggml_cpy_f32_tbq4_0_cuda(
     quantize_f32_tbq4_0_kernel<<<num_blocks * 2, 128, 0, stream>>>(
         (const float *)cx, cdst, d_turboq_Q, norms, num_blocks);
 }
+
+// ---------------------------------------------------------------------------
+// Fused SET_ROWS kernels (no host-device sync needed)
+//
+// For KV cache writes: src0 is float data, src1 is row indices, dst is TBQ.
+// Each row of ne00 elements is quantized and written to the destination
+// row indicated by src1.
+//
+// Architecture: 256 threads per CUDA block, 1 block per source row.
+// Phase 1 (all 256 threads): compute L2 norm via warp reduction
+// Phase 2 (2 x 128 threads): normalize, rotate, quantize, pack per sub-block
+// ---------------------------------------------------------------------------
+
+template<typename idx_t>
+__global__ void set_rows_tbq3_0_kernel(
+    const float * __restrict__ src0, const idx_t * __restrict__ src1, char * __restrict__ dst,
+    const float * __restrict__ Q_rot,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    int64_t s01, int64_t s02, int64_t s03,
+    int64_t s10, int64_t s11, int64_t s12,
+    int64_t nb1, int64_t nb2, int64_t nb3,
+    int64_t ne11, int64_t ne12) {
+
+    // Each CUDA block handles one source row
+    const int row_idx = blockIdx.x;
+    const int tid = threadIdx.x;  // 0..255
+
+    // Decompose row_idx into (i01, i02, i03)
+    const int64_t total_rows = ne01 * ne02 * ne03;
+    if (row_idx >= total_rows) return;
+
+    const int64_t i01 = row_idx % ne01;
+    const int64_t i02 = (row_idx / ne01) % ne02;
+    const int64_t i03 = row_idx / (ne01 * ne02);
+
+    // Source row pointer
+    const float * src_row = src0 + i01 * s01 + i02 * s02 + i03 * s03;
+
+    // Destination row index from src1
+    const int64_t i10 = i01;
+    const int64_t i11 = i02 % ne11;
+    const int64_t i12 = i03 % ne12;
+    const int64_t dst_row_idx = (int64_t)src1[i10 * s10 + i11 * s11 + i12 * s12];
+
+    // Destination pointer
+    char * dst_row = dst + dst_row_idx * nb1 + i02 * nb2 + i03 * nb3;
+
+    // ne00 should be 256 (one TBQ block per row) — assert in host code
+    // For simplicity, handle exactly 1 TBQ block (256 elements)
+    const int64_t num_blocks_per_row = ne00 / 256;
+
+    for (int64_t blk = 0; blk < num_blocks_per_row; blk++) {
+        const float * blk_src = src_row + blk * 256;
+        block_tbq3_0 * blk_dst = (block_tbq3_0 *)dst_row + blk;
+
+        // Phase 1: Compute L2 norm (all 256 threads)
+        float val = blk_src[tid];
+        float sum_sq = val * val;
+
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
+        }
+
+        __shared__ float warp_sums[8];
+        if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
+        __syncthreads();
+
+        __shared__ float s_norm;
+        if (tid < 8) {
+            float s = warp_sums[tid];
+            for (int offset = 4; offset > 0; offset >>= 1) {
+                s += __shfl_down_sync(0xFF, s, offset);
+            }
+            if (tid == 0) {
+                float n = sqrtf(s);
+                s_norm = (n < 1e-10f) ? 1e-10f : n;
+            }
+        }
+        __syncthreads();
+
+        float norm = s_norm;
+        float inv_norm = 1.0f / norm;
+
+        // Phase 2: Normalize, rotate, quantize, pack (2 sub-blocks of 128)
+        // Each thread handles one element per sub-block
+        for (int sub = 0; sub < 2; sub++) {
+            int elem = sub * 128 + (tid % 128);
+            if (tid >= 128 && sub == 0) continue;  // first 128 threads do sub 0
+            if (tid < 128 && sub == 1) continue;    // last 128 threads do sub 1
+            int ltid = tid % 128;  // local thread id within sub-block
+
+            float unit_val = blk_src[elem] * inv_norm;
+
+            __shared__ float s_unit[256];  // use different halves for each sub-block
+            s_unit[elem] = unit_val;
+            __syncthreads();
+
+            // Forward rotation
+            float rotated = 0.0f;
+            for (int j = 0; j < 128; j++) {
+                rotated += Q_rot[ltid * 128 + j] * s_unit[sub * 128 + j];
+            }
+
+            // Quantize
+            float scaled = rotated * 16.0f;
+            int idx = 7;
+            #pragma unroll
+            for (int b = 0; b < 7; b++) {
+                if (scaled < d_boundaries_3bit[b]) { idx = b; break; }
+            }
+
+            // Pack 3-bit
+            const int group = ltid / 8;
+            const int pos_in_group = ltid % 8;
+
+            __shared__ uint32_t s_packed[32];  // 16 groups per sub-block × 2
+            if (ltid < 16) s_packed[sub * 16 + ltid] = 0;
+            __syncthreads();
+
+            atomicOr(&s_packed[sub * 16 + group], ((uint32_t)idx) << (pos_in_group * 3));
+            __syncthreads();
+
+            const int qs_offset = sub * 48;
+            if (pos_in_group < 3) {
+                uint32_t packed = s_packed[sub * 16 + group];
+                blk_dst->qs[qs_offset + group * 3 + pos_in_group] =
+                    (uint8_t)((packed >> (pos_in_group * 8)) & 0xFF);
+            }
+        }
+
+        if (tid == 0) {
+            blk_dst->d = __float2half(norm);
+        }
+        __syncthreads();
+    }
+}
+
+template<typename idx_t>
+__global__ void set_rows_tbq4_0_kernel(
+    const float * __restrict__ src0, const idx_t * __restrict__ src1, char * __restrict__ dst,
+    const float * __restrict__ Q_rot,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    int64_t s01, int64_t s02, int64_t s03,
+    int64_t s10, int64_t s11, int64_t s12,
+    int64_t nb1, int64_t nb2, int64_t nb3,
+    int64_t ne11, int64_t ne12) {
+
+    const int row_idx = blockIdx.x;
+    const int tid = threadIdx.x;
+
+    const int64_t total_rows = ne01 * ne02 * ne03;
+    if (row_idx >= total_rows) return;
+
+    const int64_t i01 = row_idx % ne01;
+    const int64_t i02 = (row_idx / ne01) % ne02;
+    const int64_t i03 = row_idx / (ne01 * ne02);
+
+    const float * src_row = src0 + i01 * s01 + i02 * s02 + i03 * s03;
+
+    const int64_t i10 = i01;
+    const int64_t i11 = i02 % ne11;
+    const int64_t i12 = i03 % ne12;
+    const int64_t dst_row_idx = (int64_t)src1[i10 * s10 + i11 * s11 + i12 * s12];
+
+    char * dst_row = dst + dst_row_idx * nb1 + i02 * nb2 + i03 * nb3;
+
+    const int64_t num_blocks_per_row = ne00 / 256;
+
+    for (int64_t blk = 0; blk < num_blocks_per_row; blk++) {
+        const float * blk_src = src_row + blk * 256;
+        block_tbq4_0 * blk_dst = (block_tbq4_0 *)dst_row + blk;
+
+        // Phase 1: L2 norm
+        float val = blk_src[tid];
+        float sum_sq = val * val;
+
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
+        }
+
+        __shared__ float warp_sums[8];
+        if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
+        __syncthreads();
+
+        __shared__ float s_norm;
+        if (tid < 8) {
+            float s = warp_sums[tid];
+            for (int offset = 4; offset > 0; offset >>= 1) {
+                s += __shfl_down_sync(0xFF, s, offset);
+            }
+            if (tid == 0) {
+                float n = sqrtf(s);
+                s_norm = (n < 1e-10f) ? 1e-10f : n;
+            }
+        }
+        __syncthreads();
+
+        float norm = s_norm;
+        float inv_norm = 1.0f / norm;
+
+        // Phase 2: two sub-blocks
+        for (int sub = 0; sub < 2; sub++) {
+            int elem = sub * 128 + (tid % 128);
+            if (tid >= 128 && sub == 0) continue;
+            if (tid < 128 && sub == 1) continue;
+            int ltid = tid % 128;
+
+            float unit_val = blk_src[elem] * inv_norm;
+
+            __shared__ float s_unit[256];
+            s_unit[elem] = unit_val;
+            __syncthreads();
+
+            float rotated = 0.0f;
+            for (int j = 0; j < 128; j++) {
+                rotated += Q_rot[ltid * 128 + j] * s_unit[sub * 128 + j];
+            }
+
+            float scaled = rotated * 16.0f;
+            int idx = 15;
+            #pragma unroll
+            for (int b = 0; b < 15; b++) {
+                if (scaled < d_boundaries_4bit[b]) { idx = b; break; }
+            }
+
+            // Pack 4-bit nibbles
+            __shared__ uint8_t s_indices[256];
+            s_indices[elem] = (uint8_t)idx;
+            __syncthreads();
+
+            if (ltid % 2 == 0) {
+                const int qs_idx = elem / 2;
+                blk_dst->qs[qs_idx] = s_indices[elem] | (s_indices[elem + 1] << 4);
+            }
+        }
+
+        if (tid == 0) {
+            blk_dst->d = __float2half(norm);
+        }
+        __syncthreads();
+    }
+}
+
+// Host dispatch functions
+template<typename idx_t>
+void ggml_set_rows_tbq3_0_cuda(
+    const float * src0_d, const idx_t * src1_d, char * dst_d,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    size_t nb01, size_t nb02, size_t nb03,
+    size_t nb10, size_t nb11, size_t nb12,
+    size_t nb1, size_t nb2, size_t nb3,
+    cudaStream_t stream) {
+
+    turboq_ensure_init(stream);
+    GGML_ASSERT(ne00 % 256 == 0);
+
+    const int64_t total_rows = ne01 * ne02 * ne03;
+    const int64_t s01 = nb01 / sizeof(float);
+    const int64_t s02 = nb02 / sizeof(float);
+    const int64_t s03 = nb03 / sizeof(float);
+    const int64_t s10 = nb10 / sizeof(idx_t);
+    const int64_t s11 = nb11 / sizeof(idx_t);
+    const int64_t s12 = nb12 / sizeof(idx_t);
+
+    // ne11/ne12 for index wrapping — for simple KV cache, these are 1
+    // We pass them as the last two args
+    set_rows_tbq3_0_kernel<<<total_rows, 256, 0, stream>>>(
+        src0_d, src1_d, dst_d, d_turboq_Q,
+        ne00, ne01, ne02, ne03,
+        s01, s02, s03, s10, s11, s12,
+        nb1, nb2, nb3, 1, 1);
+}
+
+template<typename idx_t>
+void ggml_set_rows_tbq4_0_cuda(
+    const float * src0_d, const idx_t * src1_d, char * dst_d,
+    int64_t ne00, int64_t ne01, int64_t ne02, int64_t ne03,
+    size_t nb01, size_t nb02, size_t nb03,
+    size_t nb10, size_t nb11, size_t nb12,
+    size_t nb1, size_t nb2, size_t nb3,
+    cudaStream_t stream) {
+
+    turboq_ensure_init(stream);
+    GGML_ASSERT(ne00 % 256 == 0);
+
+    const int64_t total_rows = ne01 * ne02 * ne03;
+    const int64_t s01 = nb01 / sizeof(float);
+    const int64_t s02 = nb02 / sizeof(float);
+    const int64_t s03 = nb03 / sizeof(float);
+    const int64_t s10 = nb10 / sizeof(idx_t);
+    const int64_t s11 = nb11 / sizeof(idx_t);
+    const int64_t s12 = nb12 / sizeof(idx_t);
+
+    set_rows_tbq4_0_kernel<<<total_rows, 256, 0, stream>>>(
+        src0_d, src1_d, dst_d, d_turboq_Q,
+        ne00, ne01, ne02, ne03,
+        s01, s02, s03, s10, s11, s12,
+        nb1, nb2, nb3, 1, 1);
+}
+
+// Explicit template instantiations for SET_ROWS
+template void ggml_set_rows_tbq3_0_cuda<int32_t>(const float*, const int32_t*, char*, int64_t, int64_t, int64_t, int64_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, cudaStream_t);
+template void ggml_set_rows_tbq3_0_cuda<int64_t>(const float*, const int64_t*, char*, int64_t, int64_t, int64_t, int64_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, cudaStream_t);
+template void ggml_set_rows_tbq4_0_cuda<int32_t>(const float*, const int32_t*, char*, int64_t, int64_t, int64_t, int64_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, cudaStream_t);
+template void ggml_set_rows_tbq4_0_cuda<int64_t>(const float*, const int64_t*, char*, int64_t, int64_t, int64_t, int64_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, cudaStream_t);
