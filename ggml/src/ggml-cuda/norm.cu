@@ -294,16 +294,84 @@ static void group_norm_f32_cuda(
     }
 }
 
+// Float4-vectorized RMS norm kernel: uses 128-bit (float4) loads/stores for better memory throughput.
+// Requires ncols % 4 == 0 and contiguous row data (stride_row == ncols).
+// The mathematical operation is identical to rms_norm_f32 -- output is bit-exact.
+template <int block_size>
+static __global__ void rms_norm_f32_float4(const float * x,
+                                           float *       dst,
+                                           const int     ncols,
+                                           const int64_t stride_row,
+                                           const int64_t stride_channel,
+                                           const int64_t stride_sample,
+                                           const float   eps) {
+    const int nrows     = gridDim.x;
+    const int nchannels = gridDim.y;
+
+    const int row       = blockIdx.x;
+    const int channel   = blockIdx.y;
+    const int sample    = blockIdx.z;
+    const int tid       = threadIdx.x;
+
+    x   += sample*stride_sample + channel*stride_channel + row*stride_row;
+    dst += ((sample*nchannels + channel)*nrows + row)*ncols;
+
+    const int ncols4 = ncols / 4;
+    const float4 * x4 = reinterpret_cast<const float4 *>(x);
+
+    float tmp = 0.0f;
+
+    for (int col4 = tid; col4 < ncols4; col4 += block_size) {
+        const float4 v = x4[col4];
+        tmp += v.x * v.x + v.y * v.y + v.z * v.z + v.w * v.w;
+    }
+
+    // sum up partial sums
+    extern __shared__ float s_sum[];
+    tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
+
+    const float mean  = tmp / ncols;
+    const float scale = rsqrtf(mean + eps);
+
+    float4 * dst4 = reinterpret_cast<float4 *>(dst);
+
+    for (int col4 = tid; col4 < ncols4; col4 += block_size) {
+        const float4 v = x4[col4];
+        float4 out;
+        out.x = scale * v.x;
+        out.y = scale * v.y;
+        out.z = scale * v.z;
+        out.w = scale * v.w;
+        dst4[col4] = out;
+    }
+}
+
 static void rms_norm_f32_cuda(
         const float * x, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
     const dim3 blocks_num(nrows, nchannels, nsamples);
-    if (ncols < 1024) {
-        const dim3 block_dims(256, 1, 1);
-        rms_norm_f32<256, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+
+    // Use float4-vectorized kernel when ncols is divisible by 4 and the row is contiguous.
+    // stride_row == ncols means elements within a row are packed, so float4 loads are valid.
+    if (ncols % 4 == 0 && stride_row == ncols) {
+        if (ncols < 1024) {
+            const dim3 block_dims(256, 1, 1);
+            rms_norm_f32_float4<256><<<blocks_num, block_dims, 256 > WARP_SIZE ? 32 * sizeof(float) : 0, stream>>>(
+                x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        } else {
+            const dim3 block_dims(1024, 1, 1);
+            rms_norm_f32_float4<1024><<<blocks_num, block_dims, 32 * sizeof(float), stream>>>(
+                x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        }
     } else {
-        const dim3 block_dims(1024, 1, 1);
-        rms_norm_f32<1024, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        // Fallback: scalar kernel for non-aligned or non-contiguous cases.
+        if (ncols < 1024) {
+            const dim3 block_dims(256, 1, 1);
+            rms_norm_f32<256, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        } else {
+            const dim3 block_dims(1024, 1, 1);
+            rms_norm_f32<1024, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        }
     }
 }
 
