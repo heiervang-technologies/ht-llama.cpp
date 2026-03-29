@@ -563,6 +563,70 @@ void ggml_cuda_op_leaky_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
 
 /* fused unary + mul */
 
+// Vectorized fused SiLU-multiply kernel for contiguous f32 tensors.
+// Processes 4 elements per thread using float4 loads/stores, eliminating
+// the intermediate DRAM round-trip for SiLU output.  This is the hot path
+// in SwiGLU MLP blocks (Llama, Mistral, etc.).
+//
+// Math (bit-exact with the scalar path):
+//   dst[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i]
+
+#define CUDA_SILU_MUL_VEC4_BLOCK_SIZE 256
+
+static __global__ void silu_mul_f32_vec4_kernel(
+        const float * __restrict__ gate,
+        const float * __restrict__ up,
+        float * __restrict__ dst,
+        const int64_t k4) {
+    const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
+
+    if (i >= k4) {
+        return;
+    }
+
+    const float4 g = reinterpret_cast<const float4 *>(gate)[i];
+    const float4 u = reinterpret_cast<const float4 *>(up)[i];
+
+    float4 out;
+    out.x = (g.x / (1.0f + expf(-g.x))) * u.x;
+    out.y = (g.y / (1.0f + expf(-g.y))) * u.y;
+    out.z = (g.z / (1.0f + expf(-g.z))) * u.z;
+    out.w = (g.w / (1.0f + expf(-g.w))) * u.w;
+
+    reinterpret_cast<float4 *>(dst)[i] = out;
+}
+
+static __global__ void silu_mul_f32_tail_kernel(
+        const float * __restrict__ gate,
+        const float * __restrict__ up,
+        float * __restrict__ dst,
+        const int64_t offset,
+        const int64_t k) {
+    const int64_t i = offset + int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    dst[i] = (gate[i] / (1.0f + expf(-gate[i]))) * up[i];
+}
+
+static void silu_mul_f32_vec4_cuda(
+        const float * gate, const float * up, float * dst,
+        const int64_t k, cudaStream_t stream) {
+    const int64_t k4   = k / 4;
+    const int64_t tail = k % 4;
+
+    if (k4 > 0) {
+        const int64_t num_blocks = (k4 + CUDA_SILU_MUL_VEC4_BLOCK_SIZE - 1) / CUDA_SILU_MUL_VEC4_BLOCK_SIZE;
+        silu_mul_f32_vec4_kernel<<<num_blocks, CUDA_SILU_MUL_VEC4_BLOCK_SIZE, 0, stream>>>(gate, up, dst, k4);
+    }
+
+    if (tail > 0) {
+        silu_mul_f32_tail_kernel<<<1, tail, 0, stream>>>(gate, up, dst, k4 * 4, k);
+    }
+}
+
 template <float (*op)(float)>
 static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
     // unary_node: UNARY op applied to unary_node->src[0]
@@ -600,10 +664,43 @@ static void ggml_cuda_op_unary_mul_impl(ggml_backend_cuda_context & ctx, ggml_te
     }
 }
 
+// Specialization: when both inputs are contiguous f32, use the vectorized kernel.
+static void ggml_cuda_op_silu_mul_fast(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    const ggml_tensor * gate_src = unary_node->src[0];
+    const ggml_tensor * up_src   = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous_1(gate_src));
+    GGML_ASSERT(gate_src->nb[0] == ggml_element_size(gate_src));
+    GGML_ASSERT(ggml_is_contiguous_1(up_src));
+    GGML_ASSERT(up_src->nb[0] == ggml_element_size(up_src));
+    GGML_ASSERT(ggml_are_same_shape(gate_src, up_src));
+    GGML_ASSERT(gate_src->type == up_src->type);
+    GGML_ASSERT(gate_src->type == mul_node->type);
+
+    const int64_t k = ggml_nelements(mul_node);
+
+    // Use vectorized path for fully contiguous f32 tensors.
+    // float4 requires 16-byte alignment (ggml guarantees this for data pointers)
+    // and contiguous layout so there are no stride gaps.
+    if (gate_src->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(gate_src) &&
+        ggml_is_contiguous(up_src)) {
+
+        silu_mul_f32_vec4_cuda(
+            (const float *) gate_src->data,
+            (const float *) up_src->data,
+            (float *) mul_node->data,
+            k, ctx.stream());
+    } else {
+        // Fall back to the generic strided path for f16 or non-contiguous tensors.
+        ggml_cuda_op_unary_mul_impl<op_silu>(ctx, unary_node, mul_node);
+    }
+}
+
 void ggml_cuda_op_unary_mul(ggml_backend_cuda_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
     switch (ggml_get_unary_op(unary_node)) {
         case GGML_UNARY_OP_SILU:
-            ggml_cuda_op_unary_mul_impl<op_silu>(ctx, unary_node, mul_node);
+            ggml_cuda_op_silu_mul_fast(ctx, unary_node, mul_node);
             break;
         case GGML_UNARY_OP_SIGMOID:
             ggml_cuda_op_unary_mul_impl<op_sigmoid>(ctx, unary_node, mul_node);
