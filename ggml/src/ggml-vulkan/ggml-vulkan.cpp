@@ -695,6 +695,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_dequant_mul_mat_vec_f16_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
     vk_pipeline pipeline_dequant_mul_mat_vec_id_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT];
 
+    // Shared-memory staging MatVec pipelines (two-phase DECODE+DOT)
+    vk_pipeline pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_COUNT];
+    vk_pipeline pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_COUNT];
+
     vk_pipeline pipeline_dequant_mul_mat_vec_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
     vk_pipeline pipeline_dequant_mul_mat_vec_id_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT];
 
@@ -4165,6 +4169,39 @@ static void ggml_vk_load_shaders(vk_device& device) {
     GGML_UNUSED(rm_iq_int);
 #endif
 
+    // Shared-memory staging MatVec pipelines (two-phase DECODE+DOT)
+    // Only for types that use the generic mul_mat_vec.comp (not k-quants or iq1/iq2/iq3)
+    {
+        const uint32_t shmem_wg_size = subgroup_size;
+        // f32/f16/bf16 types
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_F32 ], "mul_mat_vec_shmem_f32_f32_f32",  mul_mat_vec_shmem_f32_f32_f32_len,  mul_mat_vec_shmem_f32_f32_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1, 1, 1}, {shmem_wg_size, 1, 1}, 1, false, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_F16 ], "mul_mat_vec_shmem_f16_f32_f32",  mul_mat_vec_shmem_f16_f32_f32_len,  mul_mat_vec_shmem_f16_f32_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2, 1, 1}, {shmem_wg_size, 2, 1}, 1, false, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_BF16], "mul_mat_vec_shmem_bf16_f32_f32", mul_mat_vec_shmem_bf16_f32_f32_len, mul_mat_vec_shmem_bf16_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2, 1, 1}, {shmem_wg_size, 2, 1}, 1, false, use_subgroups, force_subgroup_size);
+        // Standard quant types
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_Q4_0], "mul_mat_vec_shmem_q4_0_f32_f32", mul_mat_vec_shmem_q4_0_f32_f32_len, mul_mat_vec_shmem_q4_0_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_Q4_1], "mul_mat_vec_shmem_q4_1_f32_f32", mul_mat_vec_shmem_q4_1_f32_f32_len, mul_mat_vec_shmem_q4_1_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_Q5_0], "mul_mat_vec_shmem_q5_0_f32_f32", mul_mat_vec_shmem_q5_0_f32_f32_len, mul_mat_vec_shmem_q5_0_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_Q5_1], "mul_mat_vec_shmem_q5_1_f32_f32", mul_mat_vec_shmem_q5_1_f32_f32_len, mul_mat_vec_shmem_q5_1_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_Q8_0], "mul_mat_vec_shmem_q8_0_f32_f32", mul_mat_vec_shmem_q8_0_f32_f32_len, mul_mat_vec_shmem_q8_0_f32_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq, 1, 1}, {shmem_wg_size, 1*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        // IQ4/MXFP4 types
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_IQ4_NL],  "mul_mat_vec_shmem_iq4_nl_f32_f32",  mul_mat_vec_shmem_iq4_nl_f32_f32_len,  mul_mat_vec_shmem_iq4_nl_f32_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_IQ4_XS],  "mul_mat_vec_shmem_iq4_xs_f32_f32",  mul_mat_vec_shmem_iq4_xs_f32_f32_len,  mul_mat_vec_shmem_iq4_xs_f32_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[GGML_TYPE_MXFP4],   "mul_mat_vec_shmem_mxfp4_f32_f32",   mul_mat_vec_shmem_mxfp4_f32_f32_len,   mul_mat_vec_shmem_mxfp4_f32_f32_data,   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+
+        // f16 B-type variants
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_F32 ], "mul_mat_vec_shmem_f32_f16_f32",  mul_mat_vec_shmem_f32_f16_f32_len,  mul_mat_vec_shmem_f32_f16_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1, 1, 1}, {shmem_wg_size, 1, 1}, 1, false, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_F16 ], "mul_mat_vec_shmem_f16_f16_f32",  mul_mat_vec_shmem_f16_f16_f32_len,  mul_mat_vec_shmem_f16_f16_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2, 1, 1}, {shmem_wg_size, 2, 1}, 1, false, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_BF16], "mul_mat_vec_shmem_bf16_f16_f32", mul_mat_vec_shmem_bf16_f16_f32_len, mul_mat_vec_shmem_bf16_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2, 1, 1}, {shmem_wg_size, 2, 1}, 1, false, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_Q4_0], "mul_mat_vec_shmem_q4_0_f16_f32", mul_mat_vec_shmem_q4_0_f16_f32_len, mul_mat_vec_shmem_q4_0_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_Q4_1], "mul_mat_vec_shmem_q4_1_f16_f32", mul_mat_vec_shmem_q4_1_f16_f32_len, mul_mat_vec_shmem_q4_1_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_Q5_0], "mul_mat_vec_shmem_q5_0_f16_f32", mul_mat_vec_shmem_q5_0_f16_f32_len, mul_mat_vec_shmem_q5_0_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_Q5_1], "mul_mat_vec_shmem_q5_1_f16_f32", mul_mat_vec_shmem_q5_1_f16_f32_len, mul_mat_vec_shmem_q5_1_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {2*rm_stdq, 1, 1}, {shmem_wg_size, 2*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_Q8_0], "mul_mat_vec_shmem_q8_0_f16_f32", mul_mat_vec_shmem_q8_0_f16_f32_len, mul_mat_vec_shmem_q8_0_f16_f32_data, "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {1*rm_stdq, 1, 1}, {shmem_wg_size, 1*rm_stdq, 1}, 1, true, use_subgroups, force_subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_IQ4_NL],  "mul_mat_vec_shmem_iq4_nl_f16_f32",  mul_mat_vec_shmem_iq4_nl_f16_f32_len,  mul_mat_vec_shmem_iq4_nl_f16_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_IQ4_XS],  "mul_mat_vec_shmem_iq4_xs_f16_f32",  mul_mat_vec_shmem_iq4_xs_f16_f32_len,  mul_mat_vec_shmem_iq4_xs_f16_f32_data,  "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+        ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[GGML_TYPE_MXFP4],   "mul_mat_vec_shmem_mxfp4_f16_f32",   mul_mat_vec_shmem_mxfp4_f16_f32_len,   mul_mat_vec_shmem_mxfp4_f16_f32_data,   "main", mul_mat_vec_num_bindings, sizeof(vk_mat_vec_push_constants), {rm_iq, 1, 1}, {shmem_wg_size, rm_iq, 1}, 1, true, use_subgroups16, force_subgroup_size16);
+    }
+
     // dequant shaders
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_F32 ], "f32_to_f16",   dequant_f32_len,  dequant_f32_data,  "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_dequant[GGML_TYPE_Q4_0], "dequant_q4_0", dequant_q4_0_len, dequant_q4_0_data, "main", 2, 5 * sizeof(uint32_t), {256 * 16, 1, 1}, {}, 1);
@@ -6169,6 +6206,29 @@ static vk_pipeline ggml_vk_get_dequantize_mul_mat_vec(ggml_backend_vk_context * 
             break;
         default:
             return nullptr;
+    }
+
+    // Try shared-memory staging variant for single-column matvec (token generation).
+    // This decouples dequantization from dot-product computation via shared memory,
+    // which can significantly improve performance especially on Intel Arc GPUs.
+    if (num_cols == 1 && b_type != GGML_TYPE_Q8_1) {
+        // Check shared memory feasibility
+        const uint32_t subgroup_sz = ctx->device->subgroup_size;
+        const bool is_float_type = (a_type == GGML_TYPE_F32 || a_type == GGML_TYPE_F16 || a_type == GGML_TYPE_BF16);
+        const uint32_t k_per_iter = is_float_type ? 2 : 8;
+        const uint32_t num_rows_default = 2;
+        const uint32_t staging_shmem = num_rows_default * subgroup_sz * k_per_iter * sizeof(float);
+        const uint32_t reduce_shmem = 1 * num_rows_default * subgroup_sz * sizeof(float);
+        const uint32_t total_shmem = staging_shmem + reduce_shmem;
+
+        if (total_shmem <= ctx->device->properties.limits.maxComputeSharedMemorySize) {
+            vk_pipeline shmem_pipeline = b_type == GGML_TYPE_F32
+                ? ctx->device->pipeline_dequant_mul_mat_vec_shmem_f32_f32[a_type]
+                : ctx->device->pipeline_dequant_mul_mat_vec_shmem_f16_f32[a_type];
+            if (shmem_pipeline) {
+                return shmem_pipeline;
+            }
+        }
     }
 
     // heuristic to choose workgroup size
