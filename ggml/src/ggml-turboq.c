@@ -214,56 +214,6 @@ static const float * turboq_get_rotation_row(int64_t d, uint64_t seed) {
 }
 
 // ---------------------------------------------------------------------------
-// Projection matrix cache (for Q_prod QJL stage)
-//
-// S is a d×d random Gaussian matrix (NOT orthogonalized), used for QJL:
-//   qjl_signs = sign(S · residual)
-//   dequant:    sqrt(pi/2)/d · gamma · S^T · signs
-// Uses a different seed stream from the rotation matrix Q.
-// ---------------------------------------------------------------------------
-
-static TURBOQ_TLS float * tl_S = NULL;
-static TURBOQ_TLS float * tl_S_row = NULL;
-static TURBOQ_TLS int64_t tl_S_dim = 0;
-static TURBOQ_TLS uint64_t tl_S_seed = 0;
-
-static const float * turboq_get_projection(int64_t d, uint64_t seed) {
-    // Use a different seed stream for S vs Q
-    uint64_t s_seed = seed ^ 0x1234567890abcdefULL;
-    if (tl_S != NULL && tl_S_dim == d && tl_S_seed == s_seed) {
-        return tl_S;
-    }
-    // Allocate new buffers before freeing old ones to avoid partial-failure
-    float * new_S     = (float *)malloc(d * d * sizeof(float));
-    float * new_S_row = (float *)malloc(d * d * sizeof(float));
-    GGML_ASSERT(new_S     != NULL);
-    GGML_ASSERT(new_S_row != NULL);
-
-    free(tl_S);
-    free(tl_S_row);
-    tl_S      = new_S;
-    tl_S_row  = new_S_row;
-    tl_S_dim  = d;
-    tl_S_seed = s_seed;
-
-    // Generate d×d Gaussian random matrix (column-major), no QR
-    turboq_generate_gaussian(tl_S, d * d, s_seed);
-
-    for (int64_t i = 0; i < d; ++i) {
-        for (int64_t j = 0; j < d; ++j) {
-            tl_S_row[i * d + j] = tl_S[i + j * d];
-        }
-    }
-
-    return tl_S;
-}
-
-static const float * turboq_get_projection_row(int64_t d, uint64_t seed) {
-    turboq_get_projection(d, seed);
-    return tl_S_row;
-}
-
-// ---------------------------------------------------------------------------
 // Dense matrix-vector multiply: y = M * x  (M is d×d column-major)
 // ---------------------------------------------------------------------------
 
@@ -436,42 +386,6 @@ static void turboq_rotate_block_inverse(float * x, const float * y, uint64_t see
     for (int64_t i = 0; i < QK_K; i += TURBOQ_KV_DIM) {
         matvec_t(x + i, Q, y + i, TURBOQ_KV_DIM);
     }
-}
-
-static void turboq_project_block(float * y, const float * x, uint64_t seed) {
-    const float * S = turboq_get_projection_row(TURBOQ_KV_DIM, seed);
-
-    for (int64_t i = 0; i < QK_K; i += TURBOQ_KV_DIM) {
-        matvec_row(y + i, S, x + i, TURBOQ_KV_DIM);
-    }
-}
-
-static void turboq_project_block_inverse(float * x, const float * y, uint64_t seed) {
-    const float * S = turboq_get_projection(TURBOQ_KV_DIM, seed);
-
-    for (int64_t i = 0; i < QK_K; i += TURBOQ_KV_DIM) {
-        matvec_t(x + i, S, y + i, TURBOQ_KV_DIM);
-    }
-}
-
-static void turboq_rotate_qk_forward(float * y, const float * x, uint64_t seed) {
-    const float * Q = turboq_get_rotation_row(QK_K, seed);
-    matvec_row(y, Q, x, QK_K);
-}
-
-static void turboq_rotate_qk_inverse(float * x, const float * y, uint64_t seed) {
-    const float * Q = turboq_get_rotation(QK_K, seed);
-    matvec_t(x, Q, y, QK_K);
-}
-
-static void turboq_project_qk(float * y, const float * x, uint64_t seed) {
-    const float * S = turboq_get_projection_row(QK_K, seed);
-    matvec_row(y, S, x, QK_K);
-}
-
-static void turboq_project_qk_inverse(float * x, const float * y, uint64_t seed) {
-    const float * S = turboq_get_projection(QK_K, seed);
-    matvec_t(x, S, y, QK_K);
 }
 
 // ---------------------------------------------------------------------------
