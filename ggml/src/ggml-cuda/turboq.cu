@@ -60,6 +60,11 @@ void ggml_cuda_turboq_free(void) {
         CUDA_CHECK(cudaFree(d_turboq_Q));
         d_turboq_Q = nullptr;
     }
+    if (d_turboq_norms != nullptr) {
+        CUDA_CHECK(cudaFree(d_turboq_norms));
+        d_turboq_norms = nullptr;
+        d_turboq_norms_size = 0;
+    }
 }
 
 const float * ggml_cuda_turboq_get_rotation(void) {
