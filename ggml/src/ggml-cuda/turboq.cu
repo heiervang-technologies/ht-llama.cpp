@@ -16,6 +16,8 @@
 // ---------------------------------------------------------------------------
 
 static float * d_turboq_Q = nullptr;  // device rotation matrix (128x128 row-major)
+static float * d_turboq_norms = nullptr;  // temporary buffer for norms (lazy-allocated)
+static int64_t d_turboq_norms_size = 0;
 
 void ggml_cuda_turboq_init(cudaStream_t stream) {
     if (d_turboq_Q != nullptr) {
@@ -404,10 +406,6 @@ __global__ void quantize_f32_tbq4_0_kernel(
 // ---------------------------------------------------------------------------
 // Copy dispatch functions (called from cpy.cu)
 // ---------------------------------------------------------------------------
-
-// Temporary buffer for norms (lazy-allocated, per-stream)
-static float * d_turboq_norms = nullptr;
-static int64_t d_turboq_norms_size = 0;
 
 static float * turboq_get_norms_buffer(int64_t num_blocks, cudaStream_t stream) {
     if (num_blocks > d_turboq_norms_size) {
