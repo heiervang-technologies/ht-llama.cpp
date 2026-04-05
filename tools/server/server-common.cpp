@@ -1443,7 +1443,8 @@ json convert_responses_to_chatcmpl(const json & response_body, bool remap_develo
             json chatcmpl_tool;
 
             if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::invalid_argument("'type' of tool must be 'function'");
+                // Skip non-function tools (e.g. code_interpreter, container)
+                continue;
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
