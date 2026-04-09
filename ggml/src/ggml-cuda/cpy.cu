@@ -553,6 +553,39 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TBQ4_0) {
         ggml_cpy_f32_tbq4_0_cuda
                 (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_TBQ3_0 && (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32)) {
+        // op_params[0]: 1 = codebook-only dequant (rotated-domain attention)
+        int32_t codebook_only = 0;
+        memcpy(&codebook_only, src1->op_params, sizeof(int32_t));
+        if (src1->type == GGML_TYPE_F16) {
+            if (codebook_only) {
+                dequantize_row_tbq3_0_codebook_cuda(src0_ddc, (half *)src1_ddc, ne, main_stream);
+            } else {
+                dequantize_row_tbq3_0_cuda(src0_ddc, (half *)src1_ddc, ne, main_stream);
+            }
+        } else {
+            if (codebook_only) {
+                dequantize_row_tbq3_0_codebook_cuda(src0_ddc, (float *)src1_ddc, ne, main_stream);
+            } else {
+                dequantize_row_tbq3_0_cuda(src0_ddc, (float *)src1_ddc, ne, main_stream);
+            }
+        }
+    } else if (src0->type == GGML_TYPE_TBQ4_0 && (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_F32)) {
+        int32_t codebook_only = 0;
+        memcpy(&codebook_only, src1->op_params, sizeof(int32_t));
+        if (src1->type == GGML_TYPE_F16) {
+            if (codebook_only) {
+                dequantize_row_tbq4_0_codebook_cuda(src0_ddc, (half *)src1_ddc, ne, main_stream);
+            } else {
+                dequantize_row_tbq4_0_cuda(src0_ddc, (half *)src1_ddc, ne, main_stream);
+            }
+        } else {
+            if (codebook_only) {
+                dequantize_row_tbq4_0_codebook_cuda(src0_ddc, (float *)src1_ddc, ne, main_stream);
+            } else {
+                dequantize_row_tbq4_0_cuda(src0_ddc, (float *)src1_ddc, ne, main_stream);
+            }
+        }
     } else {
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));

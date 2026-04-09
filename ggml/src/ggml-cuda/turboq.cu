@@ -223,6 +223,77 @@ template void dequantize_row_tbq4_0_cuda<float>(const void * vx, float * y, int6
 template void dequantize_row_tbq4_0_cuda<half>(const void * vx, half * y, int64_t k, cudaStream_t stream);
 
 // ---------------------------------------------------------------------------
+// Codebook-only dequantize kernels (skip rotation)
+//
+// For rotated-domain attention: values stay in rotated domain, Q is pre-rotated
+// and output is post-rotated instead. Cost: ~1 FMA/element (same as q8_0).
+// ---------------------------------------------------------------------------
+
+template<typename dst_t>
+__global__ void dequantize_block_tbq3_0_codebook_kernel(
+    const void * __restrict__ vx, dst_t * __restrict__ y, int64_t nb) {
+
+    const int sub_block = blockIdx.x;
+    const int tbq_block = sub_block / 2;
+    const int sub_half  = sub_block % 2;
+    const int tid = threadIdx.x;
+
+    if (tbq_block >= nb) return;
+
+    const block_tbq3_0 * x = (const block_tbq3_0 *)vx;
+    const float norm = __half2float(x[tbq_block].d);
+    const float scale_down = 0.0625f;
+
+    const int elem = sub_half * 128 + tid;
+    const int idx = unpack_3bit_index(x[tbq_block].qs, elem);
+
+    y[tbq_block * 256 + elem] = (dst_t)(d_codebook_3bit[idx] * scale_down * norm);
+}
+
+template<typename dst_t>
+__global__ void dequantize_block_tbq4_0_codebook_kernel(
+    const void * __restrict__ vx, dst_t * __restrict__ y, int64_t nb) {
+
+    const int sub_block = blockIdx.x;
+    const int tbq_block = sub_block / 2;
+    const int sub_half  = sub_block % 2;
+    const int tid = threadIdx.x;
+
+    if (tbq_block >= nb) return;
+
+    const block_tbq4_0 * x = (const block_tbq4_0 *)vx;
+    const float norm = __half2float(x[tbq_block].d);
+    const float scale_down = 0.0625f;
+
+    const int elem = sub_half * 128 + tid;
+    uint8_t idx;
+    if (elem % 2 == 0) {
+        idx = x[tbq_block].qs[elem / 2] & 0x0F;
+    } else {
+        idx = (x[tbq_block].qs[elem / 2] >> 4) & 0x0F;
+    }
+
+    y[tbq_block * 256 + elem] = (dst_t)(d_codebook_4bit[idx] * scale_down * norm);
+}
+
+template<typename dst_t>
+void dequantize_row_tbq3_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
+    const int64_t nb = k / 256;
+    dequantize_block_tbq3_0_codebook_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, nb);
+}
+
+template<typename dst_t>
+void dequantize_row_tbq4_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
+    const int64_t nb = k / 256;
+    dequantize_block_tbq4_0_codebook_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, nb);
+}
+
+template void dequantize_row_tbq3_0_codebook_cuda<float>(const void * vx, float * y, int64_t k, cudaStream_t stream);
+template void dequantize_row_tbq3_0_codebook_cuda<half>(const void * vx, half * y, int64_t k, cudaStream_t stream);
+template void dequantize_row_tbq4_0_codebook_cuda<float>(const void * vx, float * y, int64_t k, cudaStream_t stream);
+template void dequantize_row_tbq4_0_codebook_cuda<half>(const void * vx, half * y, int64_t k, cudaStream_t stream);
+
+// ---------------------------------------------------------------------------
 // Quantize kernels (f32 -> TBQ for KV cache write path)
 //
 // Two-pass approach:

@@ -18,6 +18,13 @@ void dequantize_row_tbq3_0_cuda(const void * vx, dst_t * y, int64_t k, cudaStrea
 template<typename dst_t>
 void dequantize_row_tbq4_0_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream);
 
+// Codebook-only dequantize (skip rotation — for rotated-domain attention)
+template<typename dst_t>
+void dequantize_row_tbq3_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream);
+
+template<typename dst_t>
+void dequantize_row_tbq4_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream);
+
 // Quantize (f32 -> TBQ) for KV cache write path
 void ggml_cpy_f32_tbq3_0_cuda(
     const char * cx, char * cdst, int64_t ne,
