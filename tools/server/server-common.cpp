@@ -944,6 +944,10 @@ json oaicompat_chat_params_parse(
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
+        if (opt.remap_developer_role && role == "developer") {
+            msg["role"] = "system";
+            role = "system";
+        }
         if (role != "assistant" && !msg.contains("content")) {
             throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
@@ -1142,7 +1146,7 @@ json oaicompat_chat_params_parse(
     return llama_params;
 }
 
-json convert_responses_to_chatcmpl(const json & response_body) {
+json convert_responses_to_chatcmpl(const json & response_body, bool remap_developer_role) {
     if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
     }
@@ -1257,7 +1261,36 @@ json convert_responses_to_chatcmpl(const json & response_body) {
                 }
                 item["content"] = chatcmpl_content;
 
-                chatcmpl_messages.push_back(item);
+                if (remap_developer_role && (item.at("role") == "developer" || item.at("role") == "system")) {
+                    // Remap "developer" → "system" and merge with any existing
+                    // system message (e.g. from "instructions" field) to avoid
+                    // duplicate system messages that some templates reject.
+                    item["role"] = "system";
+                    std::string sys_text;
+                    for (const auto & part : chatcmpl_content) {
+                        if (part.value("type", "") == "text" && part.contains("text")) {
+                            if (!sys_text.empty()) {
+                                sys_text += "\n";
+                            }
+                            sys_text += part.at("text").get<std::string>();
+                        }
+                    }
+                    if (!chatcmpl_messages.empty() && chatcmpl_messages.front().value("role", "") == "system") {
+                        std::string existing = chatcmpl_messages.front().value("content", "");
+                        if (!existing.empty() && !sys_text.empty()) {
+                            existing += "\n\n";
+                        }
+                        existing += sys_text;
+                        chatcmpl_messages.front()["content"] = existing;
+                    } else {
+                        chatcmpl_messages.insert(chatcmpl_messages.begin(), {
+                            {"role", "system"},
+                            {"content", sys_text},
+                        });
+                    }
+                } else {
+                    chatcmpl_messages.push_back(item);
+                }
             } else if (exists_and_is_array(item, "content") &&
                 exists_and_is_string(item, "role") &&
                 item.at("role") == "assistant" &&
@@ -1410,7 +1443,8 @@ json convert_responses_to_chatcmpl(const json & response_body) {
             json chatcmpl_tool;
 
             if (json_value(resp_tool, "type", std::string()) != "function") {
-                throw std::invalid_argument("'type' of tool must be 'function'");
+                // Skip non-function tools (e.g. code_interpreter, container)
+                continue;
             }
             resp_tool.erase("type");
             chatcmpl_tool["type"] = "function";
