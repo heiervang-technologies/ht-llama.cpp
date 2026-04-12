@@ -562,10 +562,12 @@ class ModelsStore {
 				);
 			}
 
+			// Only give up on UNLOADED status after enough time for the subprocess
+			// to start and report its status (large models can take 30+ seconds)
 			if (
 				expectedStatus === ServerModelStatus.LOADED &&
 				currentStatus === ServerModelStatus.UNLOADED &&
-				attempt > 2
+				attempt > 60
 			) {
 				if (signal?.aborted) {
 					return;
