@@ -59,6 +59,7 @@ class ChatStore {
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<string, { response: string; messageId: string }>();
 	private abortControllers = new SvelteMap<string, AbortController>();
+	private preEncodeAbortController: AbortController | null = null;
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
 	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
 	private activeConversationId = $state<string | null>(null);
@@ -463,6 +464,9 @@ class ChatStore {
 		const activeConv = conversationsStore.activeConversation;
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
 
+		// Cancel any in-flight pre-encode request
+		this.cancelPreEncode();
+
 		// Consume MCP resource attachments - converts them to extras and clears the live store
 		const resourceExtras = mcpStore.consumeResourceAttachmentsAsExtras();
 		const allExtras = resourceExtras.length > 0 ? [...(extras || []), ...resourceExtras] : extras;
@@ -725,6 +729,16 @@ class ChatStore {
 
 				if (onComplete) onComplete(streamedContent);
 				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+				// Pre-encode conversation in KV cache for faster next turn
+				if (config().preEncodeConversation) {
+					this.triggerPreEncode(
+						allMessages,
+						assistantMessage,
+						streamedContent,
+						effectiveModel,
+						!!config().excludeReasoningFromContext
+					);
+				}
 			},
 			onError: (error: Error) => {
 				this.setStreamingActive(false);
@@ -912,6 +926,7 @@ class ChatStore {
 	async regenerateMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		this.cancelPreEncode();
 		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
 		if (!result) return;
 		const { index: messageIndex } = result;
@@ -941,6 +956,7 @@ class ChatStore {
 	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isChatLoadingInternal(activeConv.id)) return;
+		this.cancelPreEncode();
 		try {
 			const idx = conversationsStore.findMessageIndex(messageId);
 			if (idx === -1) return;
@@ -1611,8 +1627,7 @@ class ChatStore {
 
 		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
 
-		if (currentConfig.backend_sampling)
-			apiOptions.backend_sampling = currentConfig.backend_sampling;
+		apiOptions.backend_sampling = currentConfig.backend_sampling;
 
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
@@ -1620,6 +1635,42 @@ class ChatStore {
 		if (loraPayload) apiOptions.lora = loraPayload;
 
 		return apiOptions;
+	}
+
+	private cancelPreEncode(): void {
+		if (this.preEncodeAbortController) {
+			this.preEncodeAbortController.abort();
+			this.preEncodeAbortController = null;
+		}
+	}
+
+	private async triggerPreEncode(
+		allMessages: DatabaseMessage[],
+		assistantMessage: DatabaseMessage,
+		assistantContent: string,
+		model?: string | null,
+		excludeReasoning?: boolean
+	): Promise<void> {
+		this.cancelPreEncode();
+		this.preEncodeAbortController = new AbortController();
+
+		const signal = this.preEncodeAbortController.signal;
+
+		try {
+			const allIdle = await ChatService.areAllSlotsIdle(model, signal);
+			if (!allIdle || signal.aborted) return;
+
+			const messagesWithAssistant: DatabaseMessage[] = [
+				...allMessages,
+				{ ...assistantMessage, content: assistantContent }
+			];
+
+			await ChatService.preEncode(messagesWithAssistant, model, excludeReasoning, signal);
+		} catch (err) {
+			if (!isAbortError(err)) {
+				console.warn('[ChatStore] Pre-encode failed:', err);
+			}
+		}
 	}
 }
 
