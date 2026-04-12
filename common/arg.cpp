@@ -390,6 +390,8 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_TBQ3_0,
+    GGML_TYPE_TBQ4_0,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
@@ -3073,6 +3075,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.use_jinja = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    add_opt(common_arg(
+        {"--remap-developer-role"},
+        "remap the OpenAI \"developer\" role to \"system\" before applying chat templates "
+        "(needed for models whose templates reject unknown roles, e.g. Qwen3.5)",
+        [](common_params & params) {
+            params.remap_developer_role = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REMAP_DEVELOPER_ROLE"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
