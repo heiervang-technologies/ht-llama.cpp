@@ -126,19 +126,17 @@ __global__ void dequantize_block_tbq3_0_kernel(
     const void * __restrict__ vx, dst_t * __restrict__ y,
     const float * __restrict__ Q_rot, int64_t nb) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;  // 0 = first 128, 1 = second 128
+    const int tbq_block = blockIdx.x;
     const int tid = threadIdx.x;          // 0..127
 
     if (tbq_block >= nb) return;
 
     const block_tbq3_0 * x = (const block_tbq3_0 *)vx;
     const float norm = __half2float(x[tbq_block].d);
-    const float scale_down = 0.0625f;  // 1/sqrt(256) = 1/16
+    const float scale_down = 0.08838834764f;  // 1/sqrt(128)
 
     // Step 1: Unpack 3-bit index and look up codebook
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     const int idx = unpack_3bit_index(x[tbq_block].qs, elem);
 
     __shared__ float s_rotated[128];
@@ -153,7 +151,7 @@ __global__ void dequantize_block_tbq3_0_kernel(
     }
 
     // Step 3: Scale by norm and write
-    y[tbq_block * 256 + sub_half * 128 + tid] = (dst_t)(sum * norm);
+    y[tbq_block * 128 + tid] = (dst_t)(sum * norm);
 }
 
 template<typename dst_t>
@@ -161,19 +159,17 @@ __global__ void dequantize_block_tbq4_0_kernel(
     const void * __restrict__ vx, dst_t * __restrict__ y,
     const float * __restrict__ Q_rot, int64_t nb) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;
+    const int tbq_block = blockIdx.x;
     const int tid = threadIdx.x;
 
     if (tbq_block >= nb) return;
 
     const block_tbq4_0 * x = (const block_tbq4_0 *)vx;
     const float norm = __half2float(x[tbq_block].d);
-    const float scale_down = 0.0625f;
+    const float scale_down = 0.08838834764f;
 
     // Step 1: Unpack 4-bit nibble and look up codebook
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     uint8_t idx;
     if (elem % 2 == 0) {
         idx = x[tbq_block].qs[elem / 2] & 0x0F;
@@ -192,7 +188,7 @@ __global__ void dequantize_block_tbq4_0_kernel(
     }
 
     // Step 3: Scale and write
-    y[tbq_block * 256 + sub_half * 128 + tid] = (dst_t)(sum * norm);
+    y[tbq_block * 128 + tid] = (dst_t)(sum * norm);
 }
 
 // Ensure rotation matrix is initialized (lazy init, thread-safe via CUDA stream ordering)
@@ -205,15 +201,15 @@ static void turboq_ensure_init(cudaStream_t stream) {
 template<typename dst_t>
 void dequantize_row_tbq3_0_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
     turboq_ensure_init(stream);
-    const int64_t nb = k / 256;
-    dequantize_block_tbq3_0_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, d_turboq_Q, nb);
+    const int64_t nb = k / 128;
+    dequantize_block_tbq3_0_kernel<<<nb, 128, 0, stream>>>(vx, y, d_turboq_Q, nb);
 }
 
 template<typename dst_t>
 void dequantize_row_tbq4_0_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
     turboq_ensure_init(stream);
-    const int64_t nb = k / 256;
-    dequantize_block_tbq4_0_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, d_turboq_Q, nb);
+    const int64_t nb = k / 128;
+    dequantize_block_tbq4_0_kernel<<<nb, 128, 0, stream>>>(vx, y, d_turboq_Q, nb);
 }
 
 // Explicit template instantiations
@@ -233,39 +229,35 @@ template<typename dst_t>
 __global__ void dequantize_block_tbq3_0_codebook_kernel(
     const void * __restrict__ vx, dst_t * __restrict__ y, int64_t nb) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;
+    const int tbq_block = blockIdx.x;
     const int tid = threadIdx.x;
 
     if (tbq_block >= nb) return;
 
     const block_tbq3_0 * x = (const block_tbq3_0 *)vx;
     const float norm = __half2float(x[tbq_block].d);
-    const float scale_down = 0.0625f;
+    const float scale_down = 0.08838834764f;
 
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     const int idx = unpack_3bit_index(x[tbq_block].qs, elem);
 
-    y[tbq_block * 256 + elem] = (dst_t)(d_codebook_3bit[idx] * scale_down * norm);
+    y[tbq_block * 128 + elem] = (dst_t)(d_codebook_3bit[idx] * scale_down * norm);
 }
 
 template<typename dst_t>
 __global__ void dequantize_block_tbq4_0_codebook_kernel(
     const void * __restrict__ vx, dst_t * __restrict__ y, int64_t nb) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;
+    const int tbq_block = blockIdx.x;
     const int tid = threadIdx.x;
 
     if (tbq_block >= nb) return;
 
     const block_tbq4_0 * x = (const block_tbq4_0 *)vx;
     const float norm = __half2float(x[tbq_block].d);
-    const float scale_down = 0.0625f;
+    const float scale_down = 0.08838834764f;
 
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     uint8_t idx;
     if (elem % 2 == 0) {
         idx = x[tbq_block].qs[elem / 2] & 0x0F;
@@ -273,19 +265,19 @@ __global__ void dequantize_block_tbq4_0_codebook_kernel(
         idx = (x[tbq_block].qs[elem / 2] >> 4) & 0x0F;
     }
 
-    y[tbq_block * 256 + elem] = (dst_t)(d_codebook_4bit[idx] * scale_down * norm);
+    y[tbq_block * 128 + elem] = (dst_t)(d_codebook_4bit[idx] * scale_down * norm);
 }
 
 template<typename dst_t>
 void dequantize_row_tbq3_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
-    const int64_t nb = k / 256;
-    dequantize_block_tbq3_0_codebook_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, nb);
+    const int64_t nb = k / 128;
+    dequantize_block_tbq3_0_codebook_kernel<<<nb, 128, 0, stream>>>(vx, y, nb);
 }
 
 template<typename dst_t>
 void dequantize_row_tbq4_0_codebook_cuda(const void * vx, dst_t * y, int64_t k, cudaStream_t stream) {
-    const int64_t nb = k / 256;
-    dequantize_block_tbq4_0_codebook_kernel<<<nb * 2, 128, 0, stream>>>(vx, y, nb);
+    const int64_t nb = k / 128;
+    dequantize_block_tbq4_0_codebook_kernel<<<nb, 128, 0, stream>>>(vx, y, nb);
 }
 
 template void dequantize_row_tbq3_0_codebook_cuda<float>(const void * vx, float * y, int64_t k, cudaStream_t stream);
@@ -306,7 +298,7 @@ __global__ void turboq_compute_norms_kernel(
 
     const int block_id = blockIdx.x;
     if (block_id >= num_blocks) return;
-    const int tid = threadIdx.x;  // 0..255
+    const int tid = threadIdx.x;  // 0..127
     const float * src = x + block_id * 256;
 
     float val = src[tid];
@@ -317,17 +309,17 @@ __global__ void turboq_compute_norms_kernel(
         sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
     }
 
-    __shared__ float warp_sums[8];  // 256/32 = 8 warps
+    __shared__ float warp_sums[4];  // 128/32 = 4 warps
     if (tid % 32 == 0) {
         warp_sums[tid / 32] = sum_sq;
     }
     __syncthreads();
 
     // Final reduction across warps
-    if (tid < 8) {
-        float s = warp_sums[tid];
-        for (int offset = 4; offset > 0; offset >>= 1) {
-            s += __shfl_down_sync(0xFF, s, offset);
+    if (tid < 32) {
+        float s = (tid < 4) ? warp_sums[tid] : 0.0f;
+        for (int offset = 2; offset > 0; offset >>= 1) {
+            s += __shfl_down_sync(0xFFFFFFFF, s, offset);
         }
         if (tid == 0) {
             float norm = sqrtf(s);
@@ -342,21 +334,19 @@ __global__ void quantize_f32_tbq3_0_kernel(
     const float * __restrict__ Q_rot, const float * __restrict__ norms,
     int64_t num_blocks) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;
-    const int tid = threadIdx.x;  // 0..127
+    const int tbq_block = blockIdx.x;
+    const int tid = threadIdx.x;          // 0..127
 
     if (tbq_block >= num_blocks) return;
 
     block_tbq3_0 * y = (block_tbq3_0 *)vy;
-    const float * src = x + tbq_block * 256;
+    const float * src = x + tbq_block * 128;
     const float norm = norms[tbq_block];
     const float inv_norm = 1.0f / norm;
-    const float scale_up = 16.0f;  // sqrt(256)
+    const float scale_up = 11.3137085f;  // sqrt(128)
 
     // Step 1: Load and normalize
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     float unit_val = src[elem] * inv_norm;
 
     __shared__ float s_unit[128];
@@ -398,7 +388,7 @@ __global__ void quantize_f32_tbq3_0_kernel(
 
     // Step 5: Write packed bytes to output
     // Each sub-block writes 48 bytes (128 * 3 / 8)
-    const int qs_offset = sub_half * 48;  // 128*3/8
+    const int qs_offset = 0;  // 128*3/8
     if (pos_in_group < 3) {
         // 3 bytes per group, thread 0-2 in each group write one byte
         uint32_t packed = s_packed[group];
@@ -406,8 +396,8 @@ __global__ void quantize_f32_tbq3_0_kernel(
             (uint8_t)((packed >> (pos_in_group * 8)) & 0xFF);
     }
 
-    // First sub-block, first thread writes the norm
-    if (sub_half == 0 && tid == 0) {
+    // First thread writes the norm
+    if (tid == 0) {
         y[tbq_block].d = __float2half(norm);
     }
 }
@@ -418,21 +408,19 @@ __global__ void quantize_f32_tbq4_0_kernel(
     const float * __restrict__ Q_rot, const float * __restrict__ norms,
     int64_t num_blocks) {
 
-    const int sub_block = blockIdx.x;
-    const int tbq_block = sub_block / 2;
-    const int sub_half  = sub_block % 2;
+    const int tbq_block = blockIdx.x;
     const int tid = threadIdx.x;
 
     if (tbq_block >= num_blocks) return;
 
     block_tbq4_0 * y = (block_tbq4_0 *)vy;
-    const float * src = x + tbq_block * 256;
+    const float * src = x + tbq_block * 128;
     const float norm = norms[tbq_block];
     const float inv_norm = 1.0f / norm;
-    const float scale_up = 16.0f;
+    const float scale_up = 11.3137085f;
 
     // Step 1: Load and normalize
-    const int elem = sub_half * 128 + tid;
+    const int elem = tid;
     float unit_val = src[elem] * inv_norm;
 
     __shared__ float s_unit[128];
@@ -469,7 +457,7 @@ __global__ void quantize_f32_tbq4_0_kernel(
     }
 
     // Write norm
-    if (sub_half == 0 && tid == 0) {
+    if (tid == 0) {
         y[tbq_block].d = __float2half(norm);
     }
 }
@@ -501,14 +489,14 @@ void ggml_cpy_f32_tbq3_0_cuda(
     (void)ne00; (void)ne01; (void)ne02; (void)nb00; (void)nb01; (void)nb02; (void)nb03;
     (void)ne10; (void)ne11; (void)ne12; (void)nb10; (void)nb11; (void)nb12; (void)nb13;
 
-    GGML_ASSERT(ne % 256 == 0);
+    GGML_ASSERT(ne % 128 == 0);
     turboq_ensure_init(stream);
 
-    const int64_t num_blocks = ne / 256;
+    const int64_t num_blocks = ne / 128;
     float * norms = turboq_get_norms_buffer(num_blocks, stream);
 
     // Pass 1: compute norms
-    turboq_compute_norms_kernel<<<num_blocks, 256, 0, stream>>>(
+    turboq_compute_norms_kernel<<<num_blocks, 128, 0, stream>>>(
         (const float *)cx, norms, num_blocks);
 
     // Pass 2: quantize
@@ -527,13 +515,13 @@ void ggml_cpy_f32_tbq4_0_cuda(
     (void)ne00; (void)ne01; (void)ne02; (void)nb00; (void)nb01; (void)nb02; (void)nb03;
     (void)ne10; (void)ne11; (void)ne12; (void)nb10; (void)nb11; (void)nb12; (void)nb13;
 
-    GGML_ASSERT(ne % 256 == 0);
+    GGML_ASSERT(ne % 128 == 0);
     turboq_ensure_init(stream);
 
-    const int64_t num_blocks = ne / 256;
+    const int64_t num_blocks = ne / 128;
     float * norms = turboq_get_norms_buffer(num_blocks, stream);
 
-    turboq_compute_norms_kernel<<<num_blocks, 256, 0, stream>>>(
+    turboq_compute_norms_kernel<<<num_blocks, 128, 0, stream>>>(
         (const float *)cx, norms, num_blocks);
 
     quantize_f32_tbq4_0_kernel<<<num_blocks * 2, 128, 0, stream>>>(
@@ -564,7 +552,7 @@ __global__ void set_rows_tbq3_0_kernel(
 
     // Each CUDA block handles one source row
     const int row_idx = blockIdx.x;
-    const int tid = threadIdx.x;  // 0..255
+    const int tid = threadIdx.x;  // 0..127
 
     // Decompose row_idx into (i01, i02, i03)
     const int64_t total_rows = ne01 * ne02 * ne03;
@@ -586,15 +574,15 @@ __global__ void set_rows_tbq3_0_kernel(
     // Destination pointer
     char * dst_row = dst + dst_row_idx * nb1 + i02 * nb2 + i03 * nb3;
 
-    // ne00 should be 256 (one TBQ block per row) — assert in host code
-    // For simplicity, handle exactly 1 TBQ block (256 elements)
-    const int64_t num_blocks_per_row = ne00 / 256;
+    // ne00 should be 128 (one TBQ block per row) — assert in host code
+    // For simplicity, handle exactly 1 TBQ block (128 elements)
+    const int64_t num_blocks_per_row = ne00 / 128;
 
     for (int64_t blk = 0; blk < num_blocks_per_row; blk++) {
-        const float * blk_src = src_row + blk * 256;
+        const float * blk_src = src_row + blk * 128;
         block_tbq3_0 * blk_dst = (block_tbq3_0 *)dst_row + blk;
 
-        // Phase 1: Compute L2 norm (all 256 threads)
+        // Phase 1: Compute L2 norm (all 128 threads)
         float val = blk_src[tid];
         float sum_sq = val * val;
 
@@ -602,15 +590,15 @@ __global__ void set_rows_tbq3_0_kernel(
             sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
         }
 
-        __shared__ float warp_sums[8];
+        __shared__ float warp_sums[4];
         if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
         __syncthreads();
 
         __shared__ float s_norm;
-        if (tid < 8) {
-            float s = warp_sums[tid];
-            for (int offset = 4; offset > 0; offset >>= 1) {
-                s += __shfl_down_sync(0xFF, s, offset);
+        if (tid < 32) {
+            float s = (tid < 4) ? warp_sums[tid] : 0.0f;
+            for (int offset = 2; offset > 0; offset >>= 1) {
+                s += __shfl_down_sync(0xFFFFFFFF, s, offset);
             }
             if (tid == 0) {
                 float n = sqrtf(s);
@@ -622,51 +610,45 @@ __global__ void set_rows_tbq3_0_kernel(
         float norm = s_norm;
         float inv_norm = 1.0f / norm;
 
-        // Phase 2: Normalize, rotate, quantize, pack (2 sub-blocks of 128)
-        // Each thread handles one element per sub-block
-        for (int sub = 0; sub < 2; sub++) {
-            int elem = sub * 128 + (tid % 128);
-            if (tid >= 128 && sub == 0) continue;  // first 128 threads do sub 0
-            if (tid < 128 && sub == 1) continue;    // last 128 threads do sub 1
-            int ltid = tid % 128;  // local thread id within sub-block
+        // Phase 2: Normalize, rotate, quantize, pack (1 sub-block of 128)
+        int elem = tid;
+        int ltid = tid;
 
-            float unit_val = blk_src[elem] * inv_norm;
+        float unit_val = blk_src[elem] * inv_norm;
 
-            __shared__ float s_unit[256];  // use different halves for each sub-block
-            s_unit[elem] = unit_val;
-            __syncthreads();
+        __shared__ float s_unit[128];
+        s_unit[elem] = unit_val;
+        __syncthreads();
 
-            // Forward rotation
-            float rotated = 0.0f;
-            for (int j = 0; j < 128; j++) {
-                rotated += Q_rot[ltid * 128 + j] * s_unit[sub * 128 + j];
-            }
+        // Forward rotation
+        float rotated = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            rotated += Q_rot[ltid * 128 + j] * s_unit[j];
+        }
 
-            // Quantize
-            float scaled = rotated * 16.0f;
-            int idx = 7;
-            #pragma unroll
-            for (int b = 0; b < 7; b++) {
-                if (scaled < d_boundaries_3bit[b]) { idx = b; break; }
-            }
+        // Quantize
+        float scaled = rotated * 11.3137085f;
+        int idx = 7;
+        #pragma unroll
+        for (int b = 0; b < 7; b++) {
+            if (scaled < d_boundaries_3bit[b]) { idx = b; break; }
+        }
 
-            // Pack 3-bit
-            const int group = ltid / 8;
-            const int pos_in_group = ltid % 8;
+        // Pack 3-bit
+        const int group = ltid / 8;
+        const int pos_in_group = ltid % 8;
 
-            __shared__ uint32_t s_packed[32];  // 16 groups per sub-block × 2
-            if (ltid < 16) s_packed[sub * 16 + ltid] = 0;
-            __syncthreads();
+        __shared__ uint32_t s_packed[16];
+        if (ltid < 16) s_packed[ltid] = 0;
+        __syncthreads();
 
-            atomicOr(&s_packed[sub * 16 + group], ((uint32_t)idx) << (pos_in_group * 3));
-            __syncthreads();
+        atomicOr(&s_packed[group], ((uint32_t)idx) << (pos_in_group * 3));
+        __syncthreads();
 
-            const int qs_offset = sub * 48;
-            if (pos_in_group < 3) {
-                uint32_t packed = s_packed[sub * 16 + group];
-                blk_dst->qs[qs_offset + group * 3 + pos_in_group] =
-                    (uint8_t)((packed >> (pos_in_group * 8)) & 0xFF);
-            }
+        if (pos_in_group < 3) {
+            uint32_t packed = s_packed[group];
+            blk_dst->qs[group * 3 + pos_in_group] =
+                (uint8_t)((packed >> (pos_in_group * 8)) & 0xFF);
         }
 
         if (tid == 0) {
@@ -705,10 +687,10 @@ __global__ void set_rows_tbq4_0_kernel(
 
     char * dst_row = dst + dst_row_idx * nb1 + i02 * nb2 + i03 * nb3;
 
-    const int64_t num_blocks_per_row = ne00 / 256;
+    const int64_t num_blocks_per_row = ne00 / 128;
 
     for (int64_t blk = 0; blk < num_blocks_per_row; blk++) {
-        const float * blk_src = src_row + blk * 256;
+        const float * blk_src = src_row + blk * 128;
         block_tbq4_0 * blk_dst = (block_tbq4_0 *)dst_row + blk;
 
         // Phase 1: L2 norm
@@ -719,15 +701,15 @@ __global__ void set_rows_tbq4_0_kernel(
             sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
         }
 
-        __shared__ float warp_sums[8];
+        __shared__ float warp_sums[4];
         if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
         __syncthreads();
 
         __shared__ float s_norm;
-        if (tid < 8) {
-            float s = warp_sums[tid];
-            for (int offset = 4; offset > 0; offset >>= 1) {
-                s += __shfl_down_sync(0xFF, s, offset);
+        if (tid < 32) {
+            float s = (tid < 4) ? warp_sums[tid] : 0.0f;
+            for (int offset = 2; offset > 0; offset >>= 1) {
+                s += __shfl_down_sync(0xFFFFFFFF, s, offset);
             }
             if (tid == 0) {
                 float n = sqrtf(s);
@@ -739,40 +721,36 @@ __global__ void set_rows_tbq4_0_kernel(
         float norm = s_norm;
         float inv_norm = 1.0f / norm;
 
-        // Phase 2: two sub-blocks
-        for (int sub = 0; sub < 2; sub++) {
-            int elem = sub * 128 + (tid % 128);
-            if (tid >= 128 && sub == 0) continue;
-            if (tid < 128 && sub == 1) continue;
-            int ltid = tid % 128;
+        // Phase 2
+        int elem = tid;
+        int ltid = tid;
 
-            float unit_val = blk_src[elem] * inv_norm;
+        float unit_val = blk_src[elem] * inv_norm;
 
-            __shared__ float s_unit[256];
-            s_unit[elem] = unit_val;
-            __syncthreads();
+        __shared__ float s_unit[128];
+        s_unit[elem] = unit_val;
+        __syncthreads();
 
-            float rotated = 0.0f;
-            for (int j = 0; j < 128; j++) {
-                rotated += Q_rot[ltid * 128 + j] * s_unit[sub * 128 + j];
-            }
+        float rotated = 0.0f;
+        for (int j = 0; j < 128; j++) {
+            rotated += Q_rot[ltid * 128 + j] * s_unit[j];
+        }
 
-            float scaled = rotated * 16.0f;
-            int idx = 15;
-            #pragma unroll
-            for (int b = 0; b < 15; b++) {
-                if (scaled < d_boundaries_4bit[b]) { idx = b; break; }
-            }
+        float scaled = rotated * 11.3137085f;
+        int idx = 15;
+        #pragma unroll
+        for (int b = 0; b < 15; b++) {
+            if (scaled < d_boundaries_4bit[b]) { idx = b; break; }
+        }
 
-            // Pack 4-bit nibbles
-            __shared__ uint8_t s_indices[256];
-            s_indices[elem] = (uint8_t)idx;
-            __syncthreads();
+        // Pack 4-bit nibbles
+        __shared__ uint8_t s_indices[128];
+        s_indices[elem] = (uint8_t)idx;
+        __syncthreads();
 
-            if (ltid % 2 == 0) {
-                const int qs_idx = elem / 2;
-                blk_dst->qs[qs_idx] = s_indices[elem] | (s_indices[elem + 1] << 4);
-            }
+        if (ltid % 2 == 0) {
+            const int qs_idx = elem / 2;
+            blk_dst->qs[qs_idx] = s_indices[elem] | (s_indices[elem + 1] << 4);
         }
 
         if (tid == 0) {
@@ -805,7 +783,7 @@ void ggml_set_rows_tbq3_0_cuda(
 
     // ne11/ne12 for index wrapping — for simple KV cache, these are 1
     // We pass them as the last two args
-    set_rows_tbq3_0_kernel<<<total_rows, 256, 0, stream>>>(
+    set_rows_tbq3_0_kernel<<<total_rows, 128, 0, stream>>>(
         src0_d, src1_d, dst_d, d_turboq_Q,
         ne00, ne01, ne02, ne03,
         s01, s02, s03, s10, s11, s12,
@@ -832,7 +810,7 @@ void ggml_set_rows_tbq4_0_cuda(
     const int64_t s11 = nb11 / sizeof(idx_t);
     const int64_t s12 = nb12 / sizeof(idx_t);
 
-    set_rows_tbq4_0_kernel<<<total_rows, 256, 0, stream>>>(
+    set_rows_tbq4_0_kernel<<<total_rows, 128, 0, stream>>>(
         src0_d, src1_d, dst_d, d_turboq_Q,
         ne00, ne01, ne02, ne03,
         s01, s02, s03, s10, s11, s12,

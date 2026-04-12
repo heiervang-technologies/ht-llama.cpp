@@ -113,13 +113,13 @@ void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, 
 }
 
 void quantize_row_tbq3_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
+    assert(k % TBQ_BLK_SIZE == 0);
     block_tbq3_0 * GGML_RESTRICT y = vy;
     quantize_row_tbq3_0_ref(x, y, k);
 }
 
 void quantize_row_tbq4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    assert(k % QK_K == 0);
+    assert(k % TBQ_BLK_SIZE == 0);
     block_tbq4_0 * GGML_RESTRICT y = vy;
     quantize_row_tbq4_0_ref(x, y, k);
 }

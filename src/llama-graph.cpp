@@ -1928,11 +1928,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         GGML_ASSERT(n_head_kv > 0);
         GGML_ASSERT(n_embd_k_gqa % n_head_kv == 0);
 
-        // Codebook-only dequant: skip rotation (values stay in rotated domain)
-        k = ggml_cast(ctx0, k, tbq_attn_type);
-        int32_t codebook_flag = 1;
-        memcpy(k->op_params, &codebook_flag, sizeof(int32_t));
-        cb(k, use_flash_attn ? "k_tbq_cb_f16" : "k_tbq_cb_f32", il);
+        if (!use_flash_attn) {
+            // Codebook-only dequant: skip rotation (values stay in rotated domain)
+            k = ggml_cast(ctx0, k, tbq_attn_type);
+            int32_t codebook_flag = 1;
+            memcpy(k->op_params, &codebook_flag, sizeof(int32_t));
+            cb(k, "k_tbq_cb_f32", il);
+        }
 
         k = ggml_reshape_4d(ctx0, k, n_embd_k_gqa / n_head_kv, n_head_kv, k->ne[1], k->ne[2]);
         cb(k, "k_tbq_reshaped", il);
@@ -1945,11 +1947,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         GGML_ASSERT(n_head_kv > 0);
         GGML_ASSERT(n_embd_v_gqa % n_head_kv == 0);
 
-        // Codebook-only dequant: skip rotation
-        v = ggml_cast(ctx0, v, tbq_attn_type);
-        int32_t codebook_flag = 1;
-        memcpy(v->op_params, &codebook_flag, sizeof(int32_t));
-        cb(v, use_flash_attn ? "v_tbq_cb_f16" : "v_tbq_cb_f32", il);
+        if (!use_flash_attn) {
+            // Codebook-only dequant: skip rotation
+            v = ggml_cast(ctx0, v, tbq_attn_type);
+            int32_t codebook_flag = 1;
+            memcpy(v->op_params, &codebook_flag, sizeof(int32_t));
+            cb(v, "v_tbq_cb_f32", il);
+        }
 
         v = ggml_reshape_4d(ctx0, v, n_embd_v_gqa / n_head_kv, n_head_kv, v->ne[1], v->ne[2]);
         cb(v, "v_tbq_reshaped", il);
