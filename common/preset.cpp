@@ -4,6 +4,8 @@
 #include "log.h"
 #include "download.h"
 
+#include "gguf.h"
+
 #include <fstream>
 #include <sstream>
 #include <filesystem>
@@ -442,6 +444,141 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
     }
 
     return out;
+}
+
+// helper: read GGUF metadata to determine if file is a LoRA adapter
+// returns true if it is an adapter, and fills out architecture string
+static bool gguf_is_lora_adapter(const std::string & path, std::string & architecture) {
+    struct gguf_init_params params = {
+        /*.no_alloc = */ true,
+        /*.ctx      = */ nullptr,
+    };
+    struct gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
+    if (!ctx) {
+        return false;
+    }
+
+    bool is_adapter = false;
+
+    int64_t type_key = gguf_find_key(ctx, "general.type");
+    if (type_key >= 0) {
+        const char * type_val = gguf_get_val_str(ctx, type_key);
+        if (type_val && std::string(type_val) == "adapter") {
+            is_adapter = true;
+
+            int64_t arch_key = gguf_find_key(ctx, "general.architecture");
+            if (arch_key >= 0) {
+                const char * arch_val = gguf_get_val_str(ctx, arch_key);
+                if (arch_val) {
+                    architecture = arch_val;
+                }
+            }
+        }
+    }
+
+    gguf_free(ctx);
+    return is_adapter;
+}
+
+common_models_dir_result common_preset_context::load_from_models_dir_with_lora(const std::string & models_dir) const {
+    if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
+        throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", models_dir.c_str()));
+    }
+
+    std::vector<local_model> models;
+    std::vector<common_lora_adapter_info> adapters;
+
+    auto scan_subdir = [&models, &adapters](const std::string & subdir_path, const std::string & name) {
+        auto files = fs_list(subdir_path, false);
+        common_file_info model_file;
+        common_file_info first_shard_file;
+        common_file_info mmproj_file;
+        std::vector<common_file_info> other_gguf_files;
+
+        for (const auto & file : files) {
+            if (string_ends_with(file.name, ".gguf")) {
+                if (file.name.find("mmproj") != std::string::npos) {
+                    mmproj_file = file;
+                } else if (file.name.find("-00001-of-") != std::string::npos) {
+                    first_shard_file = file;
+                } else {
+                    other_gguf_files.push_back(file);
+                }
+            }
+        }
+
+        // check each non-shard, non-mmproj gguf file for adapter type
+        for (const auto & file : other_gguf_files) {
+            std::string arch;
+            if (gguf_is_lora_adapter(file.path, arch)) {
+                std::string adapter_name = file.name;
+                string_replace_all(adapter_name, ".gguf", "");
+                adapters.push_back({
+                    /* name         */ adapter_name,
+                    /* path         */ file.path,
+                    /* architecture */ arch,
+                });
+                LOG_INF("%s: discovered LoRA adapter '%s' (arch: %s) in %s\n",
+                    __func__, adapter_name.c_str(), arch.c_str(), subdir_path.c_str());
+            } else {
+                // treat as model file (last one wins, matching original behavior)
+                model_file = file;
+            }
+        }
+
+        local_model model{
+            /* name        */ name,
+            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
+            /* path_mmproj */ mmproj_file.path
+        };
+        if (!model.path.empty()) {
+            models.push_back(model);
+        }
+    };
+
+    auto files = fs_list(models_dir, true);
+    for (const auto & file : files) {
+        if (file.is_dir) {
+            scan_subdir(file.path, file.name);
+        } else if (string_ends_with(file.name, ".gguf")) {
+            std::string file_name = file.name;
+            string_replace_all(file_name, ".gguf", "");
+
+            // check if this is a LoRA adapter
+            std::string arch;
+            if (gguf_is_lora_adapter(file.path, arch)) {
+                adapters.push_back({
+                    /* name         */ file_name,
+                    /* path         */ file.path,
+                    /* architecture */ arch,
+                });
+                LOG_INF("%s: discovered LoRA adapter '%s' (arch: %s)\n",
+                    __func__, file_name.c_str(), arch.c_str());
+            } else {
+                local_model model{
+                    /* name        */ file_name,
+                    /* path        */ file.path,
+                    /* path_mmproj */ ""
+                };
+                models.push_back(model);
+            }
+        }
+    }
+
+    // convert local models to presets
+    common_models_dir_result result;
+    for (const auto & model : models) {
+        common_preset preset;
+        preset.name = model.name;
+        preset.set_option(*this, "LLAMA_ARG_MODEL", model.path);
+        if (!model.path_mmproj.empty()) {
+            preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);
+        }
+        result.presets[preset.name] = preset;
+    }
+    result.adapters = std::move(adapters);
+
+    return result;
 }
 
 common_preset common_preset_context::load_from_args(int argc, char ** argv) const {
