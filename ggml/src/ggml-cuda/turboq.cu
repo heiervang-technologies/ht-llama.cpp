@@ -312,10 +312,8 @@ __global__ void turboq_compute_norms_kernel(
     float val = src[tid];
     float sum_sq = val * val;
 
-    // Warp-level reduction
-    for (int offset = 16; offset > 0; offset >>= 1) {
-        sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
-    }
+    // Warp-level reduction (full 32-lane warp)
+    sum_sq = warp_reduce_sum(sum_sq);
 
     __shared__ float warp_sums[8];  // 256/32 = 8 warps
     if (tid % 32 == 0) {
@@ -323,12 +321,9 @@ __global__ void turboq_compute_norms_kernel(
     }
     __syncthreads();
 
-    // Final reduction across warps
+    // Final reduction across warps (8-lane sub-warp)
     if (tid < 8) {
-        float s = warp_sums[tid];
-        for (int offset = 4; offset > 0; offset >>= 1) {
-            s += __shfl_down_sync(0xFF, s, offset);
-        }
+        float s = warp_reduce_sum<8>(warp_sums[tid]);
         if (tid == 0) {
             float norm = sqrtf(s);
             norms[block_id] = (norm < 1e-10f) ? 1e-10f : norm;
@@ -598,9 +593,7 @@ __global__ void set_rows_tbq3_0_kernel(
         float val = blk_src[tid];
         float sum_sq = val * val;
 
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
-        }
+        sum_sq = warp_reduce_sum(sum_sq);
 
         __shared__ float warp_sums[8];
         if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
@@ -608,10 +601,7 @@ __global__ void set_rows_tbq3_0_kernel(
 
         __shared__ float s_norm;
         if (tid < 8) {
-            float s = warp_sums[tid];
-            for (int offset = 4; offset > 0; offset >>= 1) {
-                s += __shfl_down_sync(0xFF, s, offset);
-            }
+            float s = warp_reduce_sum<8>(warp_sums[tid]);
             if (tid == 0) {
                 float n = sqrtf(s);
                 s_norm = (n < 1e-10f) ? 1e-10f : n;
@@ -715,9 +705,7 @@ __global__ void set_rows_tbq4_0_kernel(
         float val = blk_src[tid];
         float sum_sq = val * val;
 
-        for (int offset = 16; offset > 0; offset >>= 1) {
-            sum_sq += __shfl_down_sync(0xFFFFFFFF, sum_sq, offset);
-        }
+        sum_sq = warp_reduce_sum(sum_sq);
 
         __shared__ float warp_sums[8];
         if (tid % 32 == 0) warp_sums[tid / 32] = sum_sq;
@@ -725,10 +713,7 @@ __global__ void set_rows_tbq4_0_kernel(
 
         __shared__ float s_norm;
         if (tid < 8) {
-            float s = warp_sums[tid];
-            for (int offset = 4; offset > 0; offset >>= 1) {
-                s += __shfl_down_sync(0xFF, s, offset);
-            }
+            float s = warp_reduce_sum<8>(warp_sums[tid]);
             if (tid == 0) {
                 float n = sqrtf(s);
                 s_norm = (n < 1e-10f) ? 1e-10f : n;
