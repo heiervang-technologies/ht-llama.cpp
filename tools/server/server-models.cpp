@@ -704,10 +704,33 @@ void server_models::load(const std::string & name) {
             };
             {
                 std::unique_lock<std::mutex> lk(this->mutex);
-                this->cv_stop.wait(lk, should_wake);
+                // Poll subprocess_alive periodically so a child crash is detected even when
+                // nothing notifies cv_stop. subprocess_alive() calls waitpid(WNOHANG) and
+                // reaps the zombie once the child has exited.
+                while (!should_wake()) {
+                    this->cv_stop.wait_for(lk, std::chrono::seconds(1));
+                }
             }
             // child may have already exited (e.g. crashed) — skip shutdown sequence
             if (!subprocess_alive(child_proc.get())) {
+                // Mark the model unloaded immediately so proxy_request stops forwarding to a
+                // dead worker. The outer thread will also call update_status after cleanup,
+                // but that cleanup can stall on log_thread.join() if the stdout pipe isn't
+                // EOFing (e.g. another process inherited the write end). Setting status here
+                // breaks the "500 forever" loop even when the management thread is stuck.
+                this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, child_proc->return_status);
+                // Force the stdout pipe read end closed so log_thread's fgets() returns and
+                // the outer thread can proceed past log_thread.join().
+                if (child_proc->stdout_file) {
+                    int fd = fileno(child_proc->stdout_file);
+                    if (fd >= 0) {
+#ifdef _WIN32
+                        _close(fd);
+#else
+                        ::close(fd);
+#endif
+                    }
+                }
                 return;
             }
             SRV_INF("stopping model instance name=%s\n", name.c_str());
