@@ -52,6 +52,16 @@
 	let editorApi: DocEditorApi | null = null;
 	let commandsMenuOpen = $state(false);
 
+	// A doc loaded with its default name and empty body, freshly created in
+	// the last few seconds, is almost certainly a brand-new doc. Auto-focus
+	// the title so the user can type a name without an extra click.
+	let autofocusTitle = $derived(
+		!!doc &&
+			(doc.name ?? '') === 'Untitled' &&
+			(doc.content ?? '').length === 0 &&
+			Date.now() - doc.lastModified < 3000
+	);
+
 	onMount(() => {
 		if (!docsStore.isInitialized) {
 			docsStore.initialize();
@@ -216,6 +226,7 @@
 	onChatAbout={handleChatAbout}
 	onRunAiCommand={handleRunAiCommand}
 	bind:commandsMenuOpen
+	{autofocusTitle}
 />
 
 <main class="flex h-full w-full flex-col pt-14 md:pt-16">

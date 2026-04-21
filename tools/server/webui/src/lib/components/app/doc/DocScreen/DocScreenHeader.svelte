@@ -16,6 +16,8 @@
 		onChatAbout: () => void;
 		onRunAiCommand: (commandId: string) => void;
 		commandsMenuOpen?: boolean;
+		/** If true, focus + select the title input on mount. Used for brand-new docs. */
+		autofocusTitle?: boolean;
 	}
 
 	let {
@@ -26,8 +28,18 @@
 		onViewChange,
 		onChatAbout,
 		onRunAiCommand,
-		commandsMenuOpen = $bindable(false)
+		commandsMenuOpen = $bindable(false),
+		autofocusTitle = false
 	}: Props = $props();
+
+	let titleInputEl: HTMLInputElement | undefined = $state();
+
+	$effect(() => {
+		if (autofocusTitle && titleInputEl) {
+			titleInputEl.focus();
+			titleInputEl.select();
+		}
+	});
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -51,6 +63,7 @@
 >
 	<div class="pointer-events-auto ml-12 flex min-w-0 flex-1 items-center gap-2 md:ml-12">
 		<input
+			bind:this={titleInputEl}
 			type="text"
 			class="min-w-0 flex-1 truncate rounded-md bg-transparent px-2 py-1 text-sm font-medium text-foreground outline-none focus:bg-muted/40"
 			bind:value={localName}
