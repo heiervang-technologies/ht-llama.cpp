@@ -33,6 +33,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { extractMarkdownDataImageAttachments } from '$lib/utils/extract-markdown-images';
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
@@ -256,9 +257,16 @@
 
 		const extras = result?.extras;
 
+		// Lift inline `![](data:image/...)` refs into attachment extras so the
+		// vision encoder receives them, while the text keeps the markdown so
+		// the image still renders inline in the user bubble.
+		const inlineImageExtras = extractMarkdownDataImageAttachments(message);
+		const mergedExtras =
+			inlineImageExtras.length > 0 ? [...(extras ?? []), ...inlineImageExtras] : extras;
+
 		// Enable autoscroll for user-initiated message sending
 		autoScroll.enable();
-		await chatStore.sendMessage(message, extras);
+		await chatStore.sendMessage(message, mergedExtras);
 		autoScroll.scrollToBottom();
 
 		return true;

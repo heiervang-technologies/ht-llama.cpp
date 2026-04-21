@@ -23,7 +23,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
 	disableAutoScroll: false,
-	renderUserContentAsMarkdown: false,
+	renderUserContentAsMarkdown: true,
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
 	sendOnEnter: true,
