@@ -13,11 +13,11 @@
 
 	interface Props {
 		onRun: (commandId: string) => void;
+		open?: boolean;
 	}
 
-	let { onRun }: Props = $props();
+	let { onRun, open = $bindable(false) }: Props = $props();
 
-	let open = $state(false);
 	let commands = $derived(aiCommandsStore.list());
 	let running = $derived(aiCommandsStore.runningId !== null);
 </script>
@@ -43,7 +43,7 @@
 					variant="ghost"
 					size="sm"
 					class="gap-1.5 rounded-full backdrop-blur-lg"
-					title="Run an AI command on this document"
+					title="Run an AI command on this document (Ctrl+Shift+K)"
 				>
 					<Wand2 class="h-4 w-4" />
 					<span class="hidden md:inline">Commands</span>

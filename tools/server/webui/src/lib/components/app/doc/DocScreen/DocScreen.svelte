@@ -50,11 +50,28 @@
 	let pendingContent = $state<string | null>(null);
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let editorApi: DocEditorApi | null = null;
+	let commandsMenuOpen = $state(false);
 
 	onMount(() => {
 		if (!docsStore.isInitialized) {
 			docsStore.initialize();
 		}
+
+		// Ctrl/Cmd+Shift+K — open the AI commands menu from anywhere in the doc
+		// screen. Ctrl+K alone is reserved for the browser address bar; Ctrl+Shift
+		// gives us a dedicated binding that doesn't collide with other editor
+		// shortcuts or the browser's default.
+		function onKeydown(e: KeyboardEvent) {
+			const modifier = e.metaKey || e.ctrlKey;
+			if (modifier && e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+				e.preventDefault();
+				if (aiCommandsStore.runningId === null) {
+					commandsMenuOpen = true;
+				}
+			}
+		}
+		window.addEventListener('keydown', onKeydown);
+		return () => window.removeEventListener('keydown', onKeydown);
 	});
 
 	$effect(() => {
@@ -184,6 +201,7 @@
 	onViewChange={setView}
 	onChatAbout={handleChatAbout}
 	onRunAiCommand={handleRunAiCommand}
+	bind:commandsMenuOpen
 />
 
 <main class="flex h-full w-full flex-col pt-14 md:pt-16">

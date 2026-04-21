@@ -15,9 +15,19 @@
 		onViewChange: (next: 'edit' | 'preview' | 'split') => void;
 		onChatAbout: () => void;
 		onRunAiCommand: (commandId: string) => void;
+		commandsMenuOpen?: boolean;
 	}
 
-	let { name, view, saving, onRename, onViewChange, onChatAbout, onRunAiCommand }: Props = $props();
+	let {
+		name,
+		view,
+		saving,
+		onRename,
+		onViewChange,
+		onChatAbout,
+		onRunAiCommand,
+		commandsMenuOpen = $bindable(false)
+	}: Props = $props();
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -103,7 +113,7 @@
 			<span class="hidden md:inline">{inlineOn ? 'AI on' : 'AI off'}</span>
 		</Button>
 
-		<AiCommandsMenu onRun={onRunAiCommand} />
+		<AiCommandsMenu onRun={onRunAiCommand} bind:open={commandsMenuOpen} />
 
 		<Button
 			variant="ghost"
