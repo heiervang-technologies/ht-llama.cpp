@@ -108,15 +108,18 @@
 
 	let conversationTree = $derived(buildConversationTree(filteredConversations));
 
-	// Flat id list in tree order — used as the domain for shift-range selection
-	// and shift+arrow extensions in selection mode.
-	let flatIds = $derived(conversationTree.map((n) => n.conversation.id));
+	// Flat id lists per section — shift-range and shift+arrow operate within
+	// the list the anchor belongs to; Ctrl/Cmd+A selects across both.
+	let flatConversationIds = $derived(conversationTree.map((n) => n.conversation.id));
+	let flatDocIds = $derived(filteredDocs.map((d) => d.id));
+	let anchorIds = $state<string[]>([]);
 
-	function enterSelectionMode(initialId?: string) {
+	function enterSelectionMode(initialId?: string, ids?: string[]) {
 		selectionMode = true;
 		if (initialId) {
 			selectedIds.add(initialId);
 			anchorId = initialId;
+			if (ids) anchorIds = ids;
 		}
 	}
 
@@ -124,15 +127,18 @@
 		selectionMode = false;
 		selectedIds.clear();
 		anchorId = undefined;
+		anchorIds = [];
 	}
 
-	function toggleSelect(id: string, event: MouseEvent | KeyboardEvent) {
+	function toggleSelect(id: string, ids: string[], event: MouseEvent | KeyboardEvent) {
 		if (event.shiftKey && anchorId) {
-			const a = flatIds.indexOf(anchorId);
-			const b = flatIds.indexOf(id);
+			const a = ids.indexOf(anchorId);
+			const b = ids.indexOf(id);
 			if (a !== -1 && b !== -1) {
 				const [lo, hi] = a < b ? [a, b] : [b, a];
-				for (let i = lo; i <= hi; i++) selectedIds.add(flatIds[i]);
+				for (let i = lo; i <= hi; i++) selectedIds.add(ids[i]);
+				anchorId = id;
+				anchorIds = ids;
 				return;
 			}
 		}
@@ -142,25 +148,42 @@
 			selectedIds.add(id);
 		}
 		anchorId = id;
+		anchorIds = ids;
+	}
+
+	function toggleSelectConversation(id: string, event: MouseEvent | KeyboardEvent) {
+		toggleSelect(id, flatConversationIds, event);
+	}
+
+	function toggleSelectDoc(id: string, event: MouseEvent | KeyboardEvent) {
+		toggleSelect(id, flatDocIds, event);
 	}
 
 	function selectAllVisible() {
-		for (const id of flatIds) selectedIds.add(id);
-		anchorId = flatIds[flatIds.length - 1];
+		for (const id of flatConversationIds) selectedIds.add(id);
+		for (const id of flatDocIds) selectedIds.add(id);
+		const last =
+			flatDocIds[flatDocIds.length - 1] ?? flatConversationIds[flatConversationIds.length - 1];
+		if (last) {
+			anchorId = last;
+			anchorIds = flatDocIds.includes(last) ? flatDocIds : flatConversationIds;
+		}
 	}
 
 	function extendSelectionByKey(direction: 1 | -1) {
-		if (flatIds.length === 0) return;
-		const current = anchorId ?? flatIds[0];
-		const idx = flatIds.indexOf(current);
+		const ids = anchorIds.length > 0 ? anchorIds : flatConversationIds;
+		if (ids.length === 0) return;
+		const current = anchorId ?? ids[0];
+		const idx = ids.indexOf(current);
 		if (idx === -1) return;
-		const nextIdx = Math.max(0, Math.min(flatIds.length - 1, idx + direction));
-		const nextId = flatIds[nextIdx];
+		const nextIdx = Math.max(0, Math.min(ids.length - 1, idx + direction));
+		const nextId = ids[nextIdx];
 		selectedIds.add(nextId);
 		selectedIds.add(current);
 		anchorId = nextId;
-		// Scroll the now-focused row into view for visual feedback.
-		const el = document.querySelector<HTMLElement>(`[data-conversation-id="${nextId}"]`);
+		const el = document.querySelector<HTMLElement>(
+			`[data-conversation-id="${nextId}"], [data-doc-id="${nextId}"]`
+		);
 		el?.scrollIntoView({ block: 'nearest' });
 	}
 
@@ -202,7 +225,7 @@
 
 	$effect(() => {
 		// Drop stale ids if the visible list changes under us (e.g. new search query).
-		const visible = new Set(flatIds);
+		const visible = new Set([...flatConversationIds, ...flatDocIds]);
 		untrack(() => {
 			for (const id of selectedIds) {
 				if (!visible.has(id)) selectedIds.delete(id);
@@ -213,11 +236,16 @@
 
 	async function handleConfirmBulkDelete() {
 		const ids = [...selectedIds];
+		const convSet = new Set(flatConversationIds);
+		const docSet = new Set(flatDocIds);
+		const convIds = ids.filter((id) => convSet.has(id));
+		const docIds = ids.filter((id) => docSet.has(id));
 		showBulkDeleteDialog = false;
-		selectionMode = false;
-		selectedIds.clear();
-		anchorId = undefined;
-		await conversationsStore.deleteMany(ids);
+		exitSelectionMode();
+		await Promise.all([
+			convIds.length > 0 ? conversationsStore.deleteMany(convIds) : Promise.resolve(),
+			docIds.length > 0 ? docsStore.deleteMany(docIds) : Promise.resolve()
+		]);
 	}
 
 	async function handleConfirmDeleteAll() {
@@ -454,7 +482,7 @@
 								isActive={currentChatId === conversation.id}
 								{selectionMode}
 								isSelected={selectedIds.has(conversation.id)}
-								onToggleSelect={toggleSelect}
+								onToggleSelect={toggleSelectConversation}
 								onSelect={selectConversation}
 								onEdit={handleEditConversation}
 								onDelete={handleDeleteConversation}
@@ -506,6 +534,9 @@
 									{doc}
 									isActive={currentDocId === doc.id}
 									{handleMobileSidebarItemClick}
+									{selectionMode}
+									isSelected={selectedIds.has(doc.id)}
+									onToggleSelect={toggleSelectDoc}
 									onSelect={selectDoc}
 									onEdit={handleEditDoc}
 									onDuplicate={handleDuplicateDoc}

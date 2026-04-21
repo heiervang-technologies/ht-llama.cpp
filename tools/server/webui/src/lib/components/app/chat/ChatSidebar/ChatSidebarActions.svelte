@@ -17,7 +17,7 @@
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { conversations } from '$lib/stores/conversations.svelte';
-	import { docsStore } from '$lib/stores/docs.svelte';
+	import { docs, docsStore } from '$lib/stores/docs.svelte';
 	import { terminalProposals } from '$lib/stores/terminal-proposals.svelte';
 
 	interface Props {
@@ -36,7 +36,7 @@
 		onDeleteAll
 	}: Props = $props();
 
-	let conversationCount = $derived(conversations().length);
+	let itemCount = $derived(conversations().length + docs().length);
 
 	let searchInput: HTMLInputElement | null = $state(null);
 
@@ -190,7 +190,7 @@
 			</div>
 		</Button>
 
-		{#if conversationCount > 0 && (onEnterSelectionMode || onDeleteAll)}
+		{#if itemCount > 0 && (onEnterSelectionMode || onDeleteAll)}
 			<div class="flex gap-1 pt-1">
 				{#if onEnterSelectionMode}
 					<Button
@@ -198,7 +198,7 @@
 						onclick={() => onEnterSelectionMode?.()}
 						variant="ghost"
 						size="sm"
-						title="Select multiple conversations to delete"
+						title="Select multiple conversations and documents to delete"
 					>
 						<CheckSquare class="h-4 w-4" />
 						Select

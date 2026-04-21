@@ -2,6 +2,7 @@
 	import { Trash2, Pencil, Copy, MoreHorizontal, FileText } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 
 	interface Props {
 		doc: DatabaseDoc;
@@ -11,6 +12,9 @@
 		onEdit?: (id: string) => void;
 		onDuplicate?: (id: string) => void;
 		onDelete?: (id: string) => void;
+		selectionMode?: boolean;
+		isSelected?: boolean;
+		onToggleSelect?: (id: string, event: MouseEvent | KeyboardEvent) => void;
 	}
 
 	let {
@@ -20,13 +24,20 @@
 		onSelect,
 		onEdit,
 		onDuplicate,
-		onDelete
+		onDelete,
+		onToggleSelect,
+		selectionMode = false,
+		isSelected = false
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	function handleSelect() {
+	function handleSelect(event: MouseEvent) {
+		if (selectionMode) {
+			onToggleSelect?.(doc.id, event);
+			return;
+		}
 		onSelect?.(doc.id);
 	}
 
@@ -64,13 +75,22 @@
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-3 py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
-		: ''}"
+		: ''} {selectionMode && isSelected ? 'bg-primary/15 hover:bg-primary/20' : ''}"
+	data-doc-id={doc.id}
 	onclick={handleSelect}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
 	title={displayName}
 >
 	<div class="flex min-w-0 flex-1 items-center gap-2">
+		{#if selectionMode}
+			<Checkbox
+				checked={isSelected}
+				aria-label={isSelected ? 'Deselect document' : 'Select document'}
+				class="pointer-events-none shrink-0"
+			/>
+		{/if}
+
 		<Tooltip.Root>
 			<Tooltip.Trigger>
 				<FileText class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -87,7 +107,7 @@
 		</span>
 	</div>
 
-	{#if renderActionsDropdown}
+	{#if renderActionsDropdown && !selectionMode}
 		<div class="actions flex items-center">
 			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
