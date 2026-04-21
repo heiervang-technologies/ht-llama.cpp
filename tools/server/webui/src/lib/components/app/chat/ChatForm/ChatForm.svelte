@@ -41,6 +41,7 @@
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
 	import { SttService } from '$lib/services/stt.service';
+	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -554,6 +555,8 @@
 						}
 					} catch (err) {
 						console.error('STT transcription failed, falling back to file attach:', err);
+						const msg = err instanceof Error ? err.message : String(err);
+						toast.error(`Transcription failed: ${msg}. Attached the recording instead.`);
 						onFilesAdd?.([audioFile]);
 					} finally {
 						isTranscribing = false;
