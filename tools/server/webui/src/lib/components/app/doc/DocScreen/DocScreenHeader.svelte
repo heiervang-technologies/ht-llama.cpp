@@ -96,7 +96,8 @@
 				class="hidden text-xs text-muted-foreground md:inline"
 				title="Word count (whitespace-separated)"
 			>
-				{wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}
+				{wordCount.toLocaleString()}
+				{wordCount === 1 ? 'word' : 'words'}
 			</span>
 		{/if}
 	</div>

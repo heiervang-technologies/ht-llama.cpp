@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, Pencil, Trash2, RotateCcw, Save, X } from '@lucide/svelte';
+	import { Plus, Pencil, Copy, Trash2, RotateCcw, Save, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		DEFAULT_AI_COMMANDS,
@@ -71,6 +71,17 @@
 			mode: cmd.mode,
 			requiresSelection: cmd.requiresSelection ?? false,
 			isNew: false
+		};
+	}
+
+	function startDuplicate(cmd: AiCommand) {
+		editing = {
+			id: `custom-${Date.now()}`,
+			name: `${cmd.name} (copy)`,
+			template: cmd.template,
+			mode: cmd.mode,
+			requiresSelection: cmd.requiresSelection ?? false,
+			isNew: true
 		};
 	}
 
@@ -189,6 +200,16 @@
 						onclick={() => startEdit(cmd)}
 					>
 						<Pencil class="h-3.5 w-3.5" />
+					</Button>
+					<Button
+						variant="ghost"
+						size="sm"
+						class="h-7 px-2"
+						title="Duplicate"
+						disabled={editing !== null}
+						onclick={() => startDuplicate(cmd)}
+					>
+						<Copy class="h-3.5 w-3.5" />
 					</Button>
 					<Button
 						variant="ghost"
