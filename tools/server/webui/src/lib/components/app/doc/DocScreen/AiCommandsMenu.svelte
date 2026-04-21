@@ -20,9 +20,7 @@
 
 	let commands = $derived(aiCommandsStore.list());
 	let runningId = $derived(aiCommandsStore.runningId);
-	let runningCommand = $derived(
-		runningId ? commands.find((c) => c.id === runningId) : undefined
-	);
+	let runningCommand = $derived(runningId ? commands.find((c) => c.id === runningId) : undefined);
 </script>
 
 {#if runningId}

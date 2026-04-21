@@ -70,9 +70,7 @@ export class SttService {
 			// failed" on WebKit, "Failed to fetch" on Chromium) doesn't name the
 			// host. Surface a message the user can act on.
 			if (err instanceof TypeError) {
-				throw new Error(
-					`Could not reach STT server at ${baseUrl}. Is it running and reachable?`
-				);
+				throw new Error(`Could not reach STT server at ${baseUrl}. Is it running and reachable?`);
 			}
 			throw err;
 		} finally {

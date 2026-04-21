@@ -114,9 +114,7 @@ export class TtsService {
 			// reject). WebKit surfaces this as "Load failed", Chromium as "Failed
 			// to fetch" — neither names the host. Rewrite so the toast is useful.
 			if (err instanceof TypeError) {
-				throw new Error(
-					`Could not reach TTS server at ${baseUrl}. Is it running and reachable?`
-				);
+				throw new Error(`Could not reach TTS server at ${baseUrl}. Is it running and reachable?`);
 			}
 			throw err;
 		} finally {
