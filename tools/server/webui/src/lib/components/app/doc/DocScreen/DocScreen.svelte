@@ -350,6 +350,7 @@
 </script>
 
 <DocScreenHeader
+	id={doc?.id ?? ''}
 	name={doc?.name ?? ''}
 	view={effectiveView}
 	{saving}

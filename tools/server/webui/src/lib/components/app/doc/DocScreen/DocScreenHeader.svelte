@@ -28,6 +28,7 @@
 	import DocMoreActionsMenu from './DocMoreActionsMenu.svelte';
 
 	interface Props {
+		id: string;
 		name: string;
 		view: 'edit' | 'preview' | 'split';
 		saving: boolean;
@@ -44,6 +45,7 @@
 	}
 
 	let {
+		id,
 		name,
 		view,
 		saving,
@@ -288,7 +290,7 @@
 			<span class="hidden md:inline">Chat about this</span>
 		</Button>
 
-		<DocMoreActionsMenu docName={name} docContent={content} {onDelete} />
+		<DocMoreActionsMenu docId={id} docName={name} docContent={content} {onDelete} />
 
 		<BackendPill />
 
