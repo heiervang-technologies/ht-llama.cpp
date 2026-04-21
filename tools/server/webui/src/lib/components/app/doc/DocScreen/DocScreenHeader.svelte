@@ -1,10 +1,29 @@
 <script lang="ts">
-	import { Settings, MessageSquarePlus, Columns, FileText, Eye, Sparkles } from '@lucide/svelte';
+	import {
+		Settings,
+		MessageSquarePlus,
+		Columns,
+		FileText,
+		Eye,
+		Sparkles,
+		Mic,
+		Square,
+		Loader2
+	} from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { BackendPill } from '$lib/components/app/navigation';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { SttService } from '$lib/services/stt.service';
+	import {
+		AudioRecorder,
+		convertToWav,
+		createAudioFile,
+		isAudioRecordingSupported
+	} from '$lib/utils/audio-recording';
 	import AiCommandsMenu from './AiCommandsMenu.svelte';
 	import DocMoreActionsMenu from './DocMoreActionsMenu.svelte';
 
@@ -18,6 +37,7 @@
 		onChatAbout: () => void;
 		onRunAiCommand: (commandId: string) => void;
 		onDelete: () => void;
+		onDictate?: (text: string) => void;
 		commandsMenuOpen?: boolean;
 		/** If true, focus + select the title input on mount. Used for brand-new docs. */
 		autofocusTitle?: boolean;
@@ -33,6 +53,7 @@
 		onChatAbout,
 		onRunAiCommand,
 		onDelete,
+		onDictate,
 		commandsMenuOpen = $bindable(false),
 		autofocusTitle = false
 	}: Props = $props();
@@ -62,12 +83,59 @@
 	let localName = $derived(name);
 	let inlineOn = $derived(Boolean(config().inlineCompletionEnabled));
 
+	// Dictation: identical pattern to ChatForm's mic button, but the transcribed
+	// text is inserted at the editor cursor instead of into a textarea. Gated on
+	// STT being configured + enabled; falls back to the record-only path if STT
+	// isn't set up (user still gets to download the wav via the browser).
+	let sttDictationReady = $derived(
+		Boolean(config().sttEnabled) && SttService.isConfigured() && isAudioRecordingSupported()
+	);
+	let isRecording = $state(false);
+	let isTranscribing = $state(false);
+	const audioRecorder = new AudioRecorder();
+
 	function commit() {
 		if (localName !== name) onRename(localName);
 	}
 
 	function toggleInlineCompletion() {
 		settingsStore.updateConfig('inlineCompletionEnabled', !config().inlineCompletionEnabled);
+	}
+
+	async function handleMicClick() {
+		if (isTranscribing) return;
+		if (audioRecorder.isRecording()) {
+			try {
+				const blob = await audioRecorder.stopRecording();
+				isRecording = false;
+				const wav = await convertToWav(blob);
+				const file = createAudioFile(wav, `dictation-${Date.now()}.wav`);
+				isTranscribing = true;
+				try {
+					const text = await SttService.transcribe(file);
+					if (text) onDictate?.(text);
+				} catch (err) {
+					console.error('[doc-dictate] transcribe failed', err);
+					const msg = err instanceof Error ? err.message : String(err);
+					toast.error(`Dictation failed: ${msg}`);
+				} finally {
+					isTranscribing = false;
+				}
+			} catch (err) {
+				console.error('[doc-dictate] stop failed', err);
+				isRecording = false;
+				isTranscribing = false;
+			}
+		} else {
+			try {
+				await audioRecorder.startRecording();
+				isRecording = true;
+			} catch (err) {
+				console.error('[doc-dictate] start failed', err);
+				const msg = err instanceof Error ? err.message : String(err);
+				toast.error(`Could not start recording: ${msg}`);
+			}
+		}
 	}
 </script>
 
@@ -148,6 +216,46 @@
 			<Sparkles class="h-4 w-4 {inlineOn ? 'text-primary' : ''}" />
 			<span class="hidden md:inline">{inlineOn ? 'AI on' : 'AI off'}</span>
 		</Button>
+
+		{#if sttDictationReady}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Button
+						variant="ghost"
+						size="sm"
+						class="h-8 w-8 rounded-full p-0 backdrop-blur-lg {isTranscribing
+							? 'bg-blue-500 text-white hover:bg-blue-600'
+							: isRecording
+								? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
+								: ''}"
+						onclick={handleMicClick}
+						disabled={isTranscribing}
+						aria-label={isTranscribing
+							? 'Transcribing'
+							: isRecording
+								? 'Stop dictation'
+								: 'Start dictation'}
+					>
+						{#if isTranscribing}
+							<Loader2 class="h-4 w-4 animate-spin" />
+						{:else if isRecording}
+							<Square class="h-4 w-4 animate-pulse fill-white" />
+						{:else}
+							<Mic class="h-4 w-4" />
+						{/if}
+					</Button>
+				</Tooltip.Trigger>
+				<Tooltip.Content>
+					<p>
+						{isTranscribing
+							? 'Transcribing…'
+							: isRecording
+								? 'Click to stop dictation'
+								: 'Dictate into the document at the cursor'}
+					</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
 
 		<AiCommandsMenu onRun={onRunAiCommand} bind:open={commandsMenuOpen} />
 

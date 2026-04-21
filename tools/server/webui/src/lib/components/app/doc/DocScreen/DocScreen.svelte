@@ -263,6 +263,35 @@
 		}
 	}
 
+	// Dictation drop point. Called by the header's mic button once STT returns.
+	// Inserts the transcribed text at the current cursor (or replaces the
+	// selection), then schedules a save the same way typing does.
+	function handleDictation(text: string) {
+		if (!text || !doc) return;
+		const sel = editorApi?.getSelection();
+		if (!editorApi || !sel) {
+			// Editor API not ready: append to the doc, with a leading space so
+			// dictation doesn't glue to the previous word.
+			const current = doc.content ?? '';
+			const needsSpace = current.length > 0 && !/\s$/.test(current);
+			const next = current + (needsSpace ? ' ' : '') + text;
+			docsStore.setContentLive(doc.id, next);
+			scheduleSave(next);
+			return;
+		}
+		// Caret case (no selection): prepend a space when the char before the
+		// cursor is a non-whitespace word character, so dictated phrases don't
+		// stick to the preceding token. When there's a selection, we're
+		// replacing it outright, so no extra spacing is needed.
+		let toInsert = text;
+		if (sel.from === sel.to && sel.from > 0) {
+			const prev = doc.content.charAt(sel.from - 1);
+			if (prev && !/\s/.test(prev)) toInsert = ' ' + toInsert;
+		}
+		editorApi.replaceRange(sel.from, sel.to, toInsert);
+		editorApi.focus();
+	}
+
 	async function handleChatAbout() {
 		if (!doc) return;
 		const trimmedName = (doc.name || 'Untitled').trim();
@@ -291,6 +320,7 @@
 	onChatAbout={handleChatAbout}
 	onRunAiCommand={handleRunAiCommand}
 	onDelete={handleDeleteRequest}
+	onDictate={handleDictation}
 	bind:commandsMenuOpen
 	{autofocusTitle}
 />
