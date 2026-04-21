@@ -205,9 +205,7 @@
 
 		{#if commands.length === 0}
 			<div class="rounded-md border border-dashed border-border/50 p-4 text-center">
-				<p class="text-sm text-muted-foreground">
-					No commands. Add one or restore the defaults.
-				</p>
+				<p class="text-sm text-muted-foreground">No commands. Add one or restore the defaults.</p>
 			</div>
 		{/if}
 	</div>
