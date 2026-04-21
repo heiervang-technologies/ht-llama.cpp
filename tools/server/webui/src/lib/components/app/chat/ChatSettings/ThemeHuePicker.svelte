@@ -23,8 +23,11 @@
 	function randomize() {
 		const p = Math.floor(Math.random() * 360);
 		// Keep secondary visually distinct from primary (at least 60° apart).
+		// The expression computes circular distance in [0, 180]; below 60 means
+		// the two hues read as almost the same colour, so push secondary to the
+		// opposite side of the wheel with some jitter.
 		let s = Math.floor(Math.random() * 360);
-		if (Math.abs(((s - p + 540) % 360) - 180) > 120) {
+		if (Math.abs(((s - p + 540) % 360) - 180) < 60) {
 			s = (p + 180 + Math.floor(Math.random() * 60) - 30 + 360) % 360;
 		}
 		onChange('themePrimaryHue', p);
