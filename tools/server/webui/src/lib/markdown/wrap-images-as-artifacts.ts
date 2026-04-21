@@ -14,11 +14,14 @@ export function rehypeWrapImagesAsArtifacts() {
 		visit(tree, 'element', (node, index, parent) => {
 			if (node.tagName !== 'img' || !parent || index === undefined) return;
 
-			// Skip images already wrapped (e.g. nested <a><img></a> in a wrapper)
+			// Skip images already inside a wrapper (figure, body div, or any descendant).
+			// Without this, we'd re-visit the img inside our own wrapper and recurse forever.
 			if (
 				parent.type === 'element' &&
 				Array.isArray(parent.properties?.className) &&
-				parent.properties.className.includes(WRAPPER_CLASS)
+				parent.properties.className.some(
+					(c) => typeof c === 'string' && c.startsWith(WRAPPER_CLASS)
+				)
 			) {
 				return;
 			}
