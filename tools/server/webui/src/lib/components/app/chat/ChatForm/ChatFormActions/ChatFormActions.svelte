@@ -228,7 +228,7 @@
 	<div class="ml-auto flex items-center gap-1.5">
 		<LoraAdapters
 			disabled={disabled || isOffline}
-			modelId={isRouter ? activeModelId ?? undefined : undefined}
+			modelId={isRouter ? (activeModelId ?? undefined) : undefined}
 		/>
 
 		{#if isMobile.current}

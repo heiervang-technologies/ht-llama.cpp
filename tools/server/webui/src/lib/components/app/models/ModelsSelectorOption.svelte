@@ -122,12 +122,12 @@
 		</div>
 		{#if isCancelling}
 			<div class="flex items-center gap-1.5">
-				<Loader2 class="h-4 w-4 animate-spin-reverse text-orange-400" />
+				<Loader2 class="animate-spin-reverse h-4 w-4 text-orange-400" />
 				<span class="text-xs text-orange-400">Cancelling</span>
 			</div>
 		{:else if isUnloading}
 			<div class="flex items-center gap-1.5">
-				<Loader2 class="h-4 w-4 animate-spin-reverse text-red-500" />
+				<Loader2 class="animate-spin-reverse h-4 w-4 text-red-500" />
 				<span class="text-xs text-red-500">Unloading</span>
 			</div>
 		{:else if isLoading}

@@ -8,8 +8,10 @@
 		message?: string;
 	}
 
-	let { class: className = '', message = 'Initializing connection to ht-llama.cpp server...' }: Props =
-		$props();
+	let {
+		class: className = '',
+		message = 'Initializing connection to ht-llama.cpp server...'
+	}: Props = $props();
 </script>
 
 <div class="flex h-full items-center justify-center {className}">
