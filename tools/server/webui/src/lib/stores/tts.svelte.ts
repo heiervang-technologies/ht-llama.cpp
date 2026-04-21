@@ -59,9 +59,14 @@ class TtsStore {
 			console.error('[tts]', err);
 			this.#consecutiveFailures += 1;
 			toast.error(`TTS failed: ${msg}`);
-			if (this.#consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && settingsStore.config.ttsAutoplay) {
+			if (
+				this.#consecutiveFailures >= MAX_CONSECUTIVE_FAILURES &&
+				settingsStore.config.ttsAutoplay
+			) {
 				settingsStore.updateConfig('ttsAutoplay', false);
-				toast.warning('TTS autoplay disabled after repeated failures. Re-enable in Settings once TTS is working.');
+				toast.warning(
+					'TTS autoplay disabled after repeated failures. Re-enable in Settings once TTS is working.'
+				);
 			}
 			return;
 		}

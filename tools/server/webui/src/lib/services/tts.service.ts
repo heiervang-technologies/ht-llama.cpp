@@ -57,9 +57,7 @@ export class TtsService {
 		// dropped connection doesn't leave the speaker stuck in the loading state.
 		const timeout = new AbortController();
 		const timer = setTimeout(() => timeout.abort(), 30_000);
-		const signal = opts.signal
-			? anySignal([opts.signal, timeout.signal])
-			: timeout.signal;
+		const signal = opts.signal ? anySignal([opts.signal, timeout.signal]) : timeout.signal;
 
 		let response: Response;
 		try {
@@ -90,7 +88,10 @@ export class TtsService {
 }
 
 function anySignal(signals: AbortSignal[]): AbortSignal {
-	if (typeof (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any === 'function') {
+	if (
+		typeof (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any ===
+		'function'
+	) {
 		return (AbortSignal as unknown as { any: (s: AbortSignal[]) => AbortSignal }).any(signals);
 	}
 	const controller = new AbortController();
@@ -99,7 +100,11 @@ function anySignal(signals: AbortSignal[]): AbortSignal {
 			controller.abort((s as AbortSignal & { reason?: unknown }).reason);
 			break;
 		}
-		s.addEventListener('abort', () => controller.abort((s as AbortSignal & { reason?: unknown }).reason), { once: true });
+		s.addEventListener(
+			'abort',
+			() => controller.abort((s as AbortSignal & { reason?: unknown }).reason),
+			{ once: true }
+		);
 	}
 	return controller.signal;
 }
