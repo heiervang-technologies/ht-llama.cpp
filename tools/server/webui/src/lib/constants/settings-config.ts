@@ -85,7 +85,10 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// inline AI completions (ghost text in the doc editor)
 	inlineCompletionEnabled: false,
 	inlineCompletionDelay: 800,
-	inlineCompletionMaxTokens: 48
+	inlineCompletionMaxTokens: 48,
+	// user-defined AI commands invoked from the doc editor header
+	// (stored as JSON string; empty string = use built-in defaults)
+	aiCommands: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {

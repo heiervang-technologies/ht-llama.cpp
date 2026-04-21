@@ -5,6 +5,7 @@
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { BackendPill } from '$lib/components/app/navigation';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import AiCommandsMenu from './AiCommandsMenu.svelte';
 
 	interface Props {
 		name: string;
@@ -13,9 +14,10 @@
 		onRename: (next: string) => void;
 		onViewChange: (next: 'edit' | 'preview' | 'split') => void;
 		onChatAbout: () => void;
+		onRunAiCommand: (commandId: string) => void;
 	}
 
-	let { name, view, saving, onRename, onViewChange, onChatAbout }: Props = $props();
+	let { name, view, saving, onRename, onViewChange, onChatAbout, onRunAiCommand }: Props = $props();
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -100,6 +102,8 @@
 			<Sparkles class="h-4 w-4 {inlineOn ? 'text-primary' : ''}" />
 			<span class="hidden md:inline">{inlineOn ? 'AI on' : 'AI off'}</span>
 		</Button>
+
+		<AiCommandsMenu onRun={onRunAiCommand} />
 
 		<Button
 			variant="ghost"

@@ -57,6 +57,18 @@ class DocsStore {
 		this.activeDoc = null;
 	}
 
+	/**
+	 * Live in-memory content update (no DB write). Used during streaming
+	 * operations like AI commands so the editor can show tokens as they
+	 * arrive without thrashing IndexedDB. Persist with updateContent when
+	 * streaming completes.
+	 */
+	setContentLive(id: string, content: string): void {
+		if (this.activeDoc?.id === id) {
+			this.activeDoc = { ...this.activeDoc, content };
+		}
+	}
+
 	async updateContent(id: string, content: string): Promise<void> {
 		await DatabaseService.updateDoc(id, { content });
 		if (this.activeDoc?.id === id) {

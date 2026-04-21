@@ -5,6 +5,7 @@
 	import { MarkdownContent } from '$lib/components/app';
 	import { docsStore, activeDoc } from '$lib/stores/docs.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { aiCommandsStore } from '$lib/stores/ai-commands.svelte';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import DocScreenHeader from './DocScreenHeader.svelte';
 	import DocEditor from './DocEditor.svelte';
@@ -87,6 +88,32 @@
 		await docsStore.renameDoc(doc.id, name);
 	}
 
+	async function handleRunAiCommand(commandId: string) {
+		if (!doc) return;
+		// Flush any pending save so the command runs against the saved state.
+		if (pendingContent !== null) {
+			await docsStore.updateContent(doc.id, pendingContent);
+			pendingContent = null;
+			saving = false;
+		}
+		const baseContent = doc.content;
+		const separator = baseContent.trimEnd().length === 0 ? '' : '\n\n---\n\n';
+		let outputSoFar = '';
+		await aiCommandsStore.run(
+			commandId,
+			baseContent,
+			(delta) => {
+				outputSoFar += delta;
+				docsStore.setContentLive(doc!.id, baseContent + separator + outputSoFar);
+			},
+			''
+		);
+		// Persist the final result once streaming finishes.
+		if (outputSoFar.length > 0) {
+			await docsStore.updateContent(doc.id, baseContent + separator + outputSoFar);
+		}
+	}
+
 	async function handleChatAbout() {
 		if (!doc) return;
 		const trimmedName = (doc.name || 'Untitled').trim();
@@ -116,6 +143,7 @@
 	onRename={handleRename}
 	onViewChange={setView}
 	onChatAbout={handleChatAbout}
+	onRunAiCommand={handleRunAiCommand}
 />
 
 <main class="flex h-full w-full flex-col pt-14 md:pt-16">
