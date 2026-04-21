@@ -72,7 +72,8 @@
 		// Ctrl/Cmd+Shift+K — open the AI commands menu from anywhere in the doc
 		// screen. Ctrl+K alone is reserved for the browser address bar; Ctrl+Shift
 		// gives us a dedicated binding that doesn't collide with other editor
-		// shortcuts or the browser's default.
+		// shortcuts or the browser's default. Ctrl/Cmd+S flushes the debounced
+		// save so the user can commit intentionally without waiting 500ms.
 		function onKeydown(e: KeyboardEvent) {
 			const modifier = e.metaKey || e.ctrlKey;
 			if (modifier && e.shiftKey && (e.key === 'k' || e.key === 'K')) {
@@ -80,6 +81,11 @@
 				if (aiCommandsStore.runningId === null) {
 					commandsMenuOpen = true;
 				}
+			} else if (modifier && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+				// Browsers bind Ctrl+S to "Save Page As" by default — preventDefault
+				// suppresses that dialog before flushing.
+				e.preventDefault();
+				flushSaveNow();
 			}
 		}
 		window.addEventListener('keydown', onKeydown);
@@ -109,30 +115,48 @@
 		return stripped.length > 80 ? stripped.slice(0, 80).trimEnd() + '…' : stripped;
 	}
 
+	async function persistContent(toSave: string) {
+		if (!doc) return;
+		try {
+			await docsStore.updateContent(doc.id, toSave);
+			// Auto-derive a title from the first markdown heading while the
+			// doc is still Untitled. Stops after the first successful rename;
+			// a user-picked title will never be overwritten.
+			if (doc.name === 'Untitled') {
+				const derived = extractH1Title(toSave);
+				if (derived) {
+					await docsStore.renameDoc(doc.id, derived);
+				}
+			}
+		} finally {
+			saving = false;
+		}
+	}
+
 	function scheduleSave(next: string) {
 		pendingContent = next;
 		saving = true;
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(async () => {
-			if (!doc) return;
 			const toSave = pendingContent;
 			pendingContent = null;
 			if (toSave === null) return;
-			try {
-				await docsStore.updateContent(doc.id, toSave);
-				// Auto-derive a title from the first markdown heading while the
-				// doc is still Untitled. Stops after the first successful rename;
-				// a user-picked title will never be overwritten.
-				if (doc.name === 'Untitled') {
-					const derived = extractH1Title(toSave);
-					if (derived) {
-						await docsStore.renameDoc(doc.id, derived);
-					}
-				}
-			} finally {
-				saving = false;
-			}
+			await persistContent(toSave);
 		}, 500);
+	}
+
+	async function flushSaveNow() {
+		if (saveTimer) {
+			clearTimeout(saveTimer);
+			saveTimer = undefined;
+		}
+		const toSave = pendingContent;
+		pendingContent = null;
+		if (toSave === null) {
+			// Nothing pending — likely already saved. Leave the UI alone.
+			return;
+		}
+		await persistContent(toSave);
 	}
 
 	async function handleRename(name: string) {
@@ -143,11 +167,7 @@
 	async function handleRunAiCommand(commandId: string) {
 		if (!doc) return;
 		// Flush any pending save so the command runs against the saved state.
-		if (pendingContent !== null) {
-			await docsStore.updateContent(doc.id, pendingContent);
-			pendingContent = null;
-			saving = false;
-		}
+		await flushSaveNow();
 
 		const command = aiCommandsStore.list().find((c) => c.id === commandId);
 		if (!command) return;
@@ -248,11 +268,7 @@
 		const trimmedName = (doc.name || 'Untitled').trim();
 		const trimmedContent = (pendingContent ?? doc.content).trim();
 		// Flush any pending save first so sidebar shows the right version.
-		if (pendingContent !== null) {
-			await docsStore.updateContent(doc.id, pendingContent);
-			pendingContent = null;
-			saving = false;
-		}
+		await flushSaveNow();
 		const seed = trimmedContent
 			? `I'd like to discuss this document titled "${trimmedName}":\n\n\`\`\`markdown\n${trimmedContent}\n\`\`\`\n\n`
 			: `I'd like to start a chat about my document "${trimmedName}".\n\n`;
