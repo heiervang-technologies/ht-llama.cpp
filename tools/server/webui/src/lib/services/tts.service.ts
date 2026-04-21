@@ -53,12 +53,32 @@ export class TtsService {
 			body.x_vector_only_mode = true;
 		}
 
-		const response = await fetch(`${baseUrl}/v1/audio/speech`, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify(body),
-			signal: opts.signal
-		});
+		// Hard-cap the request so a hung preflight (no CORS on the TTS server) or a
+		// dropped connection doesn't leave the speaker stuck in the loading state.
+		const timeout = new AbortController();
+		const timer = setTimeout(() => timeout.abort(), 30_000);
+		const signal = opts.signal
+			? anySignal([opts.signal, timeout.signal])
+			: timeout.signal;
+
+		let response: Response;
+		try {
+			response = await fetch(`${baseUrl}/v1/audio/speech`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				signal
+			});
+		} catch (err) {
+			if (timeout.signal.aborted) {
+				throw new Error(
+					`TTS request timed out after 30s. Check the base URL (${baseUrl}) and that the server responds to CORS preflight.`
+				);
+			}
+			throw err;
+		} finally {
+			clearTimeout(timer);
+		}
 
 		if (!response.ok) {
 			const msg = await response.text().catch(() => '');
@@ -67,4 +87,19 @@ export class TtsService {
 
 		return await response.blob();
 	}
+}
+
+function anySignal(signals: AbortSignal[]): AbortSignal {
+	if (typeof (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any === 'function') {
+		return (AbortSignal as unknown as { any: (s: AbortSignal[]) => AbortSignal }).any(signals);
+	}
+	const controller = new AbortController();
+	for (const s of signals) {
+		if (s.aborted) {
+			controller.abort((s as AbortSignal & { reason?: unknown }).reason);
+			break;
+		}
+		s.addEventListener('abort', () => controller.abort((s as AbortSignal & { reason?: unknown }).reason), { once: true });
+	}
+	return controller.signal;
 }

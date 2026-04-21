@@ -1,4 +1,8 @@
+import { toast } from 'svelte-sonner';
 import { TtsService } from '$lib/services/tts.service';
+import { settingsStore } from '$lib/stores/settings.svelte';
+
+const MAX_CONSECUTIVE_FAILURES = 2;
 
 class TtsStore {
 	#speakingId = $state<string | null>(null);
@@ -6,6 +10,7 @@ class TtsStore {
 	#current: HTMLAudioElement | null = null;
 	#currentUrl: string | null = null;
 	#controller: AbortController | null = null;
+	#consecutiveFailures = 0;
 
 	get speakingId(): string | null {
 		return this.#speakingId;
@@ -49,12 +54,19 @@ class TtsStore {
 			blob = await TtsService.synthesize(text, { signal: controller.signal });
 		} catch (err) {
 			if (this.#loadingId === id) this.#loadingId = null;
-			if (!(err instanceof DOMException && err.name === 'AbortError')) {
-				throw err;
+			if (err instanceof DOMException && err.name === 'AbortError') return;
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error('[tts]', err);
+			this.#consecutiveFailures += 1;
+			toast.error(`TTS failed: ${msg}`);
+			if (this.#consecutiveFailures >= MAX_CONSECUTIVE_FAILURES && settingsStore.config.ttsAutoplay) {
+				settingsStore.updateConfig('ttsAutoplay', false);
+				toast.warning('TTS autoplay disabled after repeated failures. Re-enable in Settings once TTS is working.');
 			}
 			return;
 		}
 
+		this.#consecutiveFailures = 0;
 		if (controller.signal.aborted) return;
 
 		const url = URL.createObjectURL(blob);
@@ -85,7 +97,9 @@ class TtsStore {
 			await audio.play();
 		} catch (err) {
 			cleanup();
-			throw err;
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error('[tts] audio.play failed', err);
+			toast.error(`TTS playback failed: ${msg}`);
 		}
 	}
 

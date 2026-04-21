@@ -6,8 +6,8 @@
   "build": {
     "frontendDist": "../../public",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd ../webui && npm run dev -- --host 127.0.0.1",
-    "beforeBuildCommand": "cd ../webui && npm run build"
+    "beforeDevCommand": "cd ../webui && bun run dev -- --host 127.0.0.1",
+    "beforeBuildCommand": "cd ../webui && bun run build"
   },
   "app": {
     "windows": [
