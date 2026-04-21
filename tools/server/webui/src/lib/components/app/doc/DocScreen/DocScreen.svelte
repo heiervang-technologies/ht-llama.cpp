@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { Trash2 } from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
-	import { MarkdownContent } from '$lib/components/app';
+	import { MarkdownContent, DialogConfirmation } from '$lib/components/app';
 	import { docsStore, activeDoc } from '$lib/stores/docs.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { aiCommandsStore } from '$lib/stores/ai-commands.svelte';
@@ -51,6 +52,7 @@
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
 	let editorApi: DocEditorApi | null = null;
 	let commandsMenuOpen = $state(false);
+	let showDeleteDialog = $state(false);
 
 	// A doc loaded with its default name and empty body, freshly created in
 	// the last few seconds, is almost certainly a brand-new doc. Auto-focus
@@ -195,6 +197,31 @@
 		}
 	}
 
+	function handleDeleteRequest() {
+		if (!doc) return;
+		showDeleteDialog = true;
+	}
+
+	async function handleDeleteConfirm() {
+		showDeleteDialog = false;
+		if (!doc) return;
+		// Cancel any pending save so we don't write back a ghost after deletion.
+		if (saveTimer) {
+			clearTimeout(saveTimer);
+			saveTimer = undefined;
+		}
+		pendingContent = null;
+		saving = false;
+		const name = doc.name?.trim() || 'Untitled';
+		try {
+			await docsStore.deleteDoc(doc.id);
+			toast.success(`Deleted "${name}"`);
+		} catch (err) {
+			console.error('[docs] delete failed', err);
+			toast.error(`Failed to delete "${name}"`);
+		}
+	}
+
 	async function handleChatAbout() {
 		if (!doc) return;
 		const trimmedName = (doc.name || 'Untitled').trim();
@@ -226,6 +253,7 @@
 	onViewChange={setView}
 	onChatAbout={handleChatAbout}
 	onRunAiCommand={handleRunAiCommand}
+	onDelete={handleDeleteRequest}
 	bind:commandsMenuOpen
 	{autofocusTitle}
 />
@@ -273,3 +301,15 @@
 		</div>
 	{/if}
 </main>
+
+<DialogConfirmation
+	bind:open={showDeleteDialog}
+	title="Delete document"
+	description={`Are you sure you want to delete "${(doc?.name || 'Untitled').trim()}"? This cannot be undone.`}
+	confirmText="Delete"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleDeleteConfirm}
+	onCancel={() => (showDeleteDialog = false)}
+/>

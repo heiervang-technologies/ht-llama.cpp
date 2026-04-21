@@ -6,6 +6,7 @@
 	import { BackendPill } from '$lib/components/app/navigation';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import AiCommandsMenu from './AiCommandsMenu.svelte';
+	import DocMoreActionsMenu from './DocMoreActionsMenu.svelte';
 
 	interface Props {
 		name: string;
@@ -16,6 +17,7 @@
 		onViewChange: (next: 'edit' | 'preview' | 'split') => void;
 		onChatAbout: () => void;
 		onRunAiCommand: (commandId: string) => void;
+		onDelete: () => void;
 		commandsMenuOpen?: boolean;
 		/** If true, focus + select the title input on mount. Used for brand-new docs. */
 		autofocusTitle?: boolean;
@@ -30,6 +32,7 @@
 		onViewChange,
 		onChatAbout,
 		onRunAiCommand,
+		onDelete,
 		commandsMenuOpen = $bindable(false),
 		autofocusTitle = false
 	}: Props = $props();
@@ -158,6 +161,8 @@
 			<MessageSquarePlus class="h-4 w-4" />
 			<span class="hidden md:inline">Chat about this</span>
 		</Button>
+
+		<DocMoreActionsMenu docName={name} docContent={content} {onDelete} />
 
 		<BackendPill />
 
