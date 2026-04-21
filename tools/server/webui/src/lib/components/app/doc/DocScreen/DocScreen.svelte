@@ -107,6 +107,24 @@
 				// suppresses that dialog before flushing.
 				e.preventDefault();
 				flushSaveNow();
+			} else if (
+				e.key === 'Escape' &&
+				!e.metaKey &&
+				!e.ctrlKey &&
+				!e.shiftKey &&
+				!e.altKey &&
+				aiCommandsStore.runningId !== null
+			) {
+				// Quick-bail shortcut mirroring the "Stop" button in the header.
+				// Skipped for <input>/<textarea> targets so Escape there keeps its
+				// native behaviour (e.g. reverting the doc title). CodeMirror's
+				// contentEditable is intentionally included so the user can bail
+				// without leaving the editor.
+				const target = e.target as HTMLElement | null;
+				const tag = target?.tagName;
+				if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+				e.preventDefault();
+				aiCommandsStore.stop();
 			}
 		}
 		window.addEventListener('keydown', onKeydown);

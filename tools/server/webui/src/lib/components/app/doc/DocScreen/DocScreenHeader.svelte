@@ -168,6 +168,12 @@
 				if (e.key === 'Enter') {
 					e.preventDefault();
 					(e.currentTarget as HTMLInputElement).blur();
+				} else if (e.key === 'Escape') {
+					// Revert any in-progress edit and blur. commit() no-ops when the
+					// name hasn't changed, so resetting localName before blur is enough.
+					e.preventDefault();
+					localName = name;
+					(e.currentTarget as HTMLInputElement).blur();
 				}
 			}}
 			placeholder="Untitled"

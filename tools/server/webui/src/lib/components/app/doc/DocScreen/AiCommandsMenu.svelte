@@ -31,8 +31,8 @@
 		size="sm"
 		class="gap-1.5 rounded-full backdrop-blur-lg"
 		title={runningCommand
-			? `Stop "${runningCommand.name}"`
-			: 'Stop the running AI command'}
+			? `Stop "${runningCommand.name}" (Esc)`
+			: 'Stop the running AI command (Esc)'}
 		onclick={() => aiCommandsStore.stop()}
 	>
 		<Loader2 class="h-4 w-4 animate-spin" />
