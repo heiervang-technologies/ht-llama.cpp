@@ -23,11 +23,10 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
 	disableAutoScroll: false,
-	renderUserContentAsMarkdown: false,
+	renderUserContentAsMarkdown: true,
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
 	sendOnEnter: true,
-	autoMicOnEmpty: false,
 	fullHeightCodeBlocks: false,
 	showRawModelNames: false,
 	mcpServers: '[]',
@@ -162,8 +161,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	sendOnEnter:
 		'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
-	autoMicOnEmpty:
-		'Automatically show the microphone button instead of send when the textarea is empty. Works for models with native audio modality and for STT dictation.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:

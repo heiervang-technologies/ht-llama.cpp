@@ -31,7 +31,6 @@
 		isLoading?: boolean;
 		isRecording?: boolean;
 		isTranscribing?: boolean;
-		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -48,7 +47,6 @@
 		isLoading = false,
 		isRecording = false,
 		isTranscribing = false,
-		hasText = false,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -138,14 +136,15 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
-	// STT dictation gives the mic a useful purpose even when the active LLM
-	// doesn't accept audio: record → transcribe → drop text into the textarea.
-	// Gate on the same autoMicOnEmpty toggle so the user opts in once per app.
+	// Whether the active LLM accepts audio natively, or STT is configured, is
+	// passed through to the record button for its tooltip copy. Recording
+	// itself only requires mic permission; if neither path is set up we still
+	// attach the .wav so the user never hits a silent no-op.
 	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
-	let canRecord = $derived(hasAudioModality || sttReady);
-	let shouldShowRecordButton = $derived(
-		canRecord && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
-	);
+	// Mic is always visible alongside the send button (conversation-first UX).
+	// Hide only while a reply is streaming or when there's already an audio
+	// attachment queued.
+	let shouldShowRecordButton = $derived(!isLoading && !hasAudioAttachments);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 
@@ -271,17 +270,19 @@
 				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
-	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord
-			{disabled}
-			{hasAudioModality}
-			{sttReady}
-			{isLoading}
-			{isRecording}
-			{isTranscribing}
-			{onMicClick}
-		/>
 	{:else}
+		{#if shouldShowRecordButton}
+			<ChatFormActionRecord
+				{disabled}
+				{hasAudioModality}
+				{sttReady}
+				{isLoading}
+				{isRecording}
+				{isTranscribing}
+				{onMicClick}
+			/>
+		{/if}
+
 		<ChatFormActionSubmit
 			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}

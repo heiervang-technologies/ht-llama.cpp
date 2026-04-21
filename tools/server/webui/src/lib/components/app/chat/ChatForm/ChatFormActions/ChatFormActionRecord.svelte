@@ -27,13 +27,16 @@
 
 	// The mic is useful in two modes: (1) the active LLM accepts audio natively,
 	// or (2) the user has STT/ASR configured, so we can record → transcribe →
-	// drop the text into the textarea. Either path is valid.
+	// drop the text into the textarea. When neither is set up, recording still
+	// works and falls back to attaching the .wav — keep the button enabled and
+	// let the click handler toast a concrete error if something goes wrong.
 	let canRecord = $derived(hasAudioModality || sttReady);
 
 	let tooltipText = $derived.by(() => {
 		if (isTranscribing) return 'Click to cancel transcription';
-		if (canRecord) return '';
-		return 'Enable speech-to-text in Settings, or pick a model with audio modality.';
+		if (isRecording) return 'Stop recording';
+		if (canRecord) return 'Record voice message';
+		return 'Record — will attach as audio (configure STT in Settings to transcribe)';
 	});
 
 	let srLabel = $derived.by(() => {
@@ -52,9 +55,10 @@
 					: isRecording
 						? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 						: ''}"
-				disabled={disabled || isLoading || !canRecord}
+				disabled={disabled || isLoading}
 				onclick={onMicClick}
 				type="button"
+				aria-label={srLabel}
 			>
 				<span class="sr-only">{srLabel}</span>
 
@@ -68,10 +72,8 @@
 			</Button>
 		</Tooltip.Trigger>
 
-		{#if tooltipText}
-			<Tooltip.Content>
-				<p>{tooltipText}</p>
-			</Tooltip.Content>
-		{/if}
+		<Tooltip.Content>
+			<p>{tooltipText}</p>
+		</Tooltip.Content>
 	</Tooltip.Root>
 </div>

@@ -126,13 +126,20 @@
 		void ttsStore.toggle(message.id, text);
 	}
 
+	// Tracks which message id has already triggered autoplay so we never replay
+	// after the user manually stops, after another message updates state, or
+	// when ttsStore.speakingId transitions back to null.
+	let autoplayedMessageId: string | null = null;
+
 	$effect(() => {
 		if (!ttsEnabled || !currentConfig.ttsAutoplay) return;
 		if (!isLastAssistantMessage) return;
 		if (isChatStreaming() || isLoading()) return;
+		if (autoplayedMessageId === message.id) return;
 		const text = messageContent ?? '';
 		if (!text.trim()) return;
 		if (ttsStore.speakingId || ttsStore.loadingId) return;
+		autoplayedMessageId = message.id;
 		void ttsStore.speak(message.id, stripForSpeech(text));
 	});
 
