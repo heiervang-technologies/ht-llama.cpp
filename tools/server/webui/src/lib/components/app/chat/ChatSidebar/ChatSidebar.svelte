@@ -89,6 +89,14 @@
 		return conversations();
 	});
 
+	let filteredDocs = $derived.by(() => {
+		if (searchQuery.trim().length === 0) return docs();
+		const q = searchQuery.toLowerCase();
+		return docs().filter(
+			(d) => d.name.toLowerCase().includes(q) || (d.content ?? '').toLowerCase().includes(q)
+		);
+	});
+
 	let conversationTree = $derived(buildConversationTree(filteredConversations));
 
 	let selectedConversationHasDescendants = $derived.by(() => {
@@ -291,24 +299,28 @@
 		{/if}
 	</Sidebar.Group>
 
-	{#if !isSearchModeActive && docs().length > 0}
+	{#if isSearchModeActive ? filteredDocs.length > 0 : docs().length > 0}
 		<Sidebar.Group class="mt-2 space-y-2 p-0 px-4">
-			<button
-				type="button"
-				class="group flex h-8 w-full cursor-pointer items-center justify-between rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-hidden"
-				onclick={() => toggleGroup('documents')}
-				aria-expanded={!collapsed.documents}
-			>
-				<span>Documents</span>
-				<ChevronDown
-					class="h-3.5 w-3.5 transition-transform {collapsed.documents ? '-rotate-90' : ''}"
-				/>
-			</button>
+			{#if isSearchModeActive}
+				<Sidebar.GroupLabel>Documents</Sidebar.GroupLabel>
+			{:else}
+				<button
+					type="button"
+					class="group flex h-8 w-full cursor-pointer items-center justify-between rounded-md px-2 text-xs font-medium text-sidebar-foreground/70 transition-colors hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:outline-hidden"
+					onclick={() => toggleGroup('documents')}
+					aria-expanded={!collapsed.documents}
+				>
+					<span>Documents</span>
+					<ChevronDown
+						class="h-3.5 w-3.5 transition-transform {collapsed.documents ? '-rotate-90' : ''}"
+					/>
+				</button>
+			{/if}
 
-			{#if !collapsed.documents}
+			{#if isSearchModeActive || !collapsed.documents}
 				<Sidebar.GroupContent>
 					<Sidebar.Menu>
-						{#each docs() as doc (doc.id)}
+						{#each filteredDocs as doc (doc.id)}
 							<Sidebar.MenuItem class="mb-1 p-0">
 								<ChatSidebarDocItem
 									{doc}
