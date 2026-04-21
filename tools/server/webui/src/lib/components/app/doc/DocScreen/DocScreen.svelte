@@ -54,6 +54,27 @@
 	let commandsMenuOpen = $state(false);
 	let showDeleteDialog = $state(false);
 
+	// Preview pane stick-to-bottom while an AI command streams. Reset at the
+	// start of each run; disengaged if the user scrolls up mid-stream so we
+	// don't yank them back to a tail they're intentionally ignoring.
+	let previewEl: HTMLDivElement | undefined = $state();
+	let followPreviewTail = $state(true);
+	let commandRunningId = $derived(aiCommandsStore.runningId);
+
+	$effect(() => {
+		if (commandRunningId !== null) {
+			untrack(() => {
+				followPreviewTail = true;
+			});
+		}
+	});
+
+	$effect(() => {
+		void doc?.content;
+		if (!previewEl || commandRunningId === null || !followPreviewTail) return;
+		previewEl.scrollTop = previewEl.scrollHeight;
+	});
+
 	// A doc loaded with its default name and empty body, freshly created in
 	// the last few seconds, is almost certainly a brand-new doc. Auto-focus
 	// the title so the user can type a name without an extra click.
@@ -350,9 +371,13 @@
 
 			{#if effectiveView !== 'edit'}
 				<div
+					bind:this={previewEl}
 					class="flex min-h-0 {effectiveView === 'preview'
 						? 'w-full'
 						: 'w-1/2'} flex-col overflow-auto bg-background/40"
+					onwheel={(e) => {
+						if (commandRunningId !== null && e.deltaY < 0) followPreviewTail = false;
+					}}
 				>
 					<div class="prose prose-sm dark:prose-invert max-w-none px-6 py-6">
 						{#if doc.content.trim().length === 0}
