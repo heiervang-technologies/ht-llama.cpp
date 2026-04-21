@@ -221,6 +221,7 @@
 	name={doc?.name ?? ''}
 	view={effectiveView}
 	{saving}
+	content={doc?.content ?? ''}
 	onRename={handleRename}
 	onViewChange={setView}
 	onChatAbout={handleChatAbout}

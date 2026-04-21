@@ -11,6 +11,7 @@
 		name: string;
 		view: 'edit' | 'preview' | 'split';
 		saving: boolean;
+		content: string;
 		onRename: (next: string) => void;
 		onViewChange: (next: 'edit' | 'preview' | 'split') => void;
 		onChatAbout: () => void;
@@ -24,6 +25,7 @@
 		name,
 		view,
 		saving,
+		content,
 		onRename,
 		onViewChange,
 		onChatAbout,
@@ -31,6 +33,16 @@
 		commandsMenuOpen = $bindable(false),
 		autofocusTitle = false
 	}: Props = $props();
+
+	// Lightweight word counter: split on whitespace runs and drop empties. Good
+	// enough for prose; markdown syntax characters don't count as words. At ~50k
+	// chars this is still sub-millisecond, so no need to debounce.
+	let wordCount = $derived(
+		content
+			.trim()
+			.split(/\s+/)
+			.filter((s) => s.length > 0).length
+	);
 
 	let titleInputEl: HTMLInputElement | undefined = $state();
 
@@ -79,6 +91,13 @@
 
 		{#if saving}
 			<span class="text-xs text-muted-foreground">Saving…</span>
+		{:else if wordCount > 0}
+			<span
+				class="hidden text-xs text-muted-foreground md:inline"
+				title="Word count (whitespace-separated)"
+			>
+				{wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}
+			</span>
 		{/if}
 	</div>
 
