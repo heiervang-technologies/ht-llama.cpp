@@ -117,6 +117,38 @@ class DocsStore {
 		}
 		await this.refresh();
 	}
+
+	async deleteMany(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		const toRemove = new Set(ids);
+		let failed = 0;
+		let navigatedAway = false;
+
+		for (const id of toRemove) {
+			try {
+				await DatabaseService.deleteDoc(id);
+				if (!navigatedAway && this.activeDoc?.id === id) {
+					this.activeDoc = null;
+					await goto('#/');
+					navigatedAway = true;
+				}
+			} catch (err) {
+				console.error('[docs] delete failed', id, err);
+				failed++;
+			}
+		}
+		await this.refresh();
+
+		const deleted = toRemove.size - failed;
+		if (deleted > 0) {
+			toast.success(deleted === 1 ? '1 document deleted' : `${deleted} documents deleted`);
+		}
+		if (failed > 0) {
+			toast.error(
+				failed === 1 ? 'Failed to delete 1 document' : `Failed to delete ${failed} documents`
+			);
+		}
+	}
 }
 
 export const docsStore = new DocsStore();
