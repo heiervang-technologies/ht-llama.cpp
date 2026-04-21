@@ -596,6 +596,13 @@ export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
 export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOverlay.svelte';
 
 /**
+ * Right-side slide-out drawer for rendering HTML/SVG artifacts extracted from
+ * assistant messages. Reads from artifactsStore and opens automatically the
+ * first time an artifact is registered (unless the user explicitly closed it).
+ */
+export { default as ArtifactDrawer } from './ChatScreen/ArtifactDrawer.svelte';
+
+/**
  * Chat form wrapper within ChatScreen. Positions the ChatForm component at the
  * bottom of the screen with proper padding and max-width constraints. Handles
  * the visual container styling for the input area.

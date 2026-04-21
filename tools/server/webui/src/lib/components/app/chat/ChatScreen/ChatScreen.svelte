@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import {
+		ArtifactDrawer,
 		ChatScreenForm,
 		ChatScreenHeader,
 		ChatMessages,
@@ -597,6 +598,8 @@
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
+
+<ArtifactDrawer />
 
 <style>
 	.conversation-chat-form {
