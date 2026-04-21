@@ -6,13 +6,17 @@
  * document. Users can add/edit commands in Settings → AI Commands.
  */
 
+export type AiCommandMode = 'append' | 'replace';
+
 export type AiCommand = {
 	id: string;
 	name: string;
 	/** Template string; {{document}} and {{selection}} are substituted. */
 	template: string;
 	/** Where the AI output is placed in the document. */
-	mode: 'append';
+	mode: AiCommandMode;
+	/** If true, the command is skipped when there is no active selection. */
+	requiresSelection?: boolean;
 };
 
 export const DEFAULT_AI_COMMANDS: AiCommand[] = [
@@ -34,6 +38,22 @@ export const DEFAULT_AI_COMMANDS: AiCommand[] = [
 		template:
 			'Continue writing the following document in the same style and voice. Output only the continuation — do not repeat what is already there.\n\n{{document}}',
 		mode: 'append'
+	},
+	{
+		id: 'builtin-rewrite-selection',
+		name: 'Rewrite selection',
+		template:
+			'Rewrite the following passage to improve clarity and flow while preserving meaning and voice. Output only the rewritten passage — no preamble, no quotes, no explanation.\n\nPassage:\n{{selection}}',
+		mode: 'replace',
+		requiresSelection: true
+	},
+	{
+		id: 'builtin-fix-grammar',
+		name: 'Fix grammar & spelling',
+		template:
+			'Correct grammar, spelling, and punctuation in the following passage. Preserve the original voice, tone, and formatting. Output only the corrected passage — no preamble, no quotes, no explanation.\n\nPassage:\n{{selection}}',
+		mode: 'replace',
+		requiresSelection: true
 	}
 ];
 
@@ -48,7 +68,8 @@ export function parseAiCommands(raw: unknown): AiCommand[] {
 				typeof c === 'object' &&
 				typeof c.id === 'string' &&
 				typeof c.name === 'string' &&
-				typeof c.template === 'string'
+				typeof c.template === 'string' &&
+				(c.mode === 'append' || c.mode === 'replace')
 		);
 	} catch {
 		return DEFAULT_AI_COMMANDS;

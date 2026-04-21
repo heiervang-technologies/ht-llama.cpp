@@ -58,7 +58,12 @@
 						onRun(command.id);
 					}}
 				>
-					{command.name}
+					<span class="flex-1">{command.name}</span>
+					{#if command.mode === 'replace'}
+						<span class="text-[10px] text-muted-foreground" title="Acts on current selection">
+							sel
+						</span>
+					{/if}
 				</DropdownMenuItem>
 			{/each}
 		{/if}

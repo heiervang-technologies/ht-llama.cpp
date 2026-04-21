@@ -1,3 +1,11 @@
+<script module lang="ts">
+	export interface DocEditorApi {
+		getSelection(): { from: number; to: number; text: string };
+		replaceRange(from: number, to: number, text: string): void;
+		focus(): void;
+	}
+</script>
+
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
@@ -17,9 +25,10 @@
 	interface Props {
 		content: string;
 		onChange: (value: string) => void;
+		onReady?: (api: DocEditorApi) => void;
 	}
 
-	let { content, onChange }: Props = $props();
+	let { content, onChange, onReady }: Props = $props();
 
 	let hostEl: HTMLDivElement | undefined = $state();
 	let view: EditorView | undefined;
@@ -93,6 +102,24 @@
 			}),
 			parent: hostEl
 		});
+		if (onReady) {
+			const v = view;
+			onReady({
+				getSelection: () => {
+					const sel = v.state.selection.main;
+					const from = Math.min(sel.from, sel.to);
+					const to = Math.max(sel.from, sel.to);
+					return { from, to, text: v.state.sliceDoc(from, to) };
+				},
+				replaceRange: (from, to, text) => {
+					const docLen = v.state.doc.length;
+					const safeFrom = Math.max(0, Math.min(from, docLen));
+					const safeTo = Math.max(safeFrom, Math.min(to, docLen));
+					v.dispatch({ changes: { from: safeFrom, to: safeTo, insert: text } });
+				},
+				focus: () => v.focus()
+			});
+		}
 	});
 
 	onDestroy(() => {

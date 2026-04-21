@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
+	import { toast } from 'svelte-sonner';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { MarkdownContent } from '$lib/components/app';
@@ -8,7 +9,7 @@
 	import { aiCommandsStore } from '$lib/stores/ai-commands.svelte';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import DocScreenHeader from './DocScreenHeader.svelte';
-	import DocEditor from './DocEditor.svelte';
+	import DocEditor, { type DocEditorApi } from './DocEditor.svelte';
 
 	interface Props {
 		docId: string;
@@ -48,6 +49,7 @@
 	let saving = $state(false);
 	let pendingContent = $state<string | null>(null);
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
+	let editorApi: DocEditorApi | null = null;
 
 	onMount(() => {
 		if (!docsStore.isInitialized) {
@@ -96,7 +98,47 @@
 			pendingContent = null;
 			saving = false;
 		}
+
+		const command = aiCommandsStore.list().find((c) => c.id === commandId);
+		if (!command) return;
+
 		const baseContent = doc.content;
+		const sel = editorApi?.getSelection();
+		const selectionText = sel?.text ?? '';
+		const hasSelection = selectionText.length > 0;
+
+		if (command.requiresSelection && !hasSelection) {
+			toast.warning(`"${command.name}" requires a text selection in the editor.`);
+			return;
+		}
+
+		if (command.mode === 'replace' && hasSelection && sel && editorApi) {
+			// Stream the model output directly over the selected range.
+			const from = sel.from;
+			let currentEnd = sel.to;
+			let outputSoFar = '';
+			const api = editorApi;
+			await aiCommandsStore.run(
+				commandId,
+				baseContent,
+				(delta) => {
+					outputSoFar += delta;
+					api.replaceRange(from, currentEnd, outputSoFar);
+					currentEnd = from + outputSoFar.length;
+				},
+				selectionText
+			);
+			// The editor's updateListener already streamed changes through onChange.
+			// Persist the final doc state once streaming finishes.
+			if (outputSoFar.length > 0) {
+				const finalContent =
+					baseContent.slice(0, from) + outputSoFar + baseContent.slice(sel.to);
+				await docsStore.updateContent(doc.id, finalContent);
+			}
+			return;
+		}
+
+		// Append mode (default): add a separator and stream after the existing doc.
 		const separator = baseContent.trimEnd().length === 0 ? '' : '\n\n---\n\n';
 		let outputSoFar = '';
 		await aiCommandsStore.run(
@@ -106,9 +148,8 @@
 				outputSoFar += delta;
 				docsStore.setContentLive(doc!.id, baseContent + separator + outputSoFar);
 			},
-			''
+			selectionText
 		);
-		// Persist the final result once streaming finishes.
 		if (outputSoFar.length > 0) {
 			await docsStore.updateContent(doc.id, baseContent + separator + outputSoFar);
 		}
@@ -159,7 +200,11 @@
 						? 'w-full'
 						: 'w-1/2'}"
 				>
-					<DocEditor content={doc.content} onChange={scheduleSave} />
+					<DocEditor
+						content={doc.content}
+						onChange={scheduleSave}
+						onReady={(api) => (editorApi = api)}
+					/>
 				</div>
 			{/if}
 
