@@ -7,6 +7,7 @@
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
+		sttReady?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
 		onMicClick?: () => void;
@@ -16,10 +17,21 @@
 		class: className = '',
 		disabled = false,
 		hasAudioModality = false,
+		sttReady = false,
 		isLoading = false,
 		isRecording = false,
 		onMicClick
 	}: Props = $props();
+
+	// The mic is useful in two modes: (1) the active LLM accepts audio natively,
+	// or (2) the user has STT/ASR configured, so we can record → transcribe →
+	// drop the text into the textarea. Either path is valid.
+	let canRecord = $derived(hasAudioModality || sttReady);
+
+	let tooltipText = $derived.by(() => {
+		if (canRecord) return '';
+		return 'Enable speech-to-text in Settings, or pick a model with audio modality.';
+	});
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -29,7 +41,7 @@
 				class="h-8 w-8 rounded-full p-0 {isRecording
 					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 					: ''}"
-				disabled={disabled || isLoading || !hasAudioModality}
+				disabled={disabled || isLoading || !canRecord}
 				onclick={onMicClick}
 				type="button"
 			>
@@ -43,9 +55,9 @@
 			</Button>
 		</Tooltip.Trigger>
 
-		{#if !hasAudioModality}
+		{#if tooltipText}
 			<Tooltip.Content>
-				<p>Current model does not support audio</p>
+				<p>{tooltipText}</p>
 			</Tooltip.Content>
 		{/if}
 	</Tooltip.Root>

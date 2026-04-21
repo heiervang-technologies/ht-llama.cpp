@@ -45,12 +45,26 @@ export class SttService {
 		const apiKey = c.sttApiKey?.toString().trim();
 		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-		const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
-			method: 'POST',
-			headers,
-			body: form,
-			signal: opts.signal
-		});
+		let response: Response;
+		try {
+			response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+				method: 'POST',
+				headers,
+				body: form,
+				signal: opts.signal
+			});
+		} catch (err) {
+			// Same treatment as TtsService: fetch throws TypeError on connection
+			// refused / DNS / CORS reject, and the browser-native message ("Load
+			// failed" on WebKit, "Failed to fetch" on Chromium) doesn't name the
+			// host. Surface a message the user can act on.
+			if (err instanceof TypeError) {
+				throw new Error(
+					`Could not reach STT server at ${baseUrl}. Is it running and reachable?`
+				);
+			}
+			throw err;
+		}
 
 		if (!response.ok) {
 			const msg = await response.text().catch(() => '');

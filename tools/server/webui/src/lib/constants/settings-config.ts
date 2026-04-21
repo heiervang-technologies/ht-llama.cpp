@@ -162,7 +162,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	sendOnEnter:
 		'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
 	autoMicOnEmpty:
-		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+		'Automatically show the microphone button instead of send when the textarea is empty. Works for models with native audio modality and for STT dictation.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
