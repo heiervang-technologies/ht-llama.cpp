@@ -146,4 +146,80 @@ test.describe('AI commands menu', () => {
 		await expect(page.getByText(/requires a text selection/i)).toBeVisible({ timeout: 3000 });
 		expect(chatCalled).toBe(false);
 	});
+
+	test('Ctrl+Shift+K opens the commands menu', async ({ page }) => {
+		await primeClient(page, ['unused']);
+		await openNewDoc(page);
+
+		// Menu should not be visible yet.
+		await expect(page.getByRole('menuitem', { name: /^Summarize/ })).toHaveCount(0);
+
+		// Pressing the shortcut anywhere in the doc screen opens the dropdown.
+		// Focus the editor first so the keydown fires at the page level, not
+		// swallowed by an input with native shortcut handling.
+		await page.locator('.cm-content').first().click();
+		await page.keyboard.press('Control+Shift+K');
+
+		await expect(page.getByRole('menuitem', { name: /^Summarize/ })).toBeVisible({
+			timeout: 2000
+		});
+	});
+
+	test('Stop button cancels a running command mid-stream', async ({ page }) => {
+		// Install a custom route handler that streams slowly so we have time
+		// to click Stop before completion. We cannot fulfil + delay in one
+		// call — instead write the body chunks with explicit timing.
+		await page.addInitScript(
+			([key, cfg]) => {
+				localStorage.setItem(key as string, JSON.stringify(cfg));
+			},
+			[
+				CONFIG_KEY,
+				{
+					alwaysShowSidebarOnDesktop: true,
+					backendBaseUrl: '',
+					apiKey: '',
+					aiCommands: '',
+					inlineCompletionEnabled: false
+				}
+			]
+		);
+		await page.route('**/v1/chat/completions', async (route) => {
+			if (route.request().method() !== 'POST') {
+				return route.continue();
+			}
+			// Never-ending SSE stream: the client will keep waiting until abort.
+			// Playwright's route.fulfill cannot stream, so emulate by responding
+			// with a body that's valid SSE but intentionally lacks [DONE] and
+			// add a small delay so the test has a window to hit Stop.
+			await new Promise((r) => setTimeout(r, 3000));
+			await route.fulfill({
+				status: 200,
+				contentType: 'text/event-stream',
+				body:
+					`data: ${JSON.stringify({ choices: [{ delta: { content: 'partial' } }] })}\n\n` +
+					'data: [DONE]\n\n'
+			});
+		});
+
+		await openNewDoc(page);
+		const editor = page.locator('.cm-content').first();
+		await editor.click();
+		await page.keyboard.type('Seed content.');
+		await page.waitForTimeout(500);
+
+		await openCommandsMenu(page);
+		await page.getByRole('menuitem', { name: /^Summarize/ }).click();
+
+		// While the route handler is still waiting, the trigger button should
+		// have flipped into the "Stop" state. Click it.
+		const stopBtn = page.getByRole('button', { name: /Stop/i }).first();
+		await stopBtn.waitFor({ state: 'visible', timeout: 2000 });
+		await stopBtn.click();
+
+		// The button should flip back to "Commands" once the abort is applied.
+		await expect(page.getByRole('button', { name: /Commands/i }).first()).toBeVisible({
+			timeout: 3000
+		});
+	});
 });
