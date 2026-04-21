@@ -9,6 +9,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
+	themePrimaryHue: 295,
+	themeSecondaryHue: 190,
 	showThoughtInProgress: false,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,

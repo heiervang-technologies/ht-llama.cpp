@@ -17,6 +17,7 @@
 		McpLogo,
 		McpServersSettings
 	} from '$lib/components/app';
+	import ThemeHuePicker from './ThemeHuePicker.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -418,10 +419,27 @@
 		localConfig[key] = value;
 	}
 
+	function handleHueChange(key: 'themePrimaryHue' | 'themeSecondaryHue', value: number) {
+		localConfig[key] = value;
+		if (typeof document !== 'undefined') {
+			const prop = key === 'themePrimaryHue' ? '--hue-primary' : '--hue-secondary';
+			document.documentElement.style.setProperty(prop, String(value));
+		}
+	}
+
 	function handleReset() {
 		localConfig = { ...config() };
 
 		setMode(localConfig.theme as ColorMode);
+
+		if (typeof document !== 'undefined') {
+			const root = document.documentElement;
+			root.style.setProperty('--hue-primary', String(Number(localConfig.themePrimaryHue) || 295));
+			root.style.setProperty(
+				'--hue-secondary',
+				String(Number(localConfig.themeSecondaryHue) || 190)
+			);
+		}
 	}
 
 	function handleSave() {
@@ -493,6 +511,15 @@
 
 	export function reset() {
 		localConfig = { ...config() };
+
+		if (typeof document !== 'undefined') {
+			const root = document.documentElement;
+			root.style.setProperty('--hue-primary', String(Number(localConfig.themePrimaryHue) || 295));
+			root.style.setProperty(
+				'--hue-secondary',
+				String(Number(localConfig.themeSecondaryHue) || 190)
+			);
+		}
 
 		setTimeout(updateScrollButtons, 100);
 	}
@@ -608,6 +635,14 @@
 							onConfigChange={handleConfigChange}
 							onThemeChange={handleThemeChange}
 						/>
+
+						{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							<ThemeHuePicker
+								primary={Number(localConfig.themePrimaryHue) || 295}
+								secondary={Number(localConfig.themeSecondaryHue) || 190}
+								onChange={handleHueChange}
+							/>
+						{/if}
 					</div>
 				{/if}
 			</div>

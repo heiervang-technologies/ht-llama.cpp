@@ -210,6 +210,16 @@
 		}
 	});
 
+	// Push theme hue settings onto the document root so app.css picks them up.
+	$effect(() => {
+		if (!browser) return;
+		const primary = Number(config().themePrimaryHue);
+		const secondary = Number(config().themeSecondaryHue);
+		const root = document.documentElement;
+		if (Number.isFinite(primary)) root.style.setProperty('--hue-primary', String(primary));
+		if (Number.isFinite(secondary)) root.style.setProperty('--hue-secondary', String(secondary));
+	});
+
 	// Set up title update confirmation callback
 	$effect(() => {
 		conversationsStore.setTitleUpdateConfirmationCallback(
