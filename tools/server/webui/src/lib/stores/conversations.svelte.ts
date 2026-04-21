@@ -400,9 +400,7 @@ class ConversationsStore {
 
 		const deleted = toRemove.size - failed;
 		if (deleted > 0) {
-			toast.success(
-				deleted === 1 ? '1 conversation deleted' : `${deleted} conversations deleted`
-			);
+			toast.success(deleted === 1 ? '1 conversation deleted' : `${deleted} conversations deleted`);
 		}
 		if (failed > 0) {
 			toast.error(

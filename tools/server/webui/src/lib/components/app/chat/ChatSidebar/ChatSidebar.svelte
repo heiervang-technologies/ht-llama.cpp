@@ -621,7 +621,8 @@
 <DialogConfirmation
 	bind:open={showBulkDeleteDialog}
 	title="Delete selected conversations"
-	description="Are you sure you want to delete {selectedIds.size} conversation{selectedIds.size === 1
+	description="Are you sure you want to delete {selectedIds.size} conversation{selectedIds.size ===
+	1
 		? ''
 		: 's'}? This cannot be undone."
 	confirmText="Delete"
