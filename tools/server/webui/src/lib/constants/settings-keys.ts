@@ -23,7 +23,6 @@ export const SETTINGS_KEYS = {
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	KEEP_STATS_VISIBLE: 'keepStatsVisible',
-	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	// TTS
 	TTS_ENABLED: 'ttsEnabled',
 	TTS_AUTOPLAY: 'ttsAutoplay',
