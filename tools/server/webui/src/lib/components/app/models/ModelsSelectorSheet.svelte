@@ -259,17 +259,29 @@
 					<Loader2 class="animate-spin-reverse h-3 w-3.5 text-orange-400" />
 				{:else if isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
-					<button
-						type="button"
+					<!-- span-as-button: nested <button>s are invalid HTML and trigger
+					     node_invalid_placement_ssr. role+tabindex+keydown preserves
+					     keyboard access. -->
+					<span
+						role="button"
+						tabindex="0"
 						aria-label="Cancel loading"
+						class="inline-flex cursor-pointer items-center"
 						onclick={(e) => {
 							e.preventDefault();
 							e.stopPropagation();
 							handleCancelLoad();
 						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								handleCancelLoad();
+							}
+						}}
 					>
-						<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
-					</button>
+						<X class="h-3 w-3.5 text-muted-foreground hover:text-red-500" />
+					</span>
 				{:else if updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}
