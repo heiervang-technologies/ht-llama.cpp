@@ -37,10 +37,7 @@ async function primeClient(
 		}
 		const sse =
 			chunks
-				.map(
-					(c) =>
-						`data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n\n`
-				)
+				.map((c) => `data: ${JSON.stringify({ choices: [{ delta: { content: c } }] })}\n\n`)
 				.join('') + 'data: [DONE]\n\n';
 		await route.fulfill({
 			status: 200,
