@@ -111,7 +111,13 @@
 				</Button>
 			</div>
 			<div class="flex gap-1">
-				<Button variant="ghost" size="sm" onclick={copySource} disabled={!active} title="Copy source">
+				<Button
+					variant="ghost"
+					size="sm"
+					onclick={copySource}
+					disabled={!active}
+					title="Copy source"
+				>
 					<Copy class="h-3.5 w-3.5" />
 				</Button>
 				<Button variant="ghost" size="sm" onclick={download} disabled={!active} title="Download">
