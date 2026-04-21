@@ -15,6 +15,8 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { onMount } from 'svelte';
 
+	import { Checkbox } from '$lib/components/ui/checkbox';
+
 	interface Props {
 		isActive?: boolean;
 		depth?: number;
@@ -24,6 +26,9 @@
 		onEdit?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		onStop?: (id: string) => void;
+		selectionMode?: boolean;
+		isSelected?: boolean;
+		onToggleSelect?: (id: string, event: MouseEvent | KeyboardEvent) => void;
 	}
 
 	let {
@@ -33,8 +38,11 @@
 		onEdit,
 		onSelect,
 		onStop,
+		onToggleSelect,
 		isActive = false,
-		depth = 0
+		depth = 0,
+		selectionMode = false,
+		isSelected = false
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
@@ -75,7 +83,11 @@
 		renderActionsDropdown = true;
 	}
 
-	function handleSelect() {
+	function handleSelect(event: MouseEvent) {
+		if (selectionMode) {
+			onToggleSelect?.(conversation.id, event);
+			return;
+		}
 		onSelect?.(conversation.id);
 	}
 
@@ -101,7 +113,8 @@
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
-		: ''} px-3"
+		: ''} {selectionMode && isSelected ? 'bg-primary/15 hover:bg-primary/20' : ''} px-3"
+	data-conversation-id={conversation.id}
 	onclick={handleSelect}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
@@ -110,6 +123,14 @@
 		class="flex min-w-0 flex-1 items-center gap-2"
 		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
 	>
+		{#if selectionMode}
+			<Checkbox
+				checked={isSelected}
+				aria-label={isSelected ? 'Deselect conversation' : 'Select conversation'}
+				class="pointer-events-none shrink-0"
+			/>
+		{/if}
+
 		{#if depth > 0}
 			<Tooltip.Root>
 				<Tooltip.Trigger>
@@ -157,7 +178,7 @@
 		</span>
 	</div>
 
-	{#if renderActionsDropdown}
+	{#if renderActionsDropdown && !selectionMode}
 		<div class="actions flex items-center">
 			<DropdownMenuActions
 				triggerIcon={MoreHorizontal}
