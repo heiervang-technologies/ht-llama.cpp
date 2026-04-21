@@ -230,6 +230,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.STT_AUTO_SEND,
+					label: 'Auto-send after transcription (voice-only flow)',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.STT_BASE_URL,
 					label: 'STT Base URL',
 					type: SettingsFieldType.INPUT

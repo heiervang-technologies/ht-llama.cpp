@@ -37,6 +37,7 @@ export const SETTINGS_KEYS = {
 	// STT
 	STT_ENABLED: 'sttEnabled',
 	STT_AUTO_TRANSCRIBE: 'sttAutoTranscribe',
+	STT_AUTO_SEND: 'sttAutoSend',
 	STT_BASE_URL: 'sttBaseUrl',
 	STT_API_KEY: 'sttApiKey',
 	STT_MODEL: 'sttModel',

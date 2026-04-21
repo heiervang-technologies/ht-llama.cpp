@@ -78,6 +78,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// stt
 	sttEnabled: false,
 	sttAutoTranscribe: true,
+	sttAutoSend: false,
 	sttBaseUrl: '',
 	sttApiKey: '',
 	sttModel: '',
@@ -201,6 +202,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	sttEnabled: 'Enable speech-to-text for mic recordings.',
 	sttAutoTranscribe:
 		'Automatically transcribe recordings into the textarea instead of attaching them as audio files.',
+	sttAutoSend:
+		'After transcription finishes, automatically submit the message. Enables a heads-down voice-only flow.',
 	sttBaseUrl:
 		'Base URL of an OpenAI-compatible STT server (e.g. <code>http://192.168.8.123:30189</code>). Must implement <code>POST /v1/audio/transcriptions</code>.',
 	sttApiKey:

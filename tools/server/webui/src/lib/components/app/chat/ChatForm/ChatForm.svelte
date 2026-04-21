@@ -552,6 +552,12 @@
 							onValueChange?.(value);
 							// Give the textarea a tick to render, then focus + resize.
 							queueMicrotask(() => textareaRef?.focus());
+							// Voice-only flow: submit automatically when the user has opted
+							// in. Skip when a model response is already streaming so we don't
+							// fire a second request mid-stream.
+							if (currentConfig.sttAutoSend && !isLoading && !disabled) {
+								queueMicrotask(() => onSubmit?.());
+							}
 						}
 					} catch (err) {
 						console.error('STT transcription failed, falling back to file attach:', err);
