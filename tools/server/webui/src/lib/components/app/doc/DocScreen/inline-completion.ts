@@ -8,7 +8,7 @@
  * read from the settings store each fetch, so changing them takes effect live.
  */
 
-import { EditorState, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { EditorState, Prec, StateEffect, StateField, type Extension } from '@codemirror/state';
 import {
 	Decoration,
 	type DecorationSet,
@@ -98,86 +98,106 @@ function dismissSuggestion(view: EditorView): boolean {
 	return true;
 }
 
-const inlineCompletionPlugin = ViewPlugin.fromClass(
-	class {
-		decorations: DecorationSet = Decoration.none;
-		private timer: ReturnType<typeof setTimeout> | null = null;
-		private controller: AbortController | null = null;
-		private lastPrefix = '';
+class InlineCompletionRunner {
+	decorations: DecorationSet = Decoration.none;
+	private timer: ReturnType<typeof setTimeout> | null = null;
+	private controller: AbortController | null = null;
+	private lastPrefix = '';
 
-		constructor(readonly view: EditorView) {}
+	constructor(readonly view: EditorView) {}
 
-		update(u: ViewUpdate) {
-			if (u.docChanged || u.selectionSet) {
-				this.schedule();
-			}
-		}
-
-		private schedule() {
-			this.cancel();
-			const c = config();
-			if (!c.inlineCompletionEnabled) return;
-			const delay = Math.max(200, Number(c.inlineCompletionDelay ?? 800));
-			this.timer = setTimeout(() => this.run(), delay);
-		}
-
-		private cancel() {
-			if (this.timer) {
-				clearTimeout(this.timer);
-				this.timer = null;
-			}
-			if (this.controller) {
-				this.controller.abort();
-				this.controller = null;
-			}
-		}
-
-		private async run() {
-			const view = this.view;
-			const { state } = view;
-			const head = state.selection.main.head;
-			// Only suggest when selection is empty (just a caret).
-			if (state.selection.main.from !== state.selection.main.to) return;
-
-			const doc = state.doc.toString();
-			const prefix = doc.slice(Math.max(0, head - 4096), head);
-			if (!prefix.trim()) return;
-
-			// Don't re-fire for the same prefix we already suggested against.
-			if (prefix === this.lastPrefix && currentSuggestion(state)) return;
-			this.lastPrefix = prefix;
-
-			this.controller = new AbortController();
-			try {
-				const result = await CompletionService.complete({
-					prompt: prefix,
-					signal: this.controller.signal
-				});
-				const text = result.content;
-				if (!text) return;
-				// Only apply if cursor hasn't moved since we started.
-				const now = view.state.selection.main.head;
-				if (now !== head) return;
-				view.dispatch({ effects: setSuggestion.of({ text, from: head }) });
-			} catch (err) {
-				if ((err as { name?: string })?.name !== 'AbortError') {
-					console.warn('[inline-completion]', err);
-				}
-			} finally {
-				this.controller = null;
-			}
-		}
-
-		destroy() {
-			this.cancel();
+	update(u: ViewUpdate) {
+		if (u.docChanged || u.selectionSet) {
+			this.schedule();
 		}
 	}
-);
 
-const inlineCompletionKeymap = keymap.of([
-	{ key: 'Tab', run: acceptSuggestion },
-	{ key: 'Escape', run: dismissSuggestion }
-]);
+	schedule() {
+		this.cancel();
+		const c = config();
+		if (!c.inlineCompletionEnabled) return;
+		const delay = Math.max(200, Number(c.inlineCompletionDelay ?? 800));
+		this.timer = setTimeout(() => this.run(false), delay);
+	}
+
+	force() {
+		this.cancel();
+		// Skip the enabled check and cache on explicit trigger: the user asked for it.
+		this.run(true);
+	}
+
+	private cancel() {
+		if (this.timer) {
+			clearTimeout(this.timer);
+			this.timer = null;
+		}
+		if (this.controller) {
+			this.controller.abort();
+			this.controller = null;
+		}
+	}
+
+	private async run(forced: boolean) {
+		const view = this.view;
+		const { state } = view;
+		const head = state.selection.main.head;
+		// Only suggest when selection is empty (just a caret).
+		if (state.selection.main.from !== state.selection.main.to) return;
+
+		const doc = state.doc.toString();
+		const prefix = doc.slice(Math.max(0, head - 4096), head);
+		if (!forced && !prefix.trim()) return;
+
+		// Don't re-fire for the same prefix we already suggested against (unless forced).
+		if (!forced && prefix === this.lastPrefix && currentSuggestion(state)) return;
+		this.lastPrefix = prefix;
+
+		this.controller = new AbortController();
+		try {
+			const result = await CompletionService.complete({
+				prompt: prefix,
+				signal: this.controller.signal
+			});
+			const text = result.content;
+			if (!text) return;
+			// Only apply if cursor hasn't moved since we started.
+			const now = view.state.selection.main.head;
+			if (now !== head) return;
+			view.dispatch({ effects: setSuggestion.of({ text, from: head }) });
+		} catch (err) {
+			if ((err as { name?: string })?.name !== 'AbortError') {
+				console.warn('[inline-completion]', err);
+			}
+		} finally {
+			this.controller = null;
+		}
+	}
+
+	destroy() {
+		this.cancel();
+	}
+}
+
+const inlineCompletionPlugin = ViewPlugin.fromClass(InlineCompletionRunner);
+
+function forceTrigger(view: EditorView): boolean {
+	const plugin = view.plugin(inlineCompletionPlugin);
+	if (!plugin) return false;
+	plugin.force();
+	return true;
+}
+
+// Highest precedence so Tab wins over the editor's default indent handler when
+// a suggestion is active. The handlers return false when no suggestion is
+// present, which lets the default Tab-indent flow through.
+const inlineCompletionKeymap = Prec.highest(
+	keymap.of([
+		{ key: 'Tab', run: acceptSuggestion },
+		{ key: 'Escape', run: dismissSuggestion },
+		{ key: 'Ctrl-Tab', run: forceTrigger, preventDefault: true },
+		{ key: 'Mod-Space', run: forceTrigger, preventDefault: true }
+	])
+);
 
 export function inlineCompletion(): Extension {
 	return [suggestionField, inlineCompletionPlugin, inlineCompletionKeymap];

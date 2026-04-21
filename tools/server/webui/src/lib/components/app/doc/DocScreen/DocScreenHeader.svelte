@@ -94,7 +94,7 @@
 			onclick={toggleInlineCompletion}
 			class="gap-1.5 rounded-full backdrop-blur-lg"
 			title={inlineOn
-				? 'AI ghost-text completions are ON (Tab to accept, Esc to dismiss)'
+				? 'AI ghost-text completions are ON — Ctrl+Tab to force, Tab to accept, Esc to dismiss'
 				: 'Enable AI ghost-text completions'}
 		>
 			<Sparkles class="h-4 w-4 {inlineOn ? 'text-primary' : ''}" />
