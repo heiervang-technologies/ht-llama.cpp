@@ -1,24 +1,31 @@
 <script lang="ts">
-	import { FileText, Search, SquarePen, X } from '@lucide/svelte';
+	import { FileText, CheckSquare, Search, SquarePen, Trash2, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { McpLogo } from '$lib/components/app';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { conversations } from '$lib/stores/conversations.svelte';
 	import { docsStore } from '$lib/stores/docs.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
 		isSearchModeActive: boolean;
 		searchQuery: string;
+		onEnterSelectionMode?: () => void;
+		onDeleteAll?: () => void;
 	}
 
 	let {
 		handleMobileSidebarItemClick,
 		isSearchModeActive = $bindable(),
-		searchQuery = $bindable()
+		searchQuery = $bindable(),
+		onEnterSelectionMode,
+		onDeleteAll
 	}: Props = $props();
+
+	let conversationCount = $derived(conversations().length);
 
 	let searchInput: HTMLInputElement | null = $state(null);
 
@@ -114,5 +121,35 @@
 				MCP Servers
 			</div>
 		</Button>
+
+		{#if conversationCount > 0 && (onEnterSelectionMode || onDeleteAll)}
+			<div class="flex gap-1 pt-1">
+				{#if onEnterSelectionMode}
+					<Button
+						class="flex-1 justify-start backdrop-blur-none!"
+						onclick={() => onEnterSelectionMode?.()}
+						variant="ghost"
+						size="sm"
+						title="Select multiple conversations to delete"
+					>
+						<CheckSquare class="h-4 w-4" />
+						Select
+					</Button>
+				{/if}
+
+				{#if onDeleteAll}
+					<Button
+						class="flex-1 justify-start text-destructive backdrop-blur-none! hover:text-destructive"
+						onclick={() => onDeleteAll?.()}
+						variant="ghost"
+						size="sm"
+						title="Delete every conversation"
+					>
+						<Trash2 class="h-4 w-4" />
+						Delete all
+					</Button>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>
