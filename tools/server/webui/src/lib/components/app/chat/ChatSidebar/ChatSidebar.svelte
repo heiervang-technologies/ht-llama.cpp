@@ -165,6 +165,14 @@
 		showDocEditDialog = true;
 	}
 
+	async function handleDuplicateDoc(id: string) {
+		try {
+			await docsStore.duplicateDoc(id);
+		} catch (err) {
+			console.error('[docs] duplicate failed', err);
+		}
+	}
+
 	async function handleDeleteDoc(id: string) {
 		const doc = docs().find((d) => d.id === id);
 		if (!doc) return;
@@ -328,6 +336,7 @@
 									{handleMobileSidebarItemClick}
 									onSelect={selectDoc}
 									onEdit={handleEditDoc}
+									onDuplicate={handleDuplicateDoc}
 									onDelete={handleDeleteDoc}
 								/>
 							</Sidebar.MenuItem>

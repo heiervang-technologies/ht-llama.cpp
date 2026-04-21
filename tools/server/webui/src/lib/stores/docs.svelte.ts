@@ -93,6 +93,22 @@ class DocsStore {
 		await this.refresh();
 	}
 
+	/**
+	 * Fork an existing doc into a new one with identical content. Useful for
+	 * trying a variation without losing the original. Navigates to the copy
+	 * unless navigate === false.
+	 */
+	async duplicateDoc(id: string, options?: { navigate?: boolean }): Promise<DatabaseDoc | null> {
+		const source = await DatabaseService.getDoc(id);
+		if (!source) return null;
+		const copyName = `${source.name?.trim() || DEFAULT_DOC_NAME} (copy)`;
+		return this.createDoc({
+			name: copyName,
+			content: source.content ?? '',
+			navigate: options?.navigate ?? true
+		});
+	}
+
 	async deleteDoc(id: string): Promise<void> {
 		await DatabaseService.deleteDoc(id);
 		if (this.activeDoc?.id === id) {

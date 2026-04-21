@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Trash2, Pencil, MoreHorizontal, FileText } from '@lucide/svelte';
+	import { Trash2, Pencil, Copy, MoreHorizontal, FileText } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
@@ -9,6 +9,7 @@
 		handleMobileSidebarItemClick?: () => void;
 		onSelect?: (id: string) => void;
 		onEdit?: (id: string) => void;
+		onDuplicate?: (id: string) => void;
 		onDelete?: (id: string) => void;
 	}
 
@@ -18,6 +19,7 @@
 		handleMobileSidebarItemClick,
 		onSelect,
 		onEdit,
+		onDuplicate,
 		onDelete
 	}: Props = $props();
 
@@ -31,6 +33,11 @@
 	function handleEdit(event: Event) {
 		event.stopPropagation();
 		onEdit?.(doc.id);
+	}
+
+	function handleDuplicate(event: Event) {
+		event.stopPropagation();
+		onDuplicate?.(doc.id);
 	}
 
 	function handleDelete(event: Event) {
@@ -91,6 +98,11 @@
 						icon: Pencil,
 						label: 'Rename',
 						onclick: handleEdit
+					},
+					{
+						icon: Copy,
+						label: 'Duplicate',
+						onclick: handleDuplicate
 					},
 					{
 						icon: Trash2,
