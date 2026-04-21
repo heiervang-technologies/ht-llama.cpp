@@ -18,11 +18,15 @@ This is the [Heiervang Technologies](https://github.com/heiervang-technologies) 
 | TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | Planned |
 | Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | Partial ([#22003](https://github.com/ggml-org/llama.cpp/pull/22003)) |
 | Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | Planned |
-| Rebranded WebUI | `ht-llama.cpp` branding with turquoise/purple theme and banner | No |
+| Rebranded WebUI | `ht-llama.cpp` branding with turquoise/purple theme, configurable hue picker, and banner | No |
 | Model loading UX | Cancel button for in-progress model loads; clearer error states in router mode | No |
 | LoRA adapter UI | Auto-discovery of LoRA adapters served by `llama-server` with enable/disable panel and router-mode awareness | No |
 | OpenAI-compatible TTS | Play/stop per assistant message and autoplay toggle, wired to any `POST /v1/audio/speech` endpoint (tested against vLLM Qwen3-TTS) | No |
-| Doc mode | Second workspace mode alongside chats: standalone markdown docs with CodeMirror 6 editor, split edit/preview, and "Chat about this" to lift the document into a seeded conversation | No |
+| OpenAI-compatible STT | Record from the mic and transcribe via any `POST /v1/audio/transcriptions` endpoint; dictate directly into the chat composer or at the doc-editor cursor, with optional auto-send for a hands-free voice flow (tested against vLLM Qwen3-ASR) | No |
+| Doc mode | Second workspace mode alongside chats: standalone markdown docs with CodeMirror 6 editor, split edit/preview, live word count, auto-title from first H1, duplicate/download/delete, `Ctrl+S` flush-save, and "Chat about this" to lift the document into a seeded conversation | No |
+| AI commands in docs | `Ctrl+Shift+K` command palette that runs prompts against the current document (summarize, rewrite, translate, expand, etc.) and inserts results at the cursor | No |
+| Inline ghost-text completions | AI autocomplete in the doc editor: `Tab` to accept, `Esc` to dismiss, `Ctrl+Tab` to force a suggestion; works against any completion-capable model | No |
+| Artifacts drawer | Side panel that extracts HTML/SVG snippets from assistant messages and renders them in a sandboxed preview with source toggle | No |
 | Configurable backend URL | Frontend works as a standalone static bundle pointing at any remote `llama-server` | No |
 | Tauri desktop shell | Native desktop wrapper around the WebUI in `tools/server/webui-tauri/` with `.desktop` launchers | No |
 | Release CI | GitHub Actions release workflow runs on the `ht` branch, not just on tags | No |
