@@ -45,15 +45,26 @@ export class SttService {
 		const apiKey = c.sttApiKey?.toString().trim();
 		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
+		// Hard-cap the request: a hung STT server would otherwise leave the mic
+		// button pinned in the "transcribing" spinner state indefinitely.
+		const timeout = new AbortController();
+		const timer = setTimeout(() => timeout.abort(), 60_000);
+		const signal = opts.signal ? anySignal([opts.signal, timeout.signal]) : timeout.signal;
+
 		let response: Response;
 		try {
 			response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
 				method: 'POST',
 				headers,
 				body: form,
-				signal: opts.signal
+				signal
 			});
 		} catch (err) {
+			if (timeout.signal.aborted) {
+				throw new Error(
+					`STT request timed out after 60s. Check the base URL (${baseUrl}) and that the server is responding.`
+				);
+			}
 			// Same treatment as TtsService: fetch throws TypeError on connection
 			// refused / DNS / CORS reject, and the browser-native message ("Load
 			// failed" on WebKit, "Failed to fetch" on Chromium) doesn't name the
@@ -64,6 +75,8 @@ export class SttService {
 				);
 			}
 			throw err;
+		} finally {
+			clearTimeout(timer);
 		}
 
 		if (!response.ok) {
@@ -80,4 +93,26 @@ export class SttService {
 		}
 		return (await response.text()).trim();
 	}
+}
+
+function anySignal(signals: AbortSignal[]): AbortSignal {
+	if (
+		typeof (AbortSignal as unknown as { any?: (s: AbortSignal[]) => AbortSignal }).any ===
+		'function'
+	) {
+		return (AbortSignal as unknown as { any: (s: AbortSignal[]) => AbortSignal }).any(signals);
+	}
+	const controller = new AbortController();
+	for (const s of signals) {
+		if (s.aborted) {
+			controller.abort((s as AbortSignal & { reason?: unknown }).reason);
+			break;
+		}
+		s.addEventListener(
+			'abort',
+			() => controller.abort((s as AbortSignal & { reason?: unknown }).reason),
+			{ once: true }
+		);
+	}
+	return controller.signal;
 }
