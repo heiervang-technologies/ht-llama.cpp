@@ -8,7 +8,8 @@
 		ChevronLeft,
 		ChevronRight,
 		Database,
-		Volume2
+		Volume2,
+		Wand2
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -19,6 +20,7 @@
 	} from '$lib/components/app';
 	import ThemeHuePicker from './ThemeHuePicker.svelte';
 	import TtsRefAudioPicker from './TtsRefAudioPicker.svelte';
+	import AiCommandsEditor from './AiCommandsEditor.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -248,6 +250,11 @@
 					type: SettingsFieldType.INPUT
 				}
 			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.AI_COMMANDS,
+			icon: Wand2,
+			fields: []
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.SAMPLING,
@@ -654,6 +661,11 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.AI_COMMANDS}
+					<AiCommandsEditor
+						value={String(localConfig.aiCommands ?? '')}
+						onChange={(next) => handleConfigChange(SETTINGS_KEYS.AI_COMMANDS, next)}
+					/>
 				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
 					<div class="space-y-6">
 						<ChatSettingsFields

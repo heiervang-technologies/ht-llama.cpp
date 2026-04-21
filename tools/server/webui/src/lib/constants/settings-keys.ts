@@ -45,6 +45,8 @@ export const SETTINGS_KEYS = {
 	INLINE_COMPLETION_ENABLED: 'inlineCompletionEnabled',
 	INLINE_COMPLETION_DELAY: 'inlineCompletionDelay',
 	INLINE_COMPLETION_MAX_TOKENS: 'inlineCompletionMaxTokens',
+	// AI commands (doc editor)
+	AI_COMMANDS: 'aiCommands',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',

@@ -8,6 +8,7 @@ export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
 	DISPLAY: 'Display',
 	TTS: 'Speech',
+	AI_COMMANDS: 'AI Commands',
 	SAMPLING: 'Sampling',
 	PENALTIES: 'Penalties',
 	IMPORT_EXPORT: 'Import/Export',
