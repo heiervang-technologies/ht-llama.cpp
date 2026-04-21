@@ -9,7 +9,13 @@
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
 
-	let hasArtifacts = $derived(artifactsStore.entries.length > 0);
+	let artifactCount = $derived(artifactsStore.entries.length);
+	let hasArtifacts = $derived(artifactCount > 0);
+	let artifactTooltip = $derived(
+		artifactCount === 1
+			? '1 artifact · click to toggle drawer'
+			: `${artifactCount} artifacts · click to toggle drawer`
+	);
 </script>
 
 <header
@@ -25,11 +31,19 @@
 				variant="ghost"
 				size="icon-lg"
 				onclick={() => artifactsStore.toggle()}
-				class="rounded-full backdrop-blur-lg"
-				title="Toggle artifact drawer"
-				aria-label="Toggle artifact drawer"
+				class="relative rounded-full backdrop-blur-lg"
+				title={artifactTooltip}
+				aria-label={artifactTooltip}
 			>
 				<PanelRight class="h-4 w-4" />
+				{#if artifactCount > 1}
+					<span
+						class="absolute -top-1 -right-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
+						aria-hidden="true"
+					>
+						{artifactCount > 9 ? '9+' : artifactCount}
+					</span>
+				{/if}
 			</Button>
 		{/if}
 
