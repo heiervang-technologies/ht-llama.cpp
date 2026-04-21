@@ -79,7 +79,7 @@ class TtsStore {
 		if (usedDefaultRef && !this.#defaultRefWarned) {
 			this.#defaultRefWarned = true;
 			toast.warning(
-				'Using the bundled default voice. Upload a reference audio clip in Settings → Voice for a real voice.'
+				'Using the bundled "Zap" voice. Upload your own reference clip in Settings → Voice to clone a different voice.'
 			);
 		}
 		if (controller.signal.aborted) return;

@@ -10,8 +10,7 @@ export interface TtsSynthesizeResult {
 	usedDefaultRef: boolean;
 }
 
-const DEFAULT_REF_URL = '/tts-default-ref.wav';
-const DEFAULT_REF_TEXT = 'Hello, this is a default reference voice sample.';
+const DEFAULT_REF_URL = '/tts-default-ref.mp3';
 let cachedDefaultRef: string | null = null;
 
 async function loadDefaultRefAudio(): Promise<string> {
@@ -82,12 +81,14 @@ export class TtsService {
 		let usedDefaultRef = false;
 		if (userRefAudio && userRefAudio.startsWith('data:')) {
 			body.ref_audio = userRefAudio;
-			body.x_vector_only_mode = true;
 		} else {
 			body.ref_audio = await loadDefaultRefAudio();
-			body.ref_text = DEFAULT_REF_TEXT;
 			usedDefaultRef = true;
 		}
+		// Skip text conditioning on the reference clip: we rarely know the exact
+		// transcript (especially for the bundled default) and the speaker embedding
+		// alone is enough for Qwen3-TTS voice cloning.
+		body.x_vector_only_mode = true;
 
 		// Hard-cap the request so a hung preflight (no CORS on the TTS server) or a
 		// dropped connection doesn't leave the speaker stuck in the loading state.
