@@ -146,3 +146,16 @@ poetry.toml
 # emscripten
 a.out.*
 .worktrees
+
+# Agent / tooling state
+/.claude/
+/.codex
+/.playwright-mcp/
+/docs/superpowers/
+
+# Local scratch (debug scripts, cached diffs, screenshots)
+/fix_deadlocks.py
+/patch_fattn.py
+/rewrite_turboq.py
+/upstream-pr-*.diff
+/webui-lora*.png
