@@ -110,6 +110,14 @@ export class TtsService {
 					`TTS request timed out after 30s. Check the base URL (${baseUrl}) and that the server responds to CORS preflight.`
 				);
 			}
+			// fetch throws a TypeError on connection failures (refused, DNS, CORS
+			// reject). WebKit surfaces this as "Load failed", Chromium as "Failed
+			// to fetch" — neither names the host. Rewrite so the toast is useful.
+			if (err instanceof TypeError) {
+				throw new Error(
+					`Could not reach TTS server at ${baseUrl}. Is it running and reachable?`
+				);
+			}
 			throw err;
 		} finally {
 			clearTimeout(timer);

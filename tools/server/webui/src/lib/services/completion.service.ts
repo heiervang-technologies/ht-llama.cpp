@@ -1,4 +1,5 @@
 import { config } from '$lib/stores/settings.svelte';
+import { selectedModelName } from '$lib/stores/models.svelte';
 import { resolveApiUrl } from '$lib/utils/backend-url';
 
 /**
@@ -33,7 +34,7 @@ export class CompletionService {
 		};
 		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-		const body = {
+		const body: Record<string, unknown> = {
 			prompt: opts.prompt,
 			n_predict: opts.maxTokens ?? Number(c.inlineCompletionMaxTokens ?? 48),
 			stream: false,
@@ -41,6 +42,9 @@ export class CompletionService {
 			stop: opts.stop ?? ['\n\n', '\n#', '\n- ', '\n* '],
 			temperature: opts.temperature ?? 0.2
 		};
+		// Router mode on /completion also requires a model name.
+		const model = selectedModelName();
+		if (model) body.model = model;
 
 		const response = await fetch(resolveApiUrl('/completion'), {
 			method: 'POST',
@@ -74,12 +78,17 @@ export class CompletionService {
 		};
 		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
-		const body = {
+		const body: Record<string, unknown> = {
 			messages,
 			stream: true,
 			temperature: opts.temperature ?? 0.4,
 			max_tokens: opts.maxTokens ?? 1024
 		};
+		// llama-server router mode rejects the request with 400 "model name is
+		// missing" when no model is named. Use the currently-selected chat model
+		// so AI commands hit the same backend the user is chatting with.
+		const model = selectedModelName();
+		if (model) body.model = model;
 
 		const response = await fetch(resolveApiUrl('/v1/chat/completions'), {
 			method: 'POST',
