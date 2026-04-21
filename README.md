@@ -15,6 +15,17 @@ This is the [Heiervang Technologies](https://github.com/heiervang-technologies) 
 | Change | Description | Contributed back? |
 |--------|-------------|-------------------|
 | Agentic contributions policy | We welcome AI-assisted and AI-generated contributions—see [CONTRIBUTING.md](CONTRIBUTING.md) | N/A |
+| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | Planned |
+| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | Partial ([#22003](https://github.com/ggml-org/llama.cpp/pull/22003)) |
+| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | Planned |
+| Rebranded WebUI | `ht-llama.cpp` branding with turquoise/purple theme and banner | No |
+| Model loading UX | Cancel button for in-progress model loads; clearer error states in router mode | No |
+| LoRA adapter UI | Auto-discovery of LoRA adapters served by `llama-server` with enable/disable panel and router-mode awareness | No |
+| OpenAI-compatible TTS | Play/stop per assistant message and autoplay toggle, wired to any `POST /v1/audio/speech` endpoint (tested against vLLM Qwen3-TTS) | No |
+| Doc mode | Second workspace mode alongside chats: standalone markdown docs with CodeMirror 6 editor, split edit/preview, and "Chat about this" to lift the document into a seeded conversation | No |
+| Configurable backend URL | Frontend works as a standalone static bundle pointing at any remote `llama-server` | No |
+| Tauri desktop shell | Native desktop wrapper around the WebUI in `tools/server/webui-tauri/` with `.desktop` launchers | No |
+| Release CI | GitHub Actions release workflow runs on the `ht` branch, not just on tags | No |
 
 Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship.
 
