@@ -62,7 +62,15 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	preEncodeConversation: false,
 	// experimental features
 	pyInterpreterEnabled: false,
-	enableContinueGeneration: false
+	enableContinueGeneration: false,
+	// tts
+	ttsEnabled: false,
+	ttsAutoplay: false,
+	ttsBaseUrl: '',
+	ttsApiKey: '',
+	ttsModel: '',
+	ttsVoice: '',
+	ttsFormat: 'wav'
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -156,7 +164,16 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	preEncodeConversation:
 		'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 	enableContinueGeneration:
-		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+	ttsEnabled: 'Enable text-to-speech for assistant messages.',
+	ttsAutoplay: 'Automatically speak assistant messages when generation completes.',
+	ttsBaseUrl:
+		'Base URL of an OpenAI-compatible TTS server (e.g. <code>http://192.168.8.123:30384</code>). Must implement <code>POST /v1/audio/speech</code>.',
+	ttsApiKey: 'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the TTS server.',
+	ttsModel: 'TTS model identifier (e.g. <code>qwen3-tts</code>, <code>tts-1</code>, <code>kokoro</code>).',
+	ttsVoice: 'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
+	ttsFormat:
+		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

@@ -7,7 +7,8 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Volume2
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -156,6 +157,47 @@
 					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
 					label: 'Show raw model names',
 					type: SettingsFieldType.CHECKBOX
+				}
+			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.TTS,
+			icon: Volume2,
+			fields: [
+				{
+					key: SETTINGS_KEYS.TTS_ENABLED,
+					label: 'Enable text-to-speech',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TTS_AUTOPLAY,
+					label: 'Autoplay new assistant messages',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TTS_BASE_URL,
+					label: 'TTS Base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_API_KEY,
+					label: 'TTS API Key',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_MODEL,
+					label: 'TTS Model',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_VOICE,
+					label: 'TTS Voice',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_FORMAT,
+					label: 'TTS Audio Format',
+					type: SettingsFieldType.INPUT
 				}
 			]
 		},
