@@ -107,6 +107,10 @@
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 	let isTranscribing = $state(false);
+	// Held while an STT request is in flight so a second mic click can cancel it,
+	// mirroring the doc-editor mic. Without this, a hung STT server would strand
+	// the user in the spinner state.
+	let transcribeAbort: AbortController | null = null;
 
 	// Prompt Picker State
 	let isPromptPickerOpen = $state(false);
@@ -529,6 +533,15 @@
 			return;
 		}
 
+		// Clicking while transcribing cancels the in-flight STT request so a slow
+		// or hung server doesn't leave the composer frozen.
+		if (isTranscribing) {
+			transcribeAbort?.abort();
+			transcribeAbort = null;
+			isTranscribing = false;
+			return;
+		}
+
 		if (isRecording) {
 			try {
 				const audioBlob = await audioRecorder.stopRecording();
@@ -543,8 +556,12 @@
 
 				if (sttOn) {
 					isTranscribing = true;
+					const controller = new AbortController();
+					transcribeAbort = controller;
 					try {
-						const text = await SttService.transcribe(audioFile);
+						const text = await SttService.transcribe(audioFile, {
+							signal: controller.signal
+						});
 						if (text) {
 							const current = value ?? '';
 							const needsSpace = current.length > 0 && !/\s$/.test(current);
@@ -560,11 +577,14 @@
 							}
 						}
 					} catch (err) {
+						// Silent on user-initiated aborts — state is already reset above.
+						if ((err as { name?: string })?.name === 'AbortError') return;
 						console.error('STT transcription failed, falling back to file attach:', err);
 						const msg = err instanceof Error ? err.message : String(err);
 						toast.error(`Transcription failed: ${msg}. Attached the recording instead.`);
 						onFilesAdd?.([audioFile]);
 					} finally {
+						if (transcribeAbort === controller) transcribeAbort = null;
 						isTranscribing = false;
 					}
 				} else {
