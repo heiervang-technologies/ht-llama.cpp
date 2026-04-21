@@ -199,11 +199,13 @@
 						? 'w-full'
 						: 'w-1/2'}"
 				>
-					<DocEditor
-						content={doc.content}
-						onChange={scheduleSave}
-						onReady={(api) => (editorApi = api)}
-					/>
+					{#key doc.id}
+						<DocEditor
+							content={doc.content}
+							onChange={scheduleSave}
+							onReady={(api) => (editorApi = api)}
+						/>
+					{/key}
 				</div>
 			{/if}
 
