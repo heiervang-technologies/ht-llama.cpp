@@ -4,6 +4,30 @@ export interface TtsSynthesizeOptions {
 	signal?: AbortSignal;
 }
 
+export interface TtsSynthesizeResult {
+	blob: Blob;
+	/** True when the request had to fall back to the bundled default reference clip. */
+	usedDefaultRef: boolean;
+}
+
+const DEFAULT_REF_URL = '/tts-default-ref.wav';
+const DEFAULT_REF_TEXT = 'Hello, this is a default reference voice sample.';
+let cachedDefaultRef: string | null = null;
+
+async function loadDefaultRefAudio(): Promise<string> {
+	if (cachedDefaultRef) return cachedDefaultRef;
+	const resp = await fetch(DEFAULT_REF_URL);
+	if (!resp.ok) throw new Error(`Failed to load default ref audio (${resp.status})`);
+	const blob = await resp.blob();
+	cachedDefaultRef = await new Promise<string>((resolve, reject) => {
+		const reader = new FileReader();
+		reader.onload = () => resolve(String(reader.result));
+		reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+		reader.readAsDataURL(blob);
+	});
+	return cachedDefaultRef;
+}
+
 /**
  * Stateless client for OpenAI-compatible TTS servers (incl. Qwen3-TTS).
  * Posts to `<baseUrl>/v1/audio/speech` and returns the audio Blob.
@@ -15,8 +39,8 @@ export interface TtsSynthesizeOptions {
  * - ttsVoice     (optional — ignored by Qwen3 when ref_audio is set)
  * - ttsFormat    (default 'wav')
  * - ttsRefAudio  (optional data: URI — enables Qwen3-TTS voice cloning.
- *                 When present, request includes ref_audio and
- *                 x_vector_only_mode=true)
+ *                 When absent, falls back to the bundled default ref clip
+ *                 so Base-task servers don't 400 out-of-the-box.)
  */
 export class TtsService {
 	static isConfigured(): boolean {
@@ -24,7 +48,10 @@ export class TtsService {
 		return Boolean(c.ttsBaseUrl?.toString().trim() && c.ttsModel?.toString().trim());
 	}
 
-	static async synthesize(text: string, opts: TtsSynthesizeOptions = {}): Promise<Blob> {
+	static async synthesize(
+		text: string,
+		opts: TtsSynthesizeOptions = {}
+	): Promise<TtsSynthesizeResult> {
 		const c = config();
 		const baseUrl = c.ttsBaseUrl?.toString().trim().replace(/\/+$/, '') ?? '';
 		if (!baseUrl || !c.ttsModel?.toString().trim()) {
@@ -42,15 +69,24 @@ export class TtsService {
 		const body: Record<string, unknown> = {
 			model: c.ttsModel.toString(),
 			input: text,
-			response_format: format
+			response_format: format,
+			// Qwen3-TTS Base task is the only one that works without a server-side
+			// speaker registry (i.e. without the multiplexer). Default to it so the
+			// client works against a raw vllm deploy.
+			task_type: 'Base'
 		};
 		const voice = c.ttsVoice?.toString().trim();
 		if (voice) body.voice = voice;
 
-		const refAudio = c.ttsRefAudio?.toString().trim();
-		if (refAudio && refAudio.startsWith('data:')) {
-			body.ref_audio = refAudio;
+		const userRefAudio = c.ttsRefAudio?.toString().trim();
+		let usedDefaultRef = false;
+		if (userRefAudio && userRefAudio.startsWith('data:')) {
+			body.ref_audio = userRefAudio;
 			body.x_vector_only_mode = true;
+		} else {
+			body.ref_audio = await loadDefaultRefAudio();
+			body.ref_text = DEFAULT_REF_TEXT;
+			usedDefaultRef = true;
 		}
 
 		// Hard-cap the request so a hung preflight (no CORS on the TTS server) or a
@@ -83,7 +119,7 @@ export class TtsService {
 			throw new Error(`TTS request failed (${response.status}): ${msg || response.statusText}`);
 		}
 
-		return await response.blob();
+		return { blob: await response.blob(), usedDefaultRef };
 	}
 }
 

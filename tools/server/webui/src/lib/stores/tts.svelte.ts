@@ -11,6 +11,7 @@ class TtsStore {
 	#currentUrl: string | null = null;
 	#controller: AbortController | null = null;
 	#consecutiveFailures = 0;
+	#defaultRefWarned = false;
 
 	get speakingId(): string | null {
 		return this.#speakingId;
@@ -50,8 +51,11 @@ class TtsStore {
 		this.#loadingId = id;
 
 		let blob: Blob;
+		let usedDefaultRef = false;
 		try {
-			blob = await TtsService.synthesize(text, { signal: controller.signal });
+			const result = await TtsService.synthesize(text, { signal: controller.signal });
+			blob = result.blob;
+			usedDefaultRef = result.usedDefaultRef;
 		} catch (err) {
 			if (this.#loadingId === id) this.#loadingId = null;
 			if (err instanceof DOMException && err.name === 'AbortError') return;
@@ -72,6 +76,12 @@ class TtsStore {
 		}
 
 		this.#consecutiveFailures = 0;
+		if (usedDefaultRef && !this.#defaultRefWarned) {
+			this.#defaultRefWarned = true;
+			toast.warning(
+				'Using the bundled default voice. Upload a reference audio clip in Settings → Voice for a real voice.'
+			);
+		}
 		if (controller.signal.aborted) return;
 
 		const url = URL.createObjectURL(blob);
