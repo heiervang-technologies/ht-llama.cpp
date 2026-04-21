@@ -129,7 +129,13 @@
 						// as "input.type.ai" collapses the entire run into one undo
 						// step. Normal edits omit the annotation to preserve the
 						// default per-keystroke behaviour for non-AI flows.
-						userEvent: opts?.stream ? 'input.type.ai' : undefined
+						userEvent: opts?.stream ? 'input.type.ai' : undefined,
+						// Keep the growing tail visible as tokens arrive. Without
+						// this, append-mode streaming scrolls off the bottom of
+						// the visible region and the user sees a static view.
+						effects: opts?.stream
+							? EditorView.scrollIntoView(safeFrom + text.length, { y: 'nearest' })
+							: undefined
 					});
 				},
 				focus: () => v.focus()

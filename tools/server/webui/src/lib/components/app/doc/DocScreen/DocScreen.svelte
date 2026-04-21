@@ -54,6 +54,27 @@
 	let commandsMenuOpen = $state(false);
 	let showDeleteDialog = $state(false);
 
+	// Preview pane stick-to-bottom while an AI command streams. Reset at the
+	// start of each run; disengaged if the user scrolls up mid-stream so we
+	// don't yank them back to a tail they're intentionally ignoring.
+	let previewEl: HTMLDivElement | undefined = $state();
+	let followPreviewTail = $state(true);
+	let commandRunningId = $derived(aiCommandsStore.runningId);
+
+	$effect(() => {
+		if (commandRunningId !== null) {
+			untrack(() => {
+				followPreviewTail = true;
+			});
+		}
+	});
+
+	$effect(() => {
+		void doc?.content;
+		if (!previewEl || commandRunningId === null || !followPreviewTail) return;
+		previewEl.scrollTop = previewEl.scrollHeight;
+	});
+
 	// A doc loaded with its default name and empty body, freshly created in
 	// the last few seconds, is almost certainly a brand-new doc. Auto-focus
 	// the title so the user can type a name without an extra click.
@@ -86,15 +107,47 @@
 				// suppresses that dialog before flushing.
 				e.preventDefault();
 				flushSaveNow();
+			} else if (
+				e.key === 'Escape' &&
+				!e.metaKey &&
+				!e.ctrlKey &&
+				!e.shiftKey &&
+				!e.altKey &&
+				aiCommandsStore.runningId !== null
+			) {
+				// Quick-bail shortcut mirroring the "Stop" button in the header.
+				// Skipped for <input>/<textarea> targets so Escape there keeps its
+				// native behaviour (e.g. reverting the doc title). CodeMirror's
+				// contentEditable is intentionally included so the user can bail
+				// without leaving the editor.
+				const target = e.target as HTMLElement | null;
+				const tag = target?.tagName;
+				if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+				e.preventDefault();
+				aiCommandsStore.stop();
 			}
 		}
 		window.addEventListener('keydown', onKeydown);
-		return () => window.removeEventListener('keydown', onKeydown);
+		return () => {
+			window.removeEventListener('keydown', onKeydown);
+			// The store's onToken callback closed over this component's editorApi.
+			// Once the component unmounts, those writes would hit a torn-down
+			// editor, so cancel the stream as part of teardown.
+			if (aiCommandsStore.runningId !== null) {
+				aiCommandsStore.stop();
+			}
+		};
 	});
 
 	$effect(() => {
 		const id = docId;
 		untrack(() => {
+			// Switching docs mid-stream would route new tokens into whichever doc's
+			// closure was captured when the command started — surprising to the
+			// user. Cancel on nav so the command dies with the old view.
+			if (aiCommandsStore.runningId !== null) {
+				aiCommandsStore.stop();
+			}
 			docsStore.loadDoc(id).then((loaded) => {
 				if (!loaded) {
 					goto('#/');
@@ -311,6 +364,7 @@
 </script>
 
 <DocScreenHeader
+	id={doc?.id ?? ''}
 	name={doc?.name ?? ''}
 	view={effectiveView}
 	{saving}
@@ -350,9 +404,13 @@
 
 			{#if effectiveView !== 'edit'}
 				<div
+					bind:this={previewEl}
 					class="flex min-h-0 {effectiveView === 'preview'
 						? 'w-full'
 						: 'w-1/2'} flex-col overflow-auto bg-background/40"
+					onwheel={(e) => {
+						if (commandRunningId !== null && e.deltaY < 0) followPreviewTail = false;
+					}}
 				>
 					<div class="prose prose-sm dark:prose-invert max-w-none px-6 py-6">
 						{#if doc.content.trim().length === 0}

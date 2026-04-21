@@ -28,6 +28,7 @@
 	import DocMoreActionsMenu from './DocMoreActionsMenu.svelte';
 
 	interface Props {
+		id: string;
 		name: string;
 		view: 'edit' | 'preview' | 'split';
 		saving: boolean;
@@ -44,6 +45,7 @@
 	}
 
 	let {
+		id,
 		name,
 		view,
 		saving,
@@ -92,6 +94,7 @@
 	);
 	let isRecording = $state(false);
 	let isTranscribing = $state(false);
+	let transcribeAbort: AbortController | null = null;
 	const audioRecorder = new AudioRecorder();
 
 	function commit() {
@@ -103,7 +106,14 @@
 	}
 
 	async function handleMicClick() {
-		if (isTranscribing) return;
+		// Clicking while transcribing cancels the in-flight STT request, so a
+		// slow/hung server doesn't strand the user in the spinner state.
+		if (isTranscribing) {
+			transcribeAbort?.abort();
+			transcribeAbort = null;
+			isTranscribing = false;
+			return;
+		}
 		if (audioRecorder.isRecording()) {
 			try {
 				const blob = await audioRecorder.stopRecording();
@@ -111,14 +121,19 @@
 				const wav = await convertToWav(blob);
 				const file = createAudioFile(wav, `dictation-${Date.now()}.wav`);
 				isTranscribing = true;
+				const controller = new AbortController();
+				transcribeAbort = controller;
 				try {
-					const text = await SttService.transcribe(file);
+					const text = await SttService.transcribe(file, { signal: controller.signal });
 					if (text) onDictate?.(text);
 				} catch (err) {
+					// Silent on user-initiated aborts — we already reset state above.
+					if ((err as { name?: string })?.name === 'AbortError') return;
 					console.error('[doc-dictate] transcribe failed', err);
 					const msg = err instanceof Error ? err.message : String(err);
 					toast.error(`Dictation failed: ${msg}`);
 				} finally {
+					if (transcribeAbort === controller) transcribeAbort = null;
 					isTranscribing = false;
 				}
 			} catch (err) {
@@ -154,6 +169,12 @@
 			onkeydown={(e) => {
 				if (e.key === 'Enter') {
 					e.preventDefault();
+					(e.currentTarget as HTMLInputElement).blur();
+				} else if (e.key === 'Escape') {
+					// Revert any in-progress edit and blur. commit() no-ops when the
+					// name hasn't changed, so resetting localName before blur is enough.
+					e.preventDefault();
+					localName = name;
 					(e.currentTarget as HTMLInputElement).blur();
 				}
 			}}
@@ -229,9 +250,8 @@
 								? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 								: ''}"
 						onclick={handleMicClick}
-						disabled={isTranscribing}
 						aria-label={isTranscribing
-							? 'Transcribing'
+							? 'Cancel transcription'
 							: isRecording
 								? 'Stop dictation'
 								: 'Start dictation'}
@@ -248,7 +268,7 @@
 				<Tooltip.Content>
 					<p>
 						{isTranscribing
-							? 'Transcribing…'
+							? 'Click to cancel transcription'
 							: isRecording
 								? 'Click to stop dictation'
 								: 'Dictate into the document at the cursor'}
@@ -270,7 +290,7 @@
 			<span class="hidden md:inline">Chat about this</span>
 		</Button>
 
-		<DocMoreActionsMenu docName={name} docContent={content} {onDelete} />
+		<DocMoreActionsMenu docId={id} docName={name} docContent={content} {onDelete} />
 
 		<BackendPill />
 
