@@ -127,12 +127,6 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
-					key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
-					label: 'Show microphone on empty input',
-					type: SettingsFieldType.CHECKBOX,
-					isExperimental: true
-				},
-				{
 					key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
 					label: 'Render user content as Markdown',
 					type: SettingsFieldType.CHECKBOX

@@ -529,7 +529,9 @@
 
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
+			toast.error(
+				'Audio recording is not supported in this browser. Try Chrome, Firefox, or Edge.'
+			);
 			return;
 		}
 
@@ -601,6 +603,19 @@
 				isRecording = true;
 			} catch (error) {
 				console.error('Failed to start recording:', error);
+				const name = (error as { name?: string })?.name;
+				const msg = error instanceof Error ? error.message : String(error);
+				if (name === 'NotAllowedError' || name === 'SecurityError') {
+					toast.error(
+						'Microphone permission denied. Enable mic access for this site in your browser settings and try again.'
+					);
+				} else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+					toast.error('No microphone detected. Plug one in or check your system audio settings.');
+				} else if (name === 'NotReadableError') {
+					toast.error('Microphone is busy. Close other apps using the mic and try again.');
+				} else {
+					toast.error(`Could not start recording: ${msg}`);
+				}
 			}
 		}
 	}

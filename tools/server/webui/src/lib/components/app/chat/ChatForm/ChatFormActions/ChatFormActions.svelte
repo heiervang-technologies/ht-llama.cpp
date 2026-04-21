@@ -140,12 +140,14 @@
 	);
 	// STT dictation gives the mic a useful purpose even when the active LLM
 	// doesn't accept audio: record → transcribe → drop text into the textarea.
-	// Gate on the same autoMicOnEmpty toggle so the user opts in once per app.
+	// If neither is configured, recording still works and falls back to
+	// attaching the .wav so the user never hits a silent no-op.
 	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
 	let canRecord = $derived(hasAudioModality || sttReady);
-	let shouldShowRecordButton = $derived(
-		canRecord && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
-	);
+	// Mic is always visible alongside the send button (conversation-first UX).
+	// Recording itself only requires mic permission; transcription vs attach is
+	// decided downstream. Hide only while a reply is streaming.
+	let shouldShowRecordButton = $derived(!isLoading && !hasAudioAttachments);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 
@@ -271,17 +273,19 @@
 				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
-	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord
-			{disabled}
-			{hasAudioModality}
-			{sttReady}
-			{isLoading}
-			{isRecording}
-			{isTranscribing}
-			{onMicClick}
-		/>
 	{:else}
+		{#if shouldShowRecordButton}
+			<ChatFormActionRecord
+				{disabled}
+				{hasAudioModality}
+				{sttReady}
+				{isLoading}
+				{isRecording}
+				{isTranscribing}
+				{onMicClick}
+			/>
+		{/if}
+
 		<ChatFormActionSubmit
 			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}
