@@ -1,7 +1,14 @@
 <script module lang="ts">
 	export interface DocEditorApi {
 		getSelection(): { from: number; to: number; text: string };
-		replaceRange(from: number, to: number, text: string): void;
+		/**
+		 * Replace the document range [from, to) with `text`. Pass
+		 * { stream: true } while streaming tokens from an AI command so each
+		 * dispatch is annotated as a single logical edit — CodeMirror's history
+		 * will merge adjacent streaming transactions into one undo step instead
+		 * of one-per-token.
+		 */
+		replaceRange(from: number, to: number, text: string, opts?: { stream?: boolean }): void;
 		focus(): void;
 	}
 </script>
@@ -111,11 +118,19 @@
 					const to = Math.max(sel.from, sel.to);
 					return { from, to, text: v.state.sliceDoc(from, to) };
 				},
-				replaceRange: (from, to, text) => {
+				replaceRange: (from, to, text, opts) => {
 					const docLen = v.state.doc.length;
 					const safeFrom = Math.max(0, Math.min(from, docLen));
 					const safeTo = Math.max(safeFrom, Math.min(to, docLen));
-					v.dispatch({ changes: { from: safeFrom, to: safeTo, insert: text } });
+					v.dispatch({
+						changes: { from: safeFrom, to: safeTo, insert: text },
+						// CM6 history merges consecutive transactions whose userEvent
+						// shares a prefix ("input.*"). Tagging each streamed token
+						// as "input.type.ai" collapses the entire run into one undo
+						// step. Normal edits omit the annotation to preserve the
+						// default per-keystroke behaviour for non-AI flows.
+						userEvent: opts?.stream ? 'input.type.ai' : undefined
+					});
 				},
 				focus: () => v.focus()
 			});

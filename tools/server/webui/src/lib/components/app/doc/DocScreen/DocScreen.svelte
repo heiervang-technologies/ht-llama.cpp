@@ -140,7 +140,7 @@
 				baseContent,
 				(delta) => {
 					outputSoFar += delta;
-					api.replaceRange(from, currentEnd, outputSoFar);
+					api.replaceRange(from, currentEnd, outputSoFar, { stream: true });
 					currentEnd = from + outputSoFar.length;
 				},
 				selectionText
@@ -157,11 +157,25 @@
 		// Append mode (default): add a separator and stream after the existing doc.
 		const separator = baseContent.trimEnd().length === 0 ? '' : '\n\n---\n\n';
 		let outputSoFar = '';
+		const appendStart = baseContent.length + separator.length;
+		let appendEnd = appendStart;
+		// Seed the separator once up front so subsequent token writes just extend
+		// the tail, and so the preview immediately shows the divider.
+		if (editorApi) {
+			editorApi.replaceRange(baseContent.length, baseContent.length, separator, { stream: true });
+		}
 		await aiCommandsStore.run(
 			commandId,
 			baseContent,
 			(delta) => {
 				outputSoFar += delta;
+				if (editorApi) {
+					editorApi.replaceRange(appendStart, appendEnd, outputSoFar, { stream: true });
+					appendEnd = appendStart + outputSoFar.length;
+				}
+				// Keep the docs store mirror in sync so the preview pane and any
+				// other reactive consumers re-render. The editor already has the
+				// change applied, so DocEditor's $effect will no-op.
 				docsStore.setContentLive(doc!.id, baseContent + separator + outputSoFar);
 			},
 			selectionText
