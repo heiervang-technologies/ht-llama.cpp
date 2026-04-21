@@ -169,9 +169,12 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	ttsAutoplay: 'Automatically speak assistant messages when generation completes.',
 	ttsBaseUrl:
 		'Base URL of an OpenAI-compatible TTS server (e.g. <code>http://192.168.8.123:30384</code>). Must implement <code>POST /v1/audio/speech</code>.',
-	ttsApiKey: 'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the TTS server.',
-	ttsModel: 'TTS model identifier (e.g. <code>qwen3-tts</code>, <code>tts-1</code>, <code>kokoro</code>).',
-	ttsVoice: 'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
+	ttsApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the TTS server.',
+	ttsModel:
+		'TTS model identifier (e.g. <code>qwen3-tts</code>, <code>tts-1</code>, <code>kokoro</code>).',
+	ttsVoice:
+		'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
 	ttsFormat:
 		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).'
 };

@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { Trash2, Pencil } from '@lucide/svelte';
+	import { onMount } from 'svelte';
+	import { FileText, Trash2, Pencil } from '@lucide/svelte';
 	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -13,13 +14,22 @@
 		conversations,
 		buildConversationTree
 	} from '$lib/stores/conversations.svelte';
+	import { docsStore, docs } from '$lib/stores/docs.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { getPreviewText } from '$lib/utils';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
 
-	let currentChatId = $derived(page.params.id);
+	onMount(() => {
+		if (!docsStore.isInitialized) {
+			docsStore.initialize();
+		}
+	});
+
+	let currentRouteId = $derived(page.route.id);
+	let currentChatId = $derived(currentRouteId === '/chat/[id]' ? page.params.id : undefined);
+	let currentDocId = $derived(currentRouteId === '/doc/[id]' ? page.params.id : undefined);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
 	let showDeleteDialog = $state(false);
@@ -191,6 +201,46 @@
 			</Sidebar.Menu>
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
+
+	{#if !isSearchModeActive && docs().length > 0}
+		<Sidebar.Group class="mt-2 space-y-2 p-0 px-4">
+			<Sidebar.GroupLabel>Documents</Sidebar.GroupLabel>
+
+			<Sidebar.GroupContent>
+				<Sidebar.Menu>
+					{#each docs() as doc (doc.id)}
+						<Sidebar.MenuItem class="mb-1 p-0">
+							<Sidebar.MenuButton
+								class="group flex w-full items-center gap-2 {currentDocId === doc.id
+									? 'bg-sidebar-accent text-sidebar-accent-foreground'
+									: ''}"
+								onclick={async () => {
+									handleMobileSidebarItemClick();
+									await goto(`#/doc/${doc.id}`);
+								}}
+							>
+								<FileText class="h-4 w-4 shrink-0" />
+								<span class="truncate text-sm">{doc.name || 'Untitled'}</span>
+
+								<button
+									type="button"
+									class="ml-auto opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+									aria-label="Delete document"
+									onclick={async (e) => {
+										e.preventDefault();
+										e.stopPropagation();
+										await docsStore.deleteDoc(doc.id);
+									}}
+								>
+									<Trash2 class="h-3.5 w-3.5" />
+								</button>
+							</Sidebar.MenuButton>
+						</Sidebar.MenuItem>
+					{/each}
+				</Sidebar.Menu>
+			</Sidebar.GroupContent>
+		</Sidebar.Group>
+	{/if}
 </ScrollArea>
 
 <DialogConfirmation

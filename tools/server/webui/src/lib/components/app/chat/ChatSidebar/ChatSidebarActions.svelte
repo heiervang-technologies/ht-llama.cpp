@@ -1,11 +1,12 @@
 <script lang="ts">
-	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { FileText, Search, SquarePen, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { McpLogo } from '$lib/components/app';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { docsStore } from '$lib/stores/docs.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -67,6 +68,21 @@
 			</div>
 
 			<KeyboardShortcutInfo keys={['shift', 'cmd', 'o']} />
+		</Button>
+
+		<Button
+			class="w-full justify-start backdrop-blur-none!"
+			onclick={async () => {
+				handleMobileSidebarItemClick();
+				await docsStore.createDoc();
+			}}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<FileText class="h-4 w-4" />
+
+				New doc
+			</div>
 		</Button>
 
 		<Button

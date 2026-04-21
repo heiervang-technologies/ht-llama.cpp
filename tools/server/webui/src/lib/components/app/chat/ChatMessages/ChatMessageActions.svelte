@@ -127,7 +127,12 @@
 
 			{#if role === MessageRole.ASSISTANT && onSpeak}
 				{#if isLoadingSpeech}
-					<ActionIcon icon={Loader2} tooltip="Loading speech…" onclick={onSpeak} class="animate-spin" />
+					<ActionIcon
+						icon={Loader2}
+						tooltip="Loading speech…"
+						onclick={onSpeak}
+						class="animate-spin"
+					/>
 				{:else if isSpeaking}
 					<ActionIcon icon={Square} tooltip="Stop speaking" onclick={onSpeak} />
 				{:else}

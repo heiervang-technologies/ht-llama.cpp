@@ -29,6 +29,7 @@
 	let { children } = $props();
 
 	let isChatRoute = $derived(page.route.id === '/chat/[id]');
+	let isDocRoute = $derived(page.route.id === '/doc/[id]');
 	let isHomeRoute = $derived(page.route.id === '/');
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
@@ -112,8 +113,8 @@
 		} else if (isHomeRoute && isNewChatMode) {
 			// Keep sidebar open in new chat mode
 			sidebarOpen = true;
-		} else if (isChatRoute) {
-			// On chat routes, only auto-show sidebar if setting is enabled
+		} else if (isChatRoute || isDocRoute) {
+			// On chat/doc routes, only auto-show sidebar if setting is enabled
 			if (autoShowSidebarOnNewChat) {
 				sidebarOpen = true;
 			}

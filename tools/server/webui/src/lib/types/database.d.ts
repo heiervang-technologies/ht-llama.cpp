@@ -110,3 +110,11 @@ export type ExportedConversation = {
 };
 
 export type ExportedConversations = ExportedConversation | ExportedConversation[];
+
+export interface DatabaseDoc {
+	id: string;
+	name: string;
+	content: string;
+	createdAt: number;
+	lastModified: number;
+}
