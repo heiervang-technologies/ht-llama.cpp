@@ -793,6 +793,12 @@ export { default as ChatSidebarActions } from './ChatSidebar/ChatSidebarActions.
 export { default as ChatSidebarConversationItem } from './ChatSidebar/ChatSidebarConversationItem.svelte';
 
 /**
+ * Single document item in sidebar. Mirrors ChatSidebarConversationItem for docs:
+ * cursor-pointer row, tooltip, hover-revealed dropdown with Rename/Delete actions.
+ */
+export { default as ChatSidebarDocItem } from './ChatSidebar/ChatSidebarDocItem.svelte';
+
+/**
  * Search input for filtering conversations in sidebar. Filters conversation
  * list by title as user types. Shows clear button when query is not empty.
  * Integrated into sidebar header with proper styling.

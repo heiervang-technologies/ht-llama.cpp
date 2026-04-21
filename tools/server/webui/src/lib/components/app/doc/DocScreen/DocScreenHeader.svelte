@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Settings, MessageSquarePlus, Columns, FileText, Eye } from '@lucide/svelte';
+	import { Settings, MessageSquarePlus, Columns, FileText, Eye, Sparkles } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { BackendPill } from '$lib/components/app/navigation';
+	import { config, settingsStore } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		name: string;
@@ -20,9 +21,14 @@
 	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	let localName = $derived(name);
+	let inlineOn = $derived(Boolean(config().inlineCompletionEnabled));
 
 	function commit() {
 		if (localName !== name) onRename(localName);
+	}
+
+	function toggleInlineCompletion() {
+		settingsStore.updateConfig('inlineCompletionEnabled', !config().inlineCompletionEnabled);
 	}
 </script>
 
@@ -31,7 +37,7 @@
 		? 'md:left-[var(--sidebar-width)]'
 		: ''}"
 >
-	<div class="pointer-events-auto ml-10 flex min-w-0 flex-1 items-center gap-2 md:ml-0">
+	<div class="pointer-events-auto ml-12 flex min-w-0 flex-1 items-center gap-2 md:ml-12">
 		<input
 			type="text"
 			class="min-w-0 flex-1 truncate rounded-md bg-transparent px-2 py-1 text-sm font-medium text-foreground outline-none focus:bg-muted/40"
@@ -81,6 +87,19 @@
 				<Eye class="h-3.5 w-3.5" />
 			</Button>
 		</div>
+
+		<Button
+			variant={inlineOn ? 'secondary' : 'ghost'}
+			size="sm"
+			onclick={toggleInlineCompletion}
+			class="gap-1.5 rounded-full backdrop-blur-lg"
+			title={inlineOn
+				? 'AI ghost-text completions are ON (Tab to accept, Esc to dismiss)'
+				: 'Enable AI ghost-text completions'}
+		>
+			<Sparkles class="h-4 w-4 {inlineOn ? 'text-primary' : ''}" />
+			<span class="hidden md:inline">{inlineOn ? 'AI on' : 'AI off'}</span>
+		</Button>
 
 		<Button
 			variant="ghost"

@@ -110,10 +110,7 @@
 				step="1"
 				value={secondary}
 				oninput={(e) =>
-					onChange(
-						'themeSecondaryHue',
-						clampHue(Number((e.target as HTMLInputElement).value))
-					)}
+					onChange('themeSecondaryHue', clampHue(Number((e.target as HTMLInputElement).value)))}
 				class="hue-slider flex-1"
 				aria-label="Secondary hue"
 			/>
