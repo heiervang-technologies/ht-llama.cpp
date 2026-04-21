@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { BackendPill } from '$lib/components/app/navigation';
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -14,6 +15,8 @@
 		: ''}"
 >
 	<div class="pointer-events-auto flex items-center space-x-2">
+		<BackendPill />
+
 		<Button
 			variant="ghost"
 			size="icon-lg"

@@ -8,6 +8,7 @@ export const SETTINGS_KEYS = {
 	// General
 	THEME: 'theme',
 	API_KEY: 'apiKey',
+	BACKEND_BASE_URL: 'backendBaseUrl',
 	SYSTEM_MESSAGE: 'systemMessage',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',

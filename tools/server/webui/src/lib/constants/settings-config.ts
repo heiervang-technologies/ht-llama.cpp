@@ -5,6 +5,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
+	backendBaseUrl: '',
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
@@ -66,6 +67,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
+	backendBaseUrl:
+		'Base URL of the llama-server backend (e.g. <code>http://192.168.8.158:30184</code>). Leave empty to use the same origin as the webui. When set, a pill in the header shows the active hostname.',
 	systemMessage: 'The starting message that defines how model should behave.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:

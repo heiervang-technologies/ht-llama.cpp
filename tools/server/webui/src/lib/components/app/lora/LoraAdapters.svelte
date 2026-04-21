@@ -42,7 +42,8 @@
 			class={cn(
 				'inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
 				activeCount > 0 ? 'text-foreground' : 'text-muted-foreground',
-				isOpen ? 'text-foreground' : ''
+				isOpen ? 'text-foreground' : '',
+				className
 			)}
 		>
 			<Layers class="h-3.5 w-3.5" />
@@ -96,7 +97,15 @@
 									)}
 								>
 									{#if adapter.enabled}
-										<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+										<svg
+											class="h-3 w-3"
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											stroke-width="3"
+											stroke-linecap="round"
+											stroke-linejoin="round"
+										>
 											<polyline points="20 6 9 17 4 12" />
 										</svg>
 									{/if}
@@ -129,7 +138,7 @@
 									'h-6 w-14 shrink-0 rounded border bg-background px-1.5 text-right font-mono text-[11px] tabular-nums outline-none focus:border-primary focus:ring-1 focus:ring-primary',
 									adapter.enabled
 										? 'border-border text-foreground'
-										: 'border-border/50 text-muted-foreground/60 cursor-not-allowed'
+										: 'cursor-not-allowed border-border/50 text-muted-foreground/60'
 								)}
 							/>
 						</div>
@@ -154,38 +163,34 @@
 						</div>
 					</div>
 				{/if}
+			{:else if loraStore.allDiscovered.length === 0}
+				<div class="px-2 py-3 text-center text-xs text-muted-foreground">
+					No LoRA adapters discovered.
+				</div>
 			{:else}
-				{#if loraStore.allDiscovered.length === 0}
-					<div class="px-2 py-3 text-center text-xs text-muted-foreground">
-						No LoRA adapters discovered.
-					</div>
-				{:else}
-					{#each loraStore.allDiscovered as adapter (adapter.path)}
-						<div
+				{#each loraStore.allDiscovered as adapter (adapter.path)}
+					<div
+						class={cn(
+							'flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs',
+							loadedPaths.has(adapter.path) ? 'text-foreground' : 'text-muted-foreground'
+						)}
+					>
+						<span
 							class={cn(
-								'flex items-center gap-2 rounded-sm px-2 py-1.5 text-xs',
-								loadedPaths.has(adapter.path)
-									? 'text-foreground'
-									: 'text-muted-foreground'
+								'h-2 w-2 shrink-0 rounded-full',
+								loadedPaths.has(adapter.path) ? 'bg-green-500' : 'bg-muted-foreground/30'
 							)}
-						>
-							<span
-								class={cn(
-									'h-2 w-2 shrink-0 rounded-full',
-									loadedPaths.has(adapter.path) ? 'bg-green-500' : 'bg-muted-foreground/30'
-								)}
-							></span>
+						></span>
 
-							<span class="min-w-0 flex-1 truncate font-medium" title={adapter.path}>
-								{adapter.name}
-							</span>
+						<span class="min-w-0 flex-1 truncate font-medium" title={adapter.path}>
+							{adapter.name}
+						</span>
 
-							<span class="shrink-0 text-[10px] text-muted-foreground/60">
-								{adapter.architecture}
-							</span>
-						</div>
-					{/each}
-				{/if}
+						<span class="shrink-0 text-[10px] text-muted-foreground/60">
+							{adapter.architecture}
+						</span>
+					</div>
+				{/each}
 			{/if}
 
 			<div class="mt-1 border-t border-border/50 pt-1.5">

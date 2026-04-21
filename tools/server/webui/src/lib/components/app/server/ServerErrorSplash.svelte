@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
+	import { AlertTriangle, RefreshCw, Key, Server, CheckCircle, XCircle } from '@lucide/svelte';
+	import { resolveApiUrl } from '$lib/utils/backend-url';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -40,6 +40,10 @@
 	let apiKeyState = $state<'idle' | 'validating' | 'success' | 'error'>('idle');
 	let apiKeyError = $state('');
 
+	let backendUrlInput = $state('');
+	let showBackendUrlInput = $state(false);
+	let backendUrlState = $state<'idle' | 'saving'>('idle');
+
 	function handleRetryConnection() {
 		if (onRetry) {
 			onRetry();
@@ -55,6 +59,26 @@
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
 	}
 
+	function handleShowBackendUrlInput() {
+		showBackendUrlInput = true;
+		const currentConfig = config();
+		backendUrlInput = currentConfig.backendBaseUrl?.toString() || '';
+	}
+
+	function handleSaveBackendUrl() {
+		backendUrlState = 'saving';
+		settingsStore.updateConfig('backendBaseUrl', backendUrlInput.trim());
+		showBackendUrlInput = false;
+		backendUrlState = 'idle';
+		serverStore.fetch();
+	}
+
+	function handleBackendUrlKeydown(event: KeyboardEvent) {
+		if (event.key === KeyboardKey.ENTER) {
+			handleSaveBackendUrl();
+		}
+	}
+
 	async function handleSaveApiKey() {
 		if (!apiKeyInput.trim()) return;
 
@@ -66,7 +90,7 @@
 			settingsStore.updateConfig('apiKey', apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch(`${base}/props`, {
+			const response = await fetch(resolveApiUrl('/props'), {
 				headers: {
 					'Content-Type': 'application/json',
 					Authorization: `Bearer ${apiKeyInput.trim()}`
@@ -224,6 +248,45 @@
 						variant="outline"
 						class="flex-1"
 						disabled={apiKeyState === 'validating'}
+					>
+						Cancel
+					</Button>
+				</div>
+			</div>
+		{/if}
+
+		{#if !showBackendUrlInput}
+			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4">
+				<Button onclick={handleShowBackendUrlInput} variant="outline" class="w-full">
+					<Server class="h-4 w-4" />
+					Configure Backend URL
+				</Button>
+			</div>
+		{:else}
+			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4 space-y-3 text-left">
+				<div class="space-y-2">
+					<Label for="backend-url-input" class="text-sm font-medium">Backend Base URL</Label>
+					<Input
+						id="backend-url-input"
+						placeholder="http://192.168.8.170:30184"
+						bind:value={backendUrlInput}
+						onkeydown={handleBackendUrlKeydown}
+						class="w-full"
+						disabled={backendUrlState === 'saving'}
+					/>
+					<p class="text-xs text-muted-foreground">
+						Leave empty to use the same origin as the webui.
+					</p>
+				</div>
+				<div class="flex gap-2">
+					<Button onclick={handleSaveBackendUrl} class="flex-1">Save & Retry</Button>
+					<Button
+						onclick={() => {
+							showBackendUrlInput = false;
+							backendUrlState = 'idle';
+						}}
+						variant="outline"
+						class="flex-1"
 					>
 						Cancel
 					</Button>

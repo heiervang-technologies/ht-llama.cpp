@@ -1,4 +1,5 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
+import { resolveApiUrl } from '$lib/utils/backend-url';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
@@ -202,7 +203,7 @@ export class ChatService {
 		}
 
 		try {
-			const response = await fetch(`./v1/chat/completions`, {
+			const response = await fetch(resolveApiUrl('./v1/chat/completions'), {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -293,7 +294,7 @@ export class ChatService {
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
 			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
-			const res = await fetch(url, { signal });
+			const res = await fetch(resolveApiUrl(url), { signal });
 			if (!res.ok) return true;
 
 			const slots: { is_processing: boolean }[] = await res.json();
@@ -368,7 +369,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(`./v1/chat/completions`, {
+			await fetch(resolveApiUrl('./v1/chat/completions'), {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),

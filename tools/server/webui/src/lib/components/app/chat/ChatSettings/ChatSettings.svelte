@@ -55,6 +55,11 @@
 				},
 				{ key: SETTINGS_KEYS.API_KEY, label: 'API Key', type: SettingsFieldType.INPUT },
 				{
+					key: SETTINGS_KEYS.BACKEND_BASE_URL,
+					label: 'Backend Base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
 					key: SETTINGS_KEYS.SYSTEM_MESSAGE,
 					label: 'System Message',
 					type: SettingsFieldType.TEXTAREA
