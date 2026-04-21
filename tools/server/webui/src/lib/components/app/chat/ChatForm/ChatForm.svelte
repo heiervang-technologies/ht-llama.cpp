@@ -40,6 +40,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
+	import { SttService } from '$lib/services/stt.service';
+	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -104,6 +106,7 @@
 	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
+	let isTranscribing = $state(false);
 
 	// Prompt Picker State
 	let isPromptPickerOpen = $state(false);
@@ -531,12 +534,46 @@
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
-
-				onFilesAdd?.([audioFile]);
 				isRecording = false;
+
+				const sttOn =
+					Boolean(currentConfig.sttEnabled) &&
+					Boolean(currentConfig.sttAutoTranscribe) &&
+					SttService.isConfigured();
+
+				if (sttOn) {
+					isTranscribing = true;
+					try {
+						const text = await SttService.transcribe(audioFile);
+						if (text) {
+							const current = value ?? '';
+							const needsSpace = current.length > 0 && !/\s$/.test(current);
+							value = current + (needsSpace ? ' ' : '') + text;
+							onValueChange?.(value);
+							// Give the textarea a tick to render, then focus + resize.
+							queueMicrotask(() => textareaRef?.focus());
+							// Voice-only flow: submit automatically when the user has opted
+							// in. Skip when a model response is already streaming so we don't
+							// fire a second request mid-stream.
+							if (currentConfig.sttAutoSend && !isLoading && !disabled) {
+								queueMicrotask(() => onSubmit?.());
+							}
+						}
+					} catch (err) {
+						console.error('STT transcription failed, falling back to file attach:', err);
+						const msg = err instanceof Error ? err.message : String(err);
+						toast.error(`Transcription failed: ${msg}. Attached the recording instead.`);
+						onFilesAdd?.([audioFile]);
+					} finally {
+						isTranscribing = false;
+					}
+				} else {
+					onFilesAdd?.([audioFile]);
+				}
 			} catch (error) {
 				console.error('Failed to stop recording:', error);
 				isRecording = false;
+				isTranscribing = false;
 			}
 		} else {
 			try {
@@ -629,6 +666,7 @@
 				{disabled}
 				{isLoading}
 				{isRecording}
+				{isTranscribing}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

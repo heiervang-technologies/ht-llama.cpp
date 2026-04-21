@@ -1,10 +1,11 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import type { McpServerOverride } from '$lib/types/database';
+import type { DatabaseDoc, McpServerOverride } from '$lib/types/database';
 
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
 	messages!: EntityTable<DatabaseMessage, string>;
+	docs!: EntityTable<DatabaseDoc, 'id'>;
 
 	constructor() {
 		super('LlamacppWebui');
@@ -12,6 +13,12 @@ class LlamacppDatabase extends Dexie {
 		this.version(1).stores({
 			conversations: 'id, lastModified, currNode, name',
 			messages: 'id, convId, type, role, timestamp, parent, children'
+		});
+
+		this.version(2).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name'
 		});
 	}
 }
@@ -487,5 +494,45 @@ export class DatabaseService {
 
 			return newConv;
 		});
+	}
+
+	/**
+	 *
+	 *
+	 * Docs
+	 *
+	 *
+	 */
+
+	static async listDocs(): Promise<DatabaseDoc[]> {
+		return await db.docs.orderBy('lastModified').reverse().toArray();
+	}
+
+	static async getDoc(id: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.get(id);
+	}
+
+	static async createDoc(name: string, content = ''): Promise<DatabaseDoc> {
+		const now = Date.now();
+		const doc: DatabaseDoc = {
+			id: uuid(),
+			name,
+			content,
+			createdAt: now,
+			lastModified: now
+		};
+		await db.docs.add(doc);
+		return doc;
+	}
+
+	static async updateDoc(
+		id: string,
+		updates: Partial<Omit<DatabaseDoc, 'id' | 'createdAt'>>
+	): Promise<void> {
+		await db.docs.update(id, { ...updates, lastModified: Date.now() });
+	}
+
+	static async deleteDoc(id: string): Promise<void> {
+		await db.docs.delete(id);
 	}
 }

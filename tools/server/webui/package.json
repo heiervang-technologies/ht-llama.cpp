@@ -78,7 +78,14 @@
 		"vitest-browser-svelte": "^0.1.0"
 	},
 	"dependencies": {
+		"@codemirror/commands": "^6.10.3",
+		"@codemirror/lang-markdown": "^6.5.0",
+		"@codemirror/language": "^6.12.3",
+		"@codemirror/language-data": "^6.5.2",
+		"@codemirror/state": "^6.6.0",
+		"@codemirror/view": "^6.41.1",
 		"@modelcontextprotocol/sdk": "^1.25.1",
+		"codemirror": "^6.0.2",
 		"highlight.js": "^11.11.1",
 		"mode-watcher": "^1.1.0",
 		"pdfjs-dist": "^5.4.54",

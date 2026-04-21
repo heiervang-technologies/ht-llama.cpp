@@ -20,7 +20,7 @@
  */
 
 import { browser } from '$app/environment';
-import { base } from '$app/paths';
+import { resolveApiUrl } from '$lib/utils/backend-url';
 import { MCPService } from '$lib/services/mcp.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
@@ -108,7 +108,7 @@ class MCPStore {
 	 */
 	async probeProxy(): Promise<void> {
 		try {
-			const response = await fetch(`${base}${CORS_PROXY_ENDPOINT}`, { method: 'HEAD' });
+			const response = await fetch(resolveApiUrl(CORS_PROXY_ENDPOINT), { method: 'HEAD' });
 			this._proxyAvailable = response.status !== 404;
 		} catch {
 			this._proxyAvailable = false;

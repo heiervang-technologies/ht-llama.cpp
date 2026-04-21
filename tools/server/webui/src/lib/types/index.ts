@@ -65,6 +65,7 @@ export type {
 	DatabaseMessageExtraTextFile,
 	DatabaseMessageExtra,
 	DatabaseMessage,
+	DatabaseDoc,
 	ExportedConversation,
 	ExportedConversations
 } from './database';

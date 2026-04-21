@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package, X } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -72,7 +71,10 @@
 
 	let triggerModelId = $state<string | null>(null);
 	let isLoadingModel = $derived(
-		triggerModelId ? modelsStore.isModelOperationInProgress(triggerModelId) && !modelsStore.isModelCancelling(triggerModelId) : false
+		triggerModelId
+			? modelsStore.isModelOperationInProgress(triggerModelId) &&
+					!modelsStore.isModelCancelling(triggerModelId)
+			: false
 	);
 	let isCancellingModel = $derived(
 		triggerModelId ? modelsStore.isModelCancelling(triggerModelId) : false
@@ -328,13 +330,17 @@
 					{/if}
 
 					{#if isCancellingModel}
-						<Loader2 class="h-3 w-3.5 animate-spin-reverse text-orange-400" />
+						<Loader2 class="animate-spin-reverse h-3 w-3.5 text-orange-400" />
 					{:else if isLoadingModel}
 						<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
 						<button
 							type="button"
 							aria-label="Cancel loading"
-							onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}
+							onclick={(e) => {
+								e.preventDefault();
+								e.stopPropagation();
+								handleCancelLoad();
+							}}
 						>
 							<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
 						</button>

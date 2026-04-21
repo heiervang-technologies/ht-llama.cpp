@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import {
+		ArtifactDrawer,
 		ChatScreenForm,
 		ChatScreenHeader,
 		ChatMessages,
@@ -35,7 +36,8 @@
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
+	import { Trash2, AlertTriangle, FileText, RefreshCw } from '@lucide/svelte';
+	import { docsStore } from '$lib/stores/docs.svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
 	let { showCenteredEmpty = false } = $props();
@@ -325,6 +327,16 @@
 			initialMessage = pendingDraft.message;
 			uploadedFiles = pendingDraft.files;
 		}
+
+		try {
+			const docSeed = globalThis.sessionStorage?.getItem('pendingDocSeed');
+			if (docSeed) {
+				initialMessage = docSeed;
+				globalThis.sessionStorage?.removeItem('pendingDocSeed');
+			}
+		} catch {
+			/* ignore */
+		}
 	});
 
 	$effect(() => {
@@ -472,6 +484,17 @@
 					showHelperText
 					bind:uploadedFiles
 				/>
+
+				<div class="mt-6 flex justify-center">
+					<button
+						type="button"
+						onclick={() => docsStore.createDoc()}
+						class="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/60 px-4 py-2 text-sm text-muted-foreground backdrop-blur transition-colors hover:bg-background hover:text-foreground"
+					>
+						<FileText class="h-4 w-4" />
+						Or start a document
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -575,6 +598,8 @@
 	open={Boolean(activeErrorDialog)}
 	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
 />
+
+<ArtifactDrawer />
 
 <style>
 	.conversation-chat-form {

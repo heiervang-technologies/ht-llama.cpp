@@ -7,7 +7,10 @@
 export const SETTINGS_KEYS = {
 	// General
 	THEME: 'theme',
+	THEME_PRIMARY_HUE: 'themePrimaryHue',
+	THEME_SECONDARY_HUE: 'themeSecondaryHue',
 	API_KEY: 'apiKey',
+	BACKEND_BASE_URL: 'backendBaseUrl',
 	SYSTEM_MESSAGE: 'systemMessage',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
@@ -21,6 +24,30 @@ export const SETTINGS_KEYS = {
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	KEEP_STATS_VISIBLE: 'keepStatsVisible',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
+	// TTS
+	TTS_ENABLED: 'ttsEnabled',
+	TTS_AUTOPLAY: 'ttsAutoplay',
+	TTS_BASE_URL: 'ttsBaseUrl',
+	TTS_API_KEY: 'ttsApiKey',
+	TTS_MODEL: 'ttsModel',
+	TTS_VOICE: 'ttsVoice',
+	TTS_FORMAT: 'ttsFormat',
+	TTS_REF_AUDIO: 'ttsRefAudio',
+	TTS_REF_AUDIO_NAME: 'ttsRefAudioName',
+	// STT
+	STT_ENABLED: 'sttEnabled',
+	STT_AUTO_TRANSCRIBE: 'sttAutoTranscribe',
+	STT_AUTO_SEND: 'sttAutoSend',
+	STT_BASE_URL: 'sttBaseUrl',
+	STT_API_KEY: 'sttApiKey',
+	STT_MODEL: 'sttModel',
+	STT_LANGUAGE: 'sttLanguage',
+	// Inline AI completions
+	INLINE_COMPLETION_ENABLED: 'inlineCompletionEnabled',
+	INLINE_COMPLETION_DELAY: 'inlineCompletionDelay',
+	INLINE_COMPLETION_MAX_TOKENS: 'inlineCompletionMaxTokens',
+	// AI commands (doc editor)
+	AI_COMMANDS: 'aiCommands',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',

@@ -7,7 +7,9 @@
 		Monitor,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Volume2,
+		Wand2
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -16,6 +18,9 @@
 		McpLogo,
 		McpServersSettings
 	} from '$lib/components/app';
+	import ThemeHuePicker from './ThemeHuePicker.svelte';
+	import TtsRefAudioPicker from './TtsRefAudioPicker.svelte';
+	import AiCommandsEditor from './AiCommandsEditor.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -54,6 +59,11 @@
 					options: SETTINGS_COLOR_MODES_CONFIG
 				},
 				{ key: SETTINGS_KEYS.API_KEY, label: 'API Key', type: SettingsFieldType.INPUT },
+				{
+					key: SETTINGS_KEYS.BACKEND_BASE_URL,
+					label: 'Backend Base URL',
+					type: SettingsFieldType.INPUT
+				},
 				{
 					key: SETTINGS_KEYS.SYSTEM_MESSAGE,
 					label: 'System Message',
@@ -151,8 +161,105 @@
 					key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,
 					label: 'Show raw model names',
 					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.INLINE_COMPLETION_ENABLED,
+					label: 'Inline AI completions in doc editor',
+					type: SettingsFieldType.CHECKBOX,
+					isExperimental: true
+				},
+				{
+					key: SETTINGS_KEYS.INLINE_COMPLETION_DELAY,
+					label: 'Inline completion delay (ms)',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.INLINE_COMPLETION_MAX_TOKENS,
+					label: 'Inline completion max tokens',
+					type: SettingsFieldType.INPUT
 				}
 			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.TTS,
+			icon: Volume2,
+			fields: [
+				{
+					key: SETTINGS_KEYS.TTS_ENABLED,
+					label: 'Enable text-to-speech',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TTS_AUTOPLAY,
+					label: 'Autoplay new assistant messages',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.TTS_BASE_URL,
+					label: 'TTS Base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_API_KEY,
+					label: 'TTS API Key',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_MODEL,
+					label: 'TTS Model',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_VOICE,
+					label: 'TTS Voice',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.TTS_FORMAT,
+					label: 'TTS Audio Format',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.STT_ENABLED,
+					label: 'Enable speech-to-text',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.STT_AUTO_TRANSCRIBE,
+					label: 'Auto-transcribe mic recordings into textarea',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.STT_AUTO_SEND,
+					label: 'Auto-send after transcription (voice-only flow)',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.STT_BASE_URL,
+					label: 'STT Base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.STT_API_KEY,
+					label: 'STT API Key',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.STT_MODEL,
+					label: 'STT Model',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.STT_LANGUAGE,
+					label: 'STT Language (ISO 639-1)',
+					type: SettingsFieldType.INPUT
+				}
+			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.AI_COMMANDS,
+			icon: Wand2,
+			fields: []
 		},
 		{
 			title: SETTINGS_SECTION_TITLES.SAMPLING,
@@ -371,10 +478,29 @@
 		localConfig[key] = value;
 	}
 
+	function handleHueChange(key: 'themePrimaryHue' | 'themeSecondaryHue', value: number) {
+		localConfig[key] = value;
+		if (typeof document !== 'undefined') {
+			const prop = key === 'themePrimaryHue' ? '--hue-primary' : '--hue-secondary';
+			document.documentElement.style.setProperty(prop, String(value));
+		}
+	}
+
 	function handleReset() {
 		localConfig = { ...config() };
 
 		setMode(localConfig.theme as ColorMode);
+
+		applyHuesFromLocal();
+	}
+
+	function applyHuesFromLocal() {
+		if (typeof document === 'undefined') return;
+		const root = document.documentElement;
+		const p = Number(localConfig.themePrimaryHue);
+		const s = Number(localConfig.themeSecondaryHue);
+		if (Number.isFinite(p)) root.style.setProperty('--hue-primary', String(p));
+		if (Number.isFinite(s)) root.style.setProperty('--hue-secondary', String(s));
 	}
 
 	function handleSave() {
@@ -446,7 +572,7 @@
 
 	export function reset() {
 		localConfig = { ...config() };
-
+		applyHuesFromLocal();
 		setTimeout(updateScrollButtons, 100);
 	}
 
@@ -540,6 +666,11 @@
 
 				{#if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 					<ChatSettingsImportExportTab />
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.AI_COMMANDS}
+					<AiCommandsEditor
+						value={String(localConfig.aiCommands ?? '')}
+						onChange={(next) => handleConfigChange(SETTINGS_KEYS.AI_COMMANDS, next)}
+					/>
 				{:else if currentSection.title === SETTINGS_SECTION_TITLES.MCP}
 					<div class="space-y-6">
 						<ChatSettingsFields
@@ -561,6 +692,29 @@
 							onConfigChange={handleConfigChange}
 							onThemeChange={handleThemeChange}
 						/>
+
+						{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							<ThemeHuePicker
+								primary={Number.isFinite(Number(localConfig.themePrimaryHue))
+									? Number(localConfig.themePrimaryHue)
+									: 295}
+								secondary={Number.isFinite(Number(localConfig.themeSecondaryHue))
+									? Number(localConfig.themeSecondaryHue)
+									: 190}
+								onChange={handleHueChange}
+							/>
+						{/if}
+
+						{#if currentSection.title === SETTINGS_SECTION_TITLES.TTS}
+							<TtsRefAudioPicker
+								dataUri={String(localConfig.ttsRefAudio ?? '')}
+								fileName={String(localConfig.ttsRefAudioName ?? '')}
+								onChange={({ dataUri, fileName }) => {
+									handleConfigChange(SETTINGS_KEYS.TTS_REF_AUDIO, dataUri);
+									handleConfigChange(SETTINGS_KEYS.TTS_REF_AUDIO_NAME, fileName);
+								}}
+							/>
+						{/if}
 					</div>
 				{/if}
 			</div>
