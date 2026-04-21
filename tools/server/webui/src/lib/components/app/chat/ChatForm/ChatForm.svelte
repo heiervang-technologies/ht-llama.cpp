@@ -659,7 +659,8 @@
 				hasText={value.trim().length > 0}
 				{disabled}
 				{isLoading}
-				isRecording={isRecording || isTranscribing}
+				{isRecording}
+				{isTranscribing}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

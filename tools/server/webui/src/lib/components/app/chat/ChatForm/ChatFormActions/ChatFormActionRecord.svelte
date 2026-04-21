@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Mic, Square } from '@lucide/svelte';
+	import { Loader2, Mic, Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
@@ -10,6 +10,7 @@
 		sttReady?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
+		isTranscribing?: boolean;
 		onMicClick?: () => void;
 	}
 
@@ -20,6 +21,7 @@
 		sttReady = false,
 		isLoading = false,
 		isRecording = false,
+		isTranscribing = false,
 		onMicClick
 	}: Props = $props();
 
@@ -29,8 +31,15 @@
 	let canRecord = $derived(hasAudioModality || sttReady);
 
 	let tooltipText = $derived.by(() => {
+		if (isTranscribing) return 'Transcribing…';
 		if (canRecord) return '';
 		return 'Enable speech-to-text in Settings, or pick a model with audio modality.';
+	});
+
+	let srLabel = $derived.by(() => {
+		if (isTranscribing) return 'Transcribing audio';
+		if (isRecording) return 'Stop recording';
+		return 'Start recording';
 	});
 </script>
 
@@ -38,16 +47,20 @@
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<Button
-				class="h-8 w-8 rounded-full p-0 {isRecording
-					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
-					: ''}"
-				disabled={disabled || isLoading || !canRecord}
+				class="h-8 w-8 rounded-full p-0 {isTranscribing
+					? 'bg-blue-500 text-white hover:bg-blue-600'
+					: isRecording
+						? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
+						: ''}"
+				disabled={disabled || isLoading || isTranscribing || !canRecord}
 				onclick={onMicClick}
 				type="button"
 			>
-				<span class="sr-only">{isRecording ? 'Stop recording' : 'Start recording'}</span>
+				<span class="sr-only">{srLabel}</span>
 
-				{#if isRecording}
+				{#if isTranscribing}
+					<Loader2 class="h-4 w-4 animate-spin" />
+				{:else if isRecording}
 					<Square class="h-4 w-4 animate-pulse fill-white" />
 				{:else}
 					<Mic class="h-4 w-4" />

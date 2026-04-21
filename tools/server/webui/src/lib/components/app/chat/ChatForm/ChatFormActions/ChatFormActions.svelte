@@ -30,6 +30,7 @@
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
+		isTranscribing?: boolean;
 		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
@@ -46,6 +47,7 @@
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
+		isTranscribing = false,
 		hasText = false,
 		uploadedFiles = [],
 		onFileUpload,
@@ -278,6 +280,7 @@
 			{sttReady}
 			{isLoading}
 			{isRecording}
+			{isTranscribing}
 			{onMicClick}
 		/>
 	{:else}
