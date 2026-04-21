@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Loader2, Square, Wand2 } from '@lucide/svelte';
+	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		DropdownMenu,
@@ -19,20 +20,30 @@
 	let { onRun, open = $bindable(false) }: Props = $props();
 
 	let commands = $derived(aiCommandsStore.list());
-	let running = $derived(aiCommandsStore.runningId !== null);
+	let runningId = $derived(aiCommandsStore.runningId);
+	let runningCommand = $derived(runningId ? commands.find((c) => c.id === runningId) : undefined);
+
+	// The DocScreen shortcut accepts both Ctrl and Cmd; show the conventional
+	// label for the user's platform instead of always saying "Ctrl".
+	const isMac = browser && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+	const shortcutLabel = isMac ? '⌘⇧K' : 'Ctrl+Shift+K';
 </script>
 
-{#if running}
+{#if runningId}
 	<Button
 		variant="ghost"
 		size="sm"
 		class="gap-1.5 rounded-full backdrop-blur-lg"
-		title="Stop the running AI command"
+		title={runningCommand
+			? `Stop "${runningCommand.name}" (Esc)`
+			: 'Stop the running AI command (Esc)'}
 		onclick={() => aiCommandsStore.stop()}
 	>
 		<Loader2 class="h-4 w-4 animate-spin" />
 		<Square class="h-3 w-3" />
-		<span class="hidden md:inline">Stop</span>
+		<span class="hidden max-w-[10rem] truncate md:inline">
+			{runningCommand ? runningCommand.name : 'Stop'}
+		</span>
 	</Button>
 {:else}
 	<DropdownMenu bind:open>
@@ -43,7 +54,7 @@
 					variant="ghost"
 					size="sm"
 					class="gap-1.5 rounded-full backdrop-blur-lg"
-					title="Run an AI command on this document (Ctrl+Shift+K)"
+					title="Run an AI command on this document ({shortcutLabel})"
 				>
 					<Wand2 class="h-4 w-4" />
 					<span class="hidden md:inline">Commands</span>

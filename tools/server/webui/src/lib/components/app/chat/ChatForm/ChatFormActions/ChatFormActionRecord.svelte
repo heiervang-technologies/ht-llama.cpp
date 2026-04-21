@@ -31,13 +31,13 @@
 	let canRecord = $derived(hasAudioModality || sttReady);
 
 	let tooltipText = $derived.by(() => {
-		if (isTranscribing) return 'Transcribing…';
+		if (isTranscribing) return 'Click to cancel transcription';
 		if (canRecord) return '';
 		return 'Enable speech-to-text in Settings, or pick a model with audio modality.';
 	});
 
 	let srLabel = $derived.by(() => {
-		if (isTranscribing) return 'Transcribing audio';
+		if (isTranscribing) return 'Cancel transcription';
 		if (isRecording) return 'Stop recording';
 		return 'Start recording';
 	});
@@ -52,7 +52,7 @@
 					: isRecording
 						? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 						: ''}"
-				disabled={disabled || isLoading || isTranscribing || !canRecord}
+				disabled={disabled || isLoading || !canRecord}
 				onclick={onMicClick}
 				type="button"
 			>

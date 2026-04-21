@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Download, MoreHorizontal, Trash2 } from '@lucide/svelte';
+	import { Copy, Download, MoreHorizontal, Trash2 } from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		DropdownMenu,
@@ -8,15 +9,17 @@
 		DropdownMenuSeparator,
 		DropdownMenuTrigger
 	} from '$lib/components/ui/dropdown-menu';
+	import { docsStore } from '$lib/stores/docs.svelte';
 
 	interface Props {
+		docId: string;
 		docName: string;
 		docContent: string;
 		onDelete: () => void;
 		open?: boolean;
 	}
 
-	let { docName, docContent, onDelete, open = $bindable(false) }: Props = $props();
+	let { docId, docName, docContent, onDelete, open = $bindable(false) }: Props = $props();
 
 	// Strip path separators and other filename-hostile characters. The browser's
 	// download attribute already enforces its own sanitization per-platform, but
@@ -45,6 +48,18 @@
 		open = false;
 		onDelete();
 	}
+
+	async function duplicate() {
+		open = false;
+		try {
+			// Navigates to the copy on success; the original stays in the sidebar.
+			await docsStore.duplicateDoc(docId);
+		} catch (err) {
+			console.error('[doc] duplicate failed', err);
+			const msg = err instanceof Error ? err.message : String(err);
+			toast.error(`Could not duplicate: ${msg}`);
+		}
+	}
 </script>
 
 <DropdownMenu bind:open>
@@ -64,6 +79,10 @@
 	</DropdownMenuTrigger>
 
 	<DropdownMenuContent align="end" class="w-48">
+		<DropdownMenuItem onclick={duplicate}>
+			<Copy class="h-4 w-4" />
+			<span>Duplicate</span>
+		</DropdownMenuItem>
 		<DropdownMenuItem onclick={downloadMarkdown}>
 			<Download class="h-4 w-4" />
 			<span>Download .md</span>

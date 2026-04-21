@@ -141,9 +141,7 @@
 	// STT dictation gives the mic a useful purpose even when the active LLM
 	// doesn't accept audio: record → transcribe → drop text into the textarea.
 	// Gate on the same autoMicOnEmpty toggle so the user opts in once per app.
-	let sttReady = $derived(
-		Boolean(currentConfig.sttEnabled) && SttService.isConfigured()
-	);
+	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
 	let canRecord = $derived(hasAudioModality || sttReady);
 	let shouldShowRecordButton = $derived(
 		canRecord && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
