@@ -697,7 +697,6 @@
 				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
-				hasText={value.trim().length > 0}
 				{disabled}
 				{isLoading}
 				{isRecording}

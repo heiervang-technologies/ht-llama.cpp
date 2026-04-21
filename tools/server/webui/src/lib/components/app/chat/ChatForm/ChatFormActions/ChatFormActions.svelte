@@ -31,7 +31,6 @@
 		isLoading?: boolean;
 		isRecording?: boolean;
 		isTranscribing?: boolean;
-		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -48,7 +47,6 @@
 		isLoading = false,
 		isRecording = false,
 		isTranscribing = false,
-		hasText = false,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -138,15 +136,14 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
-	// STT dictation gives the mic a useful purpose even when the active LLM
-	// doesn't accept audio: record → transcribe → drop text into the textarea.
-	// If neither is configured, recording still works and falls back to
-	// attaching the .wav so the user never hits a silent no-op.
+	// Whether the active LLM accepts audio natively, or STT is configured, is
+	// passed through to the record button for its tooltip copy. Recording
+	// itself only requires mic permission; if neither path is set up we still
+	// attach the .wav so the user never hits a silent no-op.
 	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
-	let canRecord = $derived(hasAudioModality || sttReady);
 	// Mic is always visible alongside the send button (conversation-first UX).
-	// Recording itself only requires mic permission; transcription vs attach is
-	// decided downstream. Hide only while a reply is streaming.
+	// Hide only while a reply is streaming or when there's already an audio
+	// attachment queued.
 	let shouldShowRecordButton = $derived(!isLoading && !hasAudioAttachments);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
