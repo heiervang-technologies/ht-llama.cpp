@@ -51,9 +51,7 @@ class LoraStore {
 	 * Get adapters that are currently enabled (scale > 0)
 	 */
 	get activeAdapters(): LoraAdapterUpdate[] {
-		return this.adapters
-			.filter((a) => a.enabled)
-			.map((a) => ({ id: a.id, scale: a.scale }));
+		return this.adapters.filter((a) => a.enabled).map((a) => ({ id: a.id, scale: a.scale }));
 	}
 
 	/**
@@ -156,9 +154,7 @@ class LoraStore {
 			await LoraService.update(this.adapterUpdates, this.modelId);
 
 			// Update last fetched scales to reflect applied state
-			this.lastFetchedScales = new Map(
-				this.adapters.map((a) => [a.id, a.enabled ? a.scale : 0])
-			);
+			this.lastFetchedScales = new Map(this.adapters.map((a) => [a.id, a.enabled ? a.scale : 0]));
 
 			toast.success('LoRA adapters updated');
 		} catch (error) {

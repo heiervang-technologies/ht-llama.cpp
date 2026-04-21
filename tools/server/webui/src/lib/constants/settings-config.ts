@@ -5,9 +5,12 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
+	backendBaseUrl: '',
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
+	themePrimaryHue: 295,
+	themeSecondaryHue: 190,
 	showThoughtInProgress: false,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,
@@ -61,11 +64,38 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	preEncodeConversation: false,
 	// experimental features
 	pyInterpreterEnabled: false,
-	enableContinueGeneration: false
+	enableContinueGeneration: false,
+	// tts
+	ttsEnabled: false,
+	ttsAutoplay: false,
+	ttsBaseUrl: '',
+	ttsApiKey: '',
+	ttsModel: '',
+	ttsVoice: '',
+	ttsFormat: 'wav',
+	ttsRefAudio: '',
+	ttsRefAudioName: '',
+	// stt
+	sttEnabled: false,
+	sttAutoTranscribe: true,
+	sttAutoSend: false,
+	sttBaseUrl: '',
+	sttApiKey: '',
+	sttModel: '',
+	sttLanguage: '',
+	// inline AI completions (ghost text in the doc editor)
+	inlineCompletionEnabled: false,
+	inlineCompletionDelay: 800,
+	inlineCompletionMaxTokens: 48,
+	// user-defined AI commands invoked from the doc editor header
+	// (stored as JSON string; empty string = use built-in defaults)
+	aiCommands: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
+	backendBaseUrl:
+		'Base URL of the llama-server backend (e.g. <code>http://192.168.8.158:30184</code>). Leave empty to use the same origin as the webui. When set, a pill in the header shows the active hostname.',
 	systemMessage: 'The starting message that defines how model should behave.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
@@ -133,7 +163,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	sendOnEnter:
 		'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
 	autoMicOnEmpty:
-		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+		'Automatically show the microphone button instead of send when the textarea is empty. Works for models with native audio modality and for STT dictation.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
@@ -153,7 +183,40 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	preEncodeConversation:
 		'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 	enableContinueGeneration:
-		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+	ttsEnabled: 'Enable text-to-speech for assistant messages.',
+	ttsAutoplay: 'Automatically speak assistant messages when generation completes.',
+	ttsBaseUrl:
+		'Base URL of an OpenAI-compatible TTS server (e.g. <code>http://192.168.8.123:30384</code>). Must implement <code>POST /v1/audio/speech</code>.',
+	ttsApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the TTS server.',
+	ttsModel:
+		'TTS model identifier (e.g. <code>qwen3-tts</code>, <code>tts-1</code>, <code>kokoro</code>).',
+	ttsVoice:
+		'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
+	ttsFormat:
+		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).',
+	ttsRefAudio:
+		'Reference audio clip for voice cloning (Qwen3-TTS). Stored as a <code>data:</code> URI. Upload a short sample of the target voice; the server will use x-vector extraction to match it.',
+	ttsRefAudioName: 'Original filename of the uploaded reference audio (for display only).',
+	sttEnabled: 'Enable speech-to-text for mic recordings.',
+	sttAutoTranscribe:
+		'Automatically transcribe recordings into the textarea instead of attaching them as audio files.',
+	sttAutoSend:
+		'After transcription finishes, automatically submit the message. Enables a heads-down voice-only flow.',
+	sttBaseUrl:
+		'Base URL of an OpenAI-compatible STT server (e.g. <code>http://192.168.8.123:30189</code>). Must implement <code>POST /v1/audio/transcriptions</code>.',
+	sttApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the STT server.',
+	sttModel: 'STT model identifier (e.g. <code>Qwen/Qwen3-ASR-1.7B</code>, <code>whisper-1</code>).',
+	sttLanguage:
+		'Optional ISO 639-1 language hint (e.g. <code>en</code>, <code>no</code>). Leave blank for auto-detection.',
+	inlineCompletionEnabled:
+		'Show AI ghost-text suggestions in the doc editor while you type. Tab accepts, Esc dismisses.',
+	inlineCompletionDelay:
+		'Milliseconds of idle time before an inline completion is requested (min 200).',
+	inlineCompletionMaxTokens:
+		'Max tokens requested per inline completion. Smaller values feel snappier.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

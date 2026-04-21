@@ -1,11 +1,15 @@
 <script lang="ts">
-	import { Settings } from '@lucide/svelte';
+	import { Settings, PanelRight } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { BackendPill } from '$lib/components/app/navigation';
+	import { artifactsStore } from '$lib/stores/artifacts.svelte';
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
+
+	let hasArtifacts = $derived(artifactsStore.entries.length > 0);
 </script>
 
 <header
@@ -14,6 +18,21 @@
 		: ''}"
 >
 	<div class="pointer-events-auto flex items-center space-x-2">
+		<BackendPill />
+
+		{#if hasArtifacts}
+			<Button
+				variant="ghost"
+				size="icon-lg"
+				onclick={() => artifactsStore.toggle()}
+				class="rounded-full backdrop-blur-lg"
+				title="Toggle artifact drawer"
+				aria-label="Toggle artifact drawer"
+			>
+				<PanelRight class="h-4 w-4" />
+			</Button>
+		{/if}
+
 		<Button
 			variant="ghost"
 			size="icon-lg"

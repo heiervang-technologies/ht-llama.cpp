@@ -27,6 +27,8 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { ttsStore } from '$lib/stores/tts.svelte';
+	import { artifactsStore } from '$lib/stores/artifacts.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 
@@ -102,6 +104,47 @@
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let showRawOutput = $state(false);
+
+	const ttsEnabled = $derived(Boolean(currentConfig.ttsEnabled) && ttsStore.isConfigured());
+	const isSpeakingThis = $derived(ttsStore.speakingId === message.id);
+	const isLoadingSpeechThis = $derived(ttsStore.loadingId === message.id);
+
+	function stripForSpeech(text: string): string {
+		return text
+			.replace(/```[\s\S]*?```/g, ' ')
+			.replace(/`([^`]+)`/g, '$1')
+			.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+			.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+			.replace(/[*_~#>]+/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim();
+	}
+
+	function handleSpeak() {
+		const text = stripForSpeech(messageContent ?? '');
+		if (!text) return;
+		void ttsStore.toggle(message.id, text);
+	}
+
+	$effect(() => {
+		if (!ttsEnabled || !currentConfig.ttsAutoplay) return;
+		if (!isLastAssistantMessage) return;
+		if (isChatStreaming() || isLoading()) return;
+		const text = messageContent ?? '';
+		if (!text.trim()) return;
+		if (ttsStore.speakingId || ttsStore.loadingId) return;
+		void ttsStore.speak(message.id, stripForSpeech(text));
+	});
+
+	// Register finished assistant content with the artifact store so HTML/SVG blocks
+	// surface in the side drawer. Skips while streaming so we don't flicker on every
+	// token — only the final content lands in the store.
+	$effect(() => {
+		if (isChatStreaming() || isLoading()) return;
+		const text = messageContent ?? '';
+		if (!text) return;
+		artifactsStore.register(message.id, text);
+	});
 
 	let rawOutputContent = $derived.by(() => {
 		const sections = deriveAgenticSections(message, toolMessages, [], false);
@@ -406,6 +449,9 @@
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
+			onSpeak={ttsEnabled ? handleSpeak : undefined}
+			isSpeaking={isSpeakingThis}
+			isLoadingSpeech={isLoadingSpeechThis}
 		/>
 	{/if}
 </div>

@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { ChevronDown, Loader2, Package, X } from '@lucide/svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { cn } from '$lib/components/ui/utils';
@@ -56,7 +55,10 @@
 
 	let triggerModelId = $state<string | null>(null);
 	let isLoadingModel = $derived(
-		triggerModelId ? modelsStore.isModelOperationInProgress(triggerModelId) && !modelsStore.isModelCancelling(triggerModelId) : false
+		triggerModelId
+			? modelsStore.isModelOperationInProgress(triggerModelId) &&
+					!modelsStore.isModelCancelling(triggerModelId)
+			: false
 	);
 	let isCancellingModel = $derived(
 		triggerModelId ? modelsStore.isModelCancelling(triggerModelId) : false
@@ -254,16 +256,32 @@
 				<TruncatedText text={selectedOption?.model || 'Select model'} class="min-w-0 font-medium" />
 
 				{#if isCancellingModel}
-					<Loader2 class="h-3 w-3.5 animate-spin-reverse text-orange-400" />
+					<Loader2 class="animate-spin-reverse h-3 w-3.5 text-orange-400" />
 				{:else if isLoadingModel}
 					<Loader2 class="h-3 w-3.5 animate-spin text-green-500" />
-					<button
-						type="button"
+					<!-- span-as-button: nested <button>s are invalid HTML and trigger
+					     node_invalid_placement_ssr. role+tabindex+keydown preserves
+					     keyboard access. -->
+					<span
+						role="button"
+						tabindex="0"
 						aria-label="Cancel loading"
-						onclick={(e) => { e.preventDefault(); e.stopPropagation(); handleCancelLoad(); }}
+						class="inline-flex cursor-pointer items-center"
+						onclick={(e) => {
+							e.preventDefault();
+							e.stopPropagation();
+							handleCancelLoad();
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								handleCancelLoad();
+							}
+						}}
 					>
-						<X class="h-3 w-3.5 cursor-pointer text-muted-foreground hover:text-red-500" />
-					</button>
+						<X class="h-3 w-3.5 text-muted-foreground hover:text-red-500" />
+					</span>
 				{:else if updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />
 				{:else}
