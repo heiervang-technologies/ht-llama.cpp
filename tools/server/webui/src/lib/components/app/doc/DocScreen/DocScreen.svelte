@@ -131,8 +131,7 @@
 			// The editor's updateListener already streamed changes through onChange.
 			// Persist the final doc state once streaming finishes.
 			if (outputSoFar.length > 0) {
-				const finalContent =
-					baseContent.slice(0, from) + outputSoFar + baseContent.slice(sel.to);
+				const finalContent = baseContent.slice(0, from) + outputSoFar + baseContent.slice(sel.to);
 				await docsStore.updateContent(doc.id, finalContent);
 			}
 			return;
