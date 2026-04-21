@@ -5,16 +5,18 @@ export interface TtsSynthesizeOptions {
 }
 
 /**
- * Stateless client for OpenAI-compatible TTS servers.
- * Posts {model, voice, input, response_format} to `<baseUrl>/v1/audio/speech`
- * and returns the response as a Blob.
+ * Stateless client for OpenAI-compatible TTS servers (incl. Qwen3-TTS).
+ * Posts to `<baseUrl>/v1/audio/speech` and returns the audio Blob.
  *
  * Settings consumed:
- * - ttsBaseUrl  (required; empty = disabled)
- * - ttsApiKey   (optional bearer token)
- * - ttsModel    (required)
- * - ttsVoice    (optional)
- * - ttsFormat   (default 'wav')
+ * - ttsBaseUrl   (required; empty = disabled)
+ * - ttsApiKey    (optional bearer token)
+ * - ttsModel     (required)
+ * - ttsVoice     (optional — ignored by Qwen3 when ref_audio is set)
+ * - ttsFormat    (default 'wav')
+ * - ttsRefAudio  (optional data: URI — enables Qwen3-TTS voice cloning.
+ *                 When present, request includes ref_audio and
+ *                 x_vector_only_mode=true)
  */
 export class TtsService {
 	static isConfigured(): boolean {
@@ -44,6 +46,12 @@ export class TtsService {
 		};
 		const voice = c.ttsVoice?.toString().trim();
 		if (voice) body.voice = voice;
+
+		const refAudio = c.ttsRefAudio?.toString().trim();
+		if (refAudio && refAudio.startsWith('data:')) {
+			body.ref_audio = refAudio;
+			body.x_vector_only_mode = true;
+		}
 
 		const response = await fetch(`${baseUrl}/v1/audio/speech`, {
 			method: 'POST',

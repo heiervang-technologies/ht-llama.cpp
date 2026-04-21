@@ -12,6 +12,7 @@
 		bracketMatching
 	} from '@codemirror/language';
 	import { mode } from 'mode-watcher';
+	import { inlineCompletion } from './inline-completion';
 
 	interface Props {
 		content: string;
@@ -66,6 +67,7 @@
 			highlightActiveLine(),
 			syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
 			markdown({ base: markdownLanguage, codeLanguages: languages }),
+			inlineCompletion(),
 			keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
 			EditorView.lineWrapping,
 			EditorView.updateListener.of((update) => {

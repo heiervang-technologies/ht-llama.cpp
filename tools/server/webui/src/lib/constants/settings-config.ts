@@ -72,7 +72,20 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	ttsApiKey: '',
 	ttsModel: '',
 	ttsVoice: '',
-	ttsFormat: 'wav'
+	ttsFormat: 'wav',
+	ttsRefAudio: '',
+	ttsRefAudioName: '',
+	// stt
+	sttEnabled: false,
+	sttAutoTranscribe: true,
+	sttBaseUrl: '',
+	sttApiKey: '',
+	sttModel: '',
+	sttLanguage: '',
+	// inline AI completions (ghost text in the doc editor)
+	inlineCompletionEnabled: false,
+	inlineCompletionDelay: 800,
+	inlineCompletionMaxTokens: 48
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -178,7 +191,26 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	ttsVoice:
 		'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
 	ttsFormat:
-		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).'
+		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).',
+	ttsRefAudio:
+		'Reference audio clip for voice cloning (Qwen3-TTS). Stored as a <code>data:</code> URI. Upload a short sample of the target voice; the server will use x-vector extraction to match it.',
+	ttsRefAudioName: 'Original filename of the uploaded reference audio (for display only).',
+	sttEnabled: 'Enable speech-to-text for mic recordings.',
+	sttAutoTranscribe:
+		'Automatically transcribe recordings into the textarea instead of attaching them as audio files.',
+	sttBaseUrl:
+		'Base URL of an OpenAI-compatible STT server (e.g. <code>http://192.168.8.123:30189</code>). Must implement <code>POST /v1/audio/transcriptions</code>.',
+	sttApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the STT server.',
+	sttModel: 'STT model identifier (e.g. <code>Qwen/Qwen3-ASR-1.7B</code>, <code>whisper-1</code>).',
+	sttLanguage:
+		'Optional ISO 639-1 language hint (e.g. <code>en</code>, <code>no</code>). Leave blank for auto-detection.',
+	inlineCompletionEnabled:
+		'Show AI ghost-text suggestions in the doc editor while you type. Tab accepts, Esc dismisses.',
+	inlineCompletionDelay:
+		'Milliseconds of idle time before an inline completion is requested (min 200).',
+	inlineCompletionMaxTokens:
+		'Max tokens requested per inline completion. Smaller values feel snappier.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [
