@@ -128,12 +128,26 @@
 			}
 		}
 		window.addEventListener('keydown', onKeydown);
-		return () => window.removeEventListener('keydown', onKeydown);
+		return () => {
+			window.removeEventListener('keydown', onKeydown);
+			// The store's onToken callback closed over this component's editorApi.
+			// Once the component unmounts, those writes would hit a torn-down
+			// editor, so cancel the stream as part of teardown.
+			if (aiCommandsStore.runningId !== null) {
+				aiCommandsStore.stop();
+			}
+		};
 	});
 
 	$effect(() => {
 		const id = docId;
 		untrack(() => {
+			// Switching docs mid-stream would route new tokens into whichever doc's
+			// closure was captured when the command started — surprising to the
+			// user. Cancel on nav so the command dies with the old view.
+			if (aiCommandsStore.runningId !== null) {
+				aiCommandsStore.stop();
+			}
 			docsStore.loadDoc(id).then((loaded) => {
 				if (!loaded) {
 					goto('#/');
