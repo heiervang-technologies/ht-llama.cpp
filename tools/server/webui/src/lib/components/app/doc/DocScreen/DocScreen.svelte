@@ -97,6 +97,18 @@
 		});
 	});
 
+	// Strip leading #'s + whitespace from a markdown heading line. Returns
+	// null if the line isn't a heading, is empty, or only contains #'s.
+	function extractH1Title(content: string): string | null {
+		const firstLine = content.split('\n', 1)[0] ?? '';
+		const match = firstLine.match(/^\s*#{1,6}\s+(.+?)\s*#*\s*$/);
+		if (!match) return null;
+		const stripped = match[1].trim();
+		if (!stripped) return null;
+		// Cap overlong titles; the full heading is still in the doc body.
+		return stripped.length > 80 ? stripped.slice(0, 80).trimEnd() + '…' : stripped;
+	}
+
 	function scheduleSave(next: string) {
 		pendingContent = next;
 		saving = true;
@@ -108,6 +120,15 @@
 			if (toSave === null) return;
 			try {
 				await docsStore.updateContent(doc.id, toSave);
+				// Auto-derive a title from the first markdown heading while the
+				// doc is still Untitled. Stops after the first successful rename;
+				// a user-picked title will never be overwritten.
+				if (doc.name === 'Untitled') {
+					const derived = extractH1Title(toSave);
+					if (derived) {
+						await docsStore.renameDoc(doc.id, derived);
+					}
+				}
 			} finally {
 				saving = false;
 			}
