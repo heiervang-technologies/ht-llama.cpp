@@ -17,6 +17,10 @@
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
+	import {
+		rehypeWrapImagesAsArtifacts,
+		setupImageArtifactToggles
+	} from '$lib/markdown/wrap-images-as-artifacts';
 	import { rehypeRtlSupport } from '$lib/markdown/rehype-rtl-support';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
@@ -104,6 +108,7 @@
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
+			.use(rehypeWrapImagesAsArtifacts) // Render images as collapsible artifacts
 			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
@@ -577,6 +582,7 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
+			setupImageArtifactToggles(containerRef);
 		}
 	});
 
@@ -891,6 +897,70 @@
 		margin: 1.5rem 0;
 		max-width: 100%;
 		height: auto;
+	}
+
+	/* Image artifact wrapper — visually separates AI-rendered images from prose */
+	div :global(.ht-image-artifact) {
+		margin: 1.5rem 0;
+		border: 1px solid color-mix(in oklch, var(--border) 40%, transparent);
+		border-radius: 0.75rem;
+		background: color-mix(in oklch, var(--muted) 30%, transparent);
+		overflow: hidden;
+	}
+
+	div :global(.ht-image-artifact-toggle) {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.5rem 0.75rem;
+		background: transparent;
+		border: none;
+		border-bottom: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+		color: var(--muted-foreground);
+		font-size: 0.75rem;
+		cursor: pointer;
+		text-align: left;
+	}
+
+	div :global(.ht-image-artifact-toggle:hover) {
+		background: color-mix(in oklch, var(--muted) 50%, transparent);
+		color: var(--foreground);
+	}
+
+	div :global(.ht-image-artifact-chevron) {
+		display: inline-block;
+		width: 0;
+		height: 0;
+		border-left: 4px solid transparent;
+		border-right: 4px solid transparent;
+		border-top: 5px solid currentColor;
+		transition: transform 0.15s ease;
+	}
+
+	div :global(.ht-image-artifact[data-collapsed='true'] .ht-image-artifact-chevron) {
+		transform: rotate(-90deg);
+	}
+
+	div :global(.ht-image-artifact-caption) {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	div :global(.ht-image-artifact-body) {
+		padding: 0.75rem;
+		display: flex;
+		justify-content: center;
+	}
+
+	div :global(.ht-image-artifact[data-collapsed='true'] .ht-image-artifact-body) {
+		display: none;
+	}
+
+	div :global(.ht-image-artifact img) {
+		margin: 0;
+		max-height: 60vh;
 	}
 
 	/* Code blocks */
