@@ -141,6 +141,19 @@
 		return false;
 	});
 
+	// A video attachment is accepted when the model natively supports video,
+	// OR when at least one of its output channels (vision / audio) lets us
+	// fall back to the frames+audio decomposition path.
+	let hasVideoModality = $derived.by(() => {
+		if (!activeModelId) return false;
+		void modelPropsVersion;
+		if (modelsStore.modelSupportsVideo(activeModelId)) return true;
+		return (
+			modelsStore.modelSupportsVision(activeModelId) ||
+			modelsStore.modelSupportsAudio(activeModelId)
+		);
+	});
+
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
 
@@ -285,7 +298,11 @@
 		}
 
 		// Use model-specific capabilities for file validation
-		const capabilities = { hasVision: hasVisionModality, hasAudio: hasAudioModality };
+		const capabilities = {
+			hasVision: hasVisionModality,
+			hasAudio: hasAudioModality,
+			hasVideo: hasVideoModality
+		};
 		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(
 			generallySupported,
 			capabilities

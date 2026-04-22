@@ -10,6 +10,13 @@ export interface TtsSynthesizeResult {
 	usedDefaultRef: boolean;
 }
 
+/** Minimal shape of a voice returned by an OpenAI-compatible `/v1/audio/voices` endpoint. */
+export interface TtsVoice {
+	id: string;
+	name?: string;
+	language?: string;
+}
+
 const DEFAULT_REF_URL = '/tts-default-ref.mp3';
 let cachedDefaultRef: string | null = null;
 
@@ -74,21 +81,29 @@ export class TtsService {
 			// client works against a raw vllm deploy.
 			task_type: 'Base'
 		};
-		const voice = c.ttsVoice?.toString().trim();
-		if (voice) body.voice = voice;
 
+		const voice = c.ttsVoice?.toString().trim();
 		const userRefAudio = c.ttsRefAudio?.toString().trim();
 		let usedDefaultRef = false;
-		if (userRefAudio && userRefAudio.startsWith('data:')) {
+
+		if (voice) {
+			// User picked a named voice (e.g. from the multiplexer's voice
+			// registry). Send only the name — adding ref_audio here makes the
+			// server fall back to cloning and the voice name is ignored.
+			body.voice = voice;
+		} else if (userRefAudio && userRefAudio.startsWith('data:')) {
+			// No named voice, but user uploaded a ref clip → voice cloning.
 			body.ref_audio = userRefAudio;
+			// Speaker-embedding-only mode: we don't know the reference transcript,
+			// so text conditioning would corrupt the clone.
+			body.x_vector_only_mode = true;
 		} else {
+			// Nothing configured — fall back to the bundled default ref clip so
+			// Base-task servers don't 400 out-of-the-box.
 			body.ref_audio = await loadDefaultRefAudio();
+			body.x_vector_only_mode = true;
 			usedDefaultRef = true;
 		}
-		// Skip text conditioning on the reference clip: we rarely know the exact
-		// transcript (especially for the bundled default) and the speaker embedding
-		// alone is enough for Qwen3-TTS voice cloning.
-		body.x_vector_only_mode = true;
 
 		// Hard-cap the request so a hung preflight (no CORS on the TTS server) or a
 		// dropped connection doesn't leave the speaker stuck in the loading state.
@@ -127,6 +142,106 @@ export class TtsService {
 		}
 
 		return { blob: await response.blob(), usedDefaultRef };
+	}
+
+	/**
+	 * Fetch available voices from the configured TTS server.
+	 *
+	 * Hits `GET <baseUrl>/v1/audio/voices` (an OpenAI-style extension shared by
+	 * vLLM's Qwen3-TTS multiplexer and a handful of other TTS servers). Parses
+	 * either `{ data: [...] }` or a bare array.
+	 *
+	 * - Returns `[]` only on 404 (endpoint genuinely not implemented).
+	 * - Throws with a useful message on network / CORS / DNS failure and on
+	 *   any other non-ok status (401, 500, etc). Silently degrading to an
+	 *   empty list would hide a real misconfiguration (wrong base URL, CORS
+	 *   preflight rejected, etc).
+	 */
+	static async fetchVoices(signal?: AbortSignal): Promise<TtsVoice[]> {
+		const c = config();
+		const baseUrl = c.ttsBaseUrl?.toString().trim().replace(/\/+$/, '') ?? '';
+		if (!baseUrl) return [];
+
+		const headers: Record<string, string> = { Accept: 'application/json' };
+		const apiKey = c.ttsApiKey?.toString().trim();
+		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
+		let response: Response;
+		try {
+			response = await fetch(`${baseUrl}/v1/audio/voices`, { headers, signal });
+		} catch (err) {
+			// Aborts (e.g. because a newer fetch superseded this one) are not
+			// errors — bubble as-is so the caller can distinguish.
+			if ((err as { name?: string })?.name === 'AbortError') throw err;
+			// fetch throws a TypeError for network / CORS / DNS failures. The
+			// browser error message ("Load failed" on WebKit, "Failed to fetch"
+			// on Chromium) doesn't name the host — rewrite to something useful.
+			const base = `Could not reach TTS server at ${baseUrl}/v1/audio/voices`;
+			const hint =
+				err instanceof TypeError
+					? ' (network unreachable, DNS failure, or CORS preflight rejected). Confirm the server is running and that its CORS config allows this app.'
+					: '';
+			throw new Error(base + hint);
+		}
+
+		if (response.status === 404) return [];
+		if (!response.ok) {
+			const body = await response.text().catch(() => '');
+			const snippet = body.trim().slice(0, 400);
+			throw new Error(
+				`Voices request failed (${response.status} ${response.statusText})` +
+					(snippet ? `: ${snippet}` : '')
+			);
+		}
+
+		let payload: unknown;
+		try {
+			payload = await response.json();
+		} catch {
+			return [];
+		}
+
+		// Accept several response shapes. Observed in the wild:
+		// - Bare array:         `[...]`
+		// - OpenAI-style list:  `{ data: [...] }`
+		// - Qwen3-TTS mux:      `{ voices: [...], uploaded_voices: [...] }`
+		// - Voice name list:    `{ voices: ["alice", ...] }`
+		const p = payload as {
+			data?: unknown[];
+			voices?: unknown[];
+			uploaded_voices?: unknown[];
+		} | null;
+
+		const raw: unknown[] = Array.isArray(payload)
+			? payload
+			: Array.isArray(p?.data)
+				? p.data
+				: Array.isArray(p?.voices) || Array.isArray(p?.uploaded_voices)
+					? [...(p?.voices ?? []), ...(p?.uploaded_voices ?? [])]
+					: [];
+
+		const seen = new Set<string>();
+		return raw
+			.map((entry): TtsVoice | null => {
+				if (typeof entry === 'string') return { id: entry, name: entry };
+				if (entry && typeof entry === 'object') {
+					const e = entry as Record<string, unknown>;
+					const id = (e.id ?? e.voice ?? e.name) as string | undefined;
+					if (!id || typeof id !== 'string') return null;
+					return {
+						id,
+						name: typeof e.name === 'string' ? e.name : id,
+						language: typeof e.language === 'string' ? e.language : undefined
+					};
+				}
+				return null;
+			})
+			.filter((v): v is TtsVoice => {
+				if (!v) return false;
+				if (seen.has(v.id)) return false;
+				seen.add(v.id);
+				return true;
+			});
 	}
 }
 

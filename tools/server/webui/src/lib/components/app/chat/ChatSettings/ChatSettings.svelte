@@ -189,6 +189,11 @@
 					type: SettingsFieldType.CHECKBOX
 				},
 				{
+					key: SETTINGS_KEYS.SHOW_VOICE_PICKER,
+					label: 'Show voice picker in chat composer',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
 					key: SETTINGS_KEYS.TTS_BASE_URL,
 					label: 'TTS Base URL',
 					type: SettingsFieldType.INPUT

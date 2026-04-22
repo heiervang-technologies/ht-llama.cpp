@@ -16,8 +16,12 @@ import {
 	UrlProtocol
 } from '$lib/enums';
 import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
-import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
-import { modelsStore } from '$lib/stores/models.svelte';
+import type {
+	DatabaseMessageExtraMcpPrompt,
+	DatabaseMessageExtraMcpResource,
+	DatabaseMessageExtraVideoFile
+} from '$lib/types';
+import { modelsStore, selectedModelName, singleModelName } from '$lib/stores/models.svelte';
 
 export class ChatService {
 	/**
@@ -824,6 +828,47 @@ export class ChatService {
 					format: audio.mimeType.includes('wav') ? 'wav' : 'mp3'
 				}
 			});
+		}
+
+		const videoFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
+				extra.type === AttachmentType.VIDEO
+		);
+
+		if (videoFiles.length > 0) {
+			const activeModel = selectedModelName() ?? singleModelName() ?? null;
+			const hasNativeVideo = activeModel ? modelsStore.modelSupportsVideo(activeModel) : false;
+
+			for (const video of videoFiles) {
+				if (hasNativeVideo) {
+					contentParts.push({
+						type: ContentPartType.VIDEO_URL,
+						video_url: { url: video.base64Url }
+					});
+					continue;
+				}
+				// Fallback: decompose into frames + audio so vision/audio models
+				// can still consume the message. Frames + audio are pre-computed
+				// at attach time and cached on the extra, so this path is just
+				// a re-emit, no extra decoding.
+				if (video.fallbackFrames?.length) {
+					for (const frameUrl of video.fallbackFrames) {
+						contentParts.push({
+							type: ContentPartType.IMAGE_URL,
+							image_url: { url: frameUrl }
+						});
+					}
+				}
+				if (video.fallbackAudioBase64) {
+					contentParts.push({
+						type: ContentPartType.INPUT_AUDIO,
+						input_audio: {
+							data: video.fallbackAudioBase64,
+							format: 'wav'
+						}
+					});
+				}
+			}
 		}
 
 		const pdfFiles = message.extra.filter(

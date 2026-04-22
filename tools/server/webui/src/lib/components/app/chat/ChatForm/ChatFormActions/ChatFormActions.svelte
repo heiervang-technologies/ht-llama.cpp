@@ -6,11 +6,9 @@
 		ChatFormActionAttachmentsSheet,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		LoraAdapters,
-		McpServersSelector,
-		ModelsSelector,
-		ModelsSelectorSheet
+		McpServersSelector
 	} from '$lib/components/app';
+	import ChainPicker from './ChainPicker.svelte';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
@@ -173,12 +171,12 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | ModelsSelectorSheet | undefined = $state(undefined);
+	let chainPickerRef: ChainPicker | undefined = $state(undefined);
 
 	let isMobile = new IsMobile();
 
 	export function openModelSelector() {
-		selectorModelRef?.open();
+		chainPickerRef?.openModelSelector();
 	}
 
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -233,28 +231,14 @@
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
-		<LoraAdapters
-			disabled={disabled || isOffline}
-			modelId={isRouter ? (activeModelId ?? undefined) : undefined}
+		<ChainPicker
+			bind:this={chainPickerRef}
+			{disabled}
+			{isOffline}
+			{activeModelId}
+			{conversationModel}
+			{isRouter}
 		/>
-
-		{#if isMobile.current}
-			<ModelsSelectorSheet
-				disabled={disabled || isOffline}
-				bind:this={selectorModelRef}
-				currentModel={conversationModel}
-				forceForegroundText
-				useGlobalSelection
-			/>
-		{:else}
-			<ModelsSelector
-				disabled={disabled || isOffline}
-				bind:this={selectorModelRef}
-				currentModel={conversationModel}
-				forceForegroundText
-				useGlobalSelection
-			/>
-		{/if}
 	</div>
 
 	{#if isLoading}

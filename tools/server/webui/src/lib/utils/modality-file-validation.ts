@@ -45,6 +45,11 @@ export function isFileTypeSupportedByModel(
 			// Audio files require audio support
 			return capabilities.hasAudio;
 
+		case FileTypeCategory.VIDEO:
+			// Video is natively supported, or falls back to frames+audio if
+			// the model has either vision or audio.
+			return capabilities.hasVideo || capabilities.hasVision || capabilities.hasAudio;
+
 		default:
 			// Unknown categories - be conservative and allow
 			return true;
@@ -69,7 +74,7 @@ export function filterFilesByModalities(
 	const unsupportedFiles: File[] = [];
 	const modalityReasons: Record<string, string> = {};
 
-	const { hasVision, hasAudio } = capabilities;
+	const { hasVision, hasAudio, hasVideo } = capabilities;
 
 	for (const file of files) {
 		const category = getFileTypeCategory(file.type);
@@ -88,6 +93,14 @@ export function filterFilesByModalities(
 				if (!hasAudio) {
 					isSupported = false;
 					reason = 'Audio files require an audio-capable model';
+				}
+				break;
+
+			case FileTypeCategory.VIDEO:
+				if (!hasVideo && !hasVision && !hasAudio) {
+					isSupported = false;
+					reason =
+						'Videos require a video-capable model, or at least vision/audio for fallback decomposition';
 				}
 				break;
 
@@ -127,7 +140,7 @@ export function generateModalityErrorMessage(
 ): string {
 	if (unsupportedFiles.length === 0) return '';
 
-	const { hasVision, hasAudio } = capabilities;
+	const { hasVision, hasAudio, hasVideo } = capabilities;
 
 	let message = '';
 
@@ -144,6 +157,7 @@ export function generateModalityErrorMessage(
 	const supportedTypes: string[] = ['text files', 'PDFs'];
 	if (hasVision) supportedTypes.push('images');
 	if (hasAudio) supportedTypes.push('audio files');
+	if (hasVideo || hasVision || hasAudio) supportedTypes.push('videos');
 
 	message += ` This model supports: ${supportedTypes.join(', ')}.`;
 

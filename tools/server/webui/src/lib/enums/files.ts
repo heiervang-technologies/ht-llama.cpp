@@ -7,6 +7,7 @@
 export enum FileTypeCategory {
 	IMAGE = 'image',
 	AUDIO = 'audio',
+	VIDEO = 'video',
 	PDF = 'pdf',
 	TEXT = 'text'
 }
@@ -31,6 +32,13 @@ export enum FileTypeAudio {
 	MP3 = 'mp3',
 	WAV = 'wav',
 	WEBM = 'webm'
+}
+
+export enum FileTypeVideo {
+	MP4 = 'mp4',
+	WEBM = 'webm',
+	MOV = 'mov',
+	MKV = 'mkv'
 }
 
 export enum FileTypePdf {
@@ -92,6 +100,14 @@ export enum FileExtensionAudio {
 	WAV = '.wav'
 }
 
+export enum FileExtensionVideo {
+	MP4 = '.mp4',
+	WEBM = '.webm',
+	MOV = '.mov',
+	MKV = '.mkv',
+	M4V = '.m4v'
+}
+
 export enum FileExtensionPdf {
 	PDF = '.pdf'
 }
@@ -146,6 +162,7 @@ export enum FileExtensionText {
 // MIME type prefixes and includes for content detection
 export enum MimeTypePrefix {
 	IMAGE = 'image/',
+	VIDEO = 'video/',
 	TEXT = 'text'
 }
 
@@ -174,6 +191,14 @@ export enum MimeTypeAudio {
 	WAV = 'audio/wav',
 	WEBM = 'audio/webm',
 	WEBM_OPUS = 'audio/webm;codecs=opus'
+}
+
+export enum MimeTypeVideo {
+	MP4 = 'video/mp4',
+	WEBM = 'video/webm',
+	QUICKTIME = 'video/quicktime',
+	MATROSKA = 'video/x-matroska',
+	M4V = 'video/x-m4v'
 }
 
 export enum MimeTypeImage {

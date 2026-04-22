@@ -33,6 +33,7 @@ export const SETTINGS_KEYS = {
 	TTS_FORMAT: 'ttsFormat',
 	TTS_REF_AUDIO: 'ttsRefAudio',
 	TTS_REF_AUDIO_NAME: 'ttsRefAudioName',
+	SHOW_VOICE_PICKER: 'showVoicePicker',
 	// STT
 	STT_ENABLED: 'sttEnabled',
 	STT_AUTO_TRANSCRIBE: 'sttAutoTranscribe',
