@@ -10,14 +10,16 @@ _Heiervang Technologies fork of [llama.cpp](https://github.com/ggml-org/llama.cp
 
 ## HT Fork Changes
 
-This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [llama.cpp](https://github.com/ggml-org/llama.cpp). The `ht` branch contains the following changes on top of upstream `master`:
+This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [llama.cpp](https://github.com/ggml-org/llama.cpp). The `ht` branch contains the following changes on top of upstream `master`.
 
-| Change | Description | Contributed back? |
-|--------|-------------|-------------------|
+**We do not plan to contribute any of these changes back to upstream `llama.cpp`**, unless the upstream maintainers explicitly ask for a specific change. This fork exists for HT product work — syncs go one way (upstream → `master` → `ht`). The "Tracked upstream" column below is strictly informational: it points to any pre-existing upstream issue or PR discussing the topic, for the reader's reference, not because we intend to land anything there.
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
 | Agentic contributions policy | We welcome AI-assisted and AI-generated contributions—see [CONTRIBUTING.md](CONTRIBUTING.md) | N/A |
-| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | Planned |
-| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | Partial ([#22003](https://github.com/ggml-org/llama.cpp/pull/22003)) |
-| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | Planned |
+| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | No |
+| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | [#22003](https://github.com/ggml-org/llama.cpp/pull/22003) |
+| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | No |
 | Rebranded WebUI | `ht-llama.cpp` branding with turquoise/purple theme, configurable hue picker, and banner | No |
 | Model loading UX | Cancel button for in-progress model loads; clearer error states in router mode | No |
 | LoRA adapter UI | Auto-discovery of LoRA adapters served by `llama-server` with enable/disable panel and router-mode awareness | No |
@@ -27,8 +29,10 @@ This is the [Heiervang Technologies](https://github.com/heiervang-technologies) 
 | AI commands in docs | `Ctrl+Shift+K` (or `⌘⇧K` on macOS) command palette that streams prompt output into the editor live with a preview, names the running command next to a Stop button, and `Esc` cancels — covers summarize, rewrite, translate, expand, and user-defined prompts | No |
 | Inline ghost-text completions | AI autocomplete in the doc editor: `Tab` to accept, `Esc` to dismiss, `Ctrl+Tab` to force a suggestion; works against any completion-capable model | No |
 | Artifacts drawer | Side panel that extracts HTML/SVG snippets from assistant messages and renders them in a sandboxed preview with source toggle; toolbar button surfaces a live artifact count with an informative tooltip | No |
+| Markdown image pipeline | Inline `![](data:image/...)` images in user messages are lifted into vision-encoder attachments while still rendering inline in the bubble (dedup prevents duplicate chips) | No |
+| Always-visible mic | Mic button sits alongside send at all times with concrete toast errors for `NotAllowedError` / `NotFoundError` / `NotReadableError`; records even when neither STT nor audio modality is configured (falls back to attaching the `.wav`) | No |
 | Configurable backend URL | Frontend works as a standalone static bundle pointing at any remote `llama-server` | No |
-| Tauri desktop shell | Native desktop wrapper around the WebUI in `tools/server/webui-tauri/` with `.desktop` launchers | No |
+| Tauri desktop shell | Native desktop wrapper around the WebUI in `tools/server/webui-tauri/` with `.desktop` launchers and Linux `webkit2gtk` `getUserMedia` auto-approval so mic capture works inside the bundled app | No |
 | Release CI | GitHub Actions release workflow runs on the `ht` branch, not just on tags | No |
 
 Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship.
