@@ -35,7 +35,21 @@
 	});
 </script>
 
-{#if loraStore.isAvailable}
+{#if !loraStore.isAvailable}
+	<!-- Keep the slot visible so the chain layout doesn't shift when adapters
+	     come and go. Greyed + uninteractive teaches users the feature exists. -->
+	<span
+		class={cn(
+			'pointer-events-none inline-flex cursor-not-allowed items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground/50',
+			className
+		)}
+		title="No LoRA adapters available for this model"
+		aria-disabled="true"
+	>
+		<Layers class="h-3.5 w-3.5" />
+		<span class="font-medium">LoRA</span>
+	</span>
+{:else}
 	<Popover.Root bind:open={isOpen}>
 		<Popover.Trigger
 			{disabled}

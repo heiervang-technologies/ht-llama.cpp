@@ -9,11 +9,14 @@ import {
 	FileExtensionImage,
 	FileExtensionPdf,
 	FileExtensionText,
+	FileExtensionVideo,
 	FileTypeCategory,
 	MimeTypeApplication,
 	MimeTypeAudio,
 	MimeTypeImage,
-	MimeTypeText
+	MimeTypePrefix,
+	MimeTypeText,
+	MimeTypeVideo
 } from '$lib/enums';
 
 export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
@@ -34,6 +37,14 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeAudio.WEBM:
 		case MimeTypeAudio.WEBM_OPUS:
 			return FileTypeCategory.AUDIO;
+
+		// Video
+		case MimeTypeVideo.MP4:
+		case MimeTypeVideo.WEBM:
+		case MimeTypeVideo.QUICKTIME:
+		case MimeTypeVideo.MATROSKA:
+		case MimeTypeVideo.M4V:
+			return FileTypeCategory.VIDEO;
 
 		// PDF
 		case MimeTypeApplication.PDF:
@@ -87,6 +98,12 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 			return FileTypeCategory.TEXT;
 
 		default:
+			// Unknown mime type — fall back to prefix check for `video/*` so
+			// codecs we don't enumerate (e.g. `video/x-m4v`, `video/mp2t`) still
+			// flow through the video pipeline.
+			if (mimeType?.startsWith(MimeTypePrefix.VIDEO)) {
+				return FileTypeCategory.VIDEO;
+			}
 			return null;
 	}
 }
@@ -108,6 +125,14 @@ export function getFileTypeCategoryByExtension(filename: string): FileTypeCatego
 		case FileExtensionAudio.MP3:
 		case FileExtensionAudio.WAV:
 			return FileTypeCategory.AUDIO;
+
+		// Video
+		case FileExtensionVideo.MP4:
+		case FileExtensionVideo.WEBM:
+		case FileExtensionVideo.MOV:
+		case FileExtensionVideo.MKV:
+		case FileExtensionVideo.M4V:
+			return FileTypeCategory.VIDEO;
 
 		// PDF
 		case FileExtensionPdf.PDF:
@@ -201,6 +226,7 @@ export function isFileTypeSupported(filename: string, mimeType?: string): boolea
 		if (
 			category === FileTypeCategory.IMAGE ||
 			category === FileTypeCategory.AUDIO ||
+			category === FileTypeCategory.VIDEO ||
 			category === FileTypeCategory.PDF
 		) {
 			return true;
@@ -212,6 +238,7 @@ export function isFileTypeSupported(filename: string, mimeType?: string): boolea
 	if (
 		extCategory === FileTypeCategory.IMAGE ||
 		extCategory === FileTypeCategory.AUDIO ||
+		extCategory === FileTypeCategory.VIDEO ||
 		extCategory === FileTypeCategory.PDF
 	) {
 		return true;

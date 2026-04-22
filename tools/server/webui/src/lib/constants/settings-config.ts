@@ -66,7 +66,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	enableContinueGeneration: false,
 	// tts
 	ttsEnabled: false,
-	ttsAutoplay: false,
+	ttsAutoplay: true,
 	ttsBaseUrl: '',
 	ttsApiKey: '',
 	ttsModel: '',
@@ -74,6 +74,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	ttsFormat: 'wav',
 	ttsRefAudio: '',
 	ttsRefAudioName: '',
+	showVoicePicker: true,
 	// stt
 	sttEnabled: false,
 	sttAutoTranscribe: true,
@@ -196,6 +197,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	ttsRefAudio:
 		'Reference audio clip for voice cloning (Qwen3-TTS). Stored as a <code>data:</code> URI. Upload a short sample of the target voice; the server will use x-vector extraction to match it.',
 	ttsRefAudioName: 'Original filename of the uploaded reference audio (for display only).',
+	showVoicePicker:
+		'Show the voice picker as a block in the chat composer chain. Lets you swap voices without opening settings. Disable to keep the chain to LoRA + model only.',
 	sttEnabled: 'Enable speech-to-text for mic recordings.',
 	sttAutoTranscribe:
 		'Automatically transcribe recordings into the textarea instead of attaching them as audio files.',

@@ -166,6 +166,15 @@ class ModelsStore {
 	}
 
 	/**
+	 * Check if a model advertises native video input. Most backends don't
+	 * advertise this yet — callers should fall back to the frames+audio
+	 * decomposition path when it returns false.
+	 */
+	modelSupportsVideo(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.video ?? false;
+	}
+
+	/**
 	 * Get model modalities as an array of ModelModality enum values
 	 */
 	getModelModalitiesArray(modelId: string): ModelModality[] {
@@ -176,6 +185,7 @@ class ModelsStore {
 
 		if (modalities.vision) result.push(ModelModality.VISION);
 		if (modalities.audio) result.push(ModelModality.AUDIO);
+		if (modalities.video) result.push(ModelModality.VIDEO);
 
 		return result;
 	}
@@ -311,7 +321,8 @@ class ModelsStore {
 			if (serverStore.isModelMode && this.models.length > 0 && serverProps?.modalities) {
 				const modalities: ModelModalities = {
 					vision: serverProps.modalities.vision ?? false,
-					audio: serverProps.modalities.audio ?? false
+					audio: serverProps.modalities.audio ?? false,
+					video: serverProps.modalities.video ?? false
 				};
 				this.modelPropsCache.set(this.models[0].model, serverProps);
 				this.models = this.models.map((model, index) =>
@@ -409,7 +420,8 @@ class ModelsStore {
 
 				const modalities: ModelModalities = {
 					vision: props.modalities.vision ?? false,
-					audio: props.modalities.audio ?? false
+					audio: props.modalities.audio ?? false,
+					video: props.modalities.video ?? false
 				};
 
 				return { ...model, modalities };
@@ -610,8 +622,12 @@ class ModelsStore {
 			if (controller.signal.aborted) {
 				return;
 			}
-			this.error = error instanceof Error ? error.message : 'Failed to load model';
-			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
+			const detail = error instanceof Error ? error.message : String(error);
+			this.error = detail || 'Failed to load model';
+			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`, {
+				description: detail || undefined,
+				duration: 10_000
+			});
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);

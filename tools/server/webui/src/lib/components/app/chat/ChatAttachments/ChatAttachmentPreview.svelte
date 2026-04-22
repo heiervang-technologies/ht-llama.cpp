@@ -2,15 +2,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Alert from '$lib/components/ui/alert';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { FileText, Image, Music, FileIcon, Eye, Info } from '@lucide/svelte';
+	import { FileText, Image, Music, FileIcon, Eye, Info, Video } from '@lucide/svelte';
 	import {
 		isTextFile,
 		isImageFile,
 		isPdfFile,
 		isAudioFile,
 		getLanguageFromFilename,
-		createBase64DataUrl
+		createBase64DataUrl,
+		getFileTypeCategory,
+		getFileTypeCategoryByExtension
 	} from '$lib/utils';
+	import { AttachmentType, FileTypeCategory } from '$lib/enums';
 	import { convertPDFToImage } from '$lib/utils/browser-only';
 	import { modelsStore } from '$lib/stores/models.svelte';
 
@@ -39,6 +42,21 @@
 	let isImage = $derived(isImageFile(attachment, uploadedFile));
 	let isPdf = $derived(isPdfFile(attachment, uploadedFile));
 	let isText = $derived(isTextFile(attachment, uploadedFile));
+	let isVideo = $derived.by(() => {
+		if (attachment?.type === AttachmentType.VIDEO) return true;
+		if (!uploadedFile) return false;
+		const byMime = getFileTypeCategory(uploadedFile.type);
+		if (byMime) return byMime === FileTypeCategory.VIDEO;
+		return getFileTypeCategoryByExtension(uploadedFile.name) === FileTypeCategory.VIDEO;
+	});
+
+	let videoSrc = $derived.by(() => {
+		if (uploadedFile?.preview) return uploadedFile.preview;
+		if (attachment?.type === AttachmentType.VIDEO && 'base64Url' in attachment) {
+			return attachment.base64Url;
+		}
+		return undefined;
+	});
 
 	let displayPreview = $derived(
 		uploadedFile?.preview ||
@@ -54,6 +72,7 @@
 
 	let IconComponent = $derived(() => {
 		if (isImage) return Image;
+		if (isVideo) return Video;
 		if (isText || isPdf) return FileText;
 		if (isAudio) return Music;
 
@@ -243,6 +262,16 @@
 			{/if}
 		{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
 			<SyntaxHighlightedCode code={displayTextContent} {language} maxWidth="calc(69rem - 2rem)" />
+		{:else if isVideo && videoSrc}
+			<div class="flex items-center justify-center p-4">
+				<div class="w-full max-w-3xl">
+					<video controls class="mx-auto max-h-[70vh] w-full rounded-md bg-black" src={videoSrc}>
+						<track kind="captions" />
+						Your browser does not support the video element.
+					</video>
+					<p class="mt-2 text-center text-sm text-muted-foreground">{displayName}</p>
+				</div>
+			</div>
 		{:else if isAudio}
 			<div class="flex items-center justify-center p-8">
 				<div class="w-full max-w-md text-center">

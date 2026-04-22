@@ -28,6 +28,28 @@ export interface DatabaseMessageExtraImageFile {
 	base64Url: string;
 }
 
+export interface DatabaseMessageExtraVideoFile {
+	type: AttachmentType.VIDEO;
+	name: string;
+	/** `data:video/<format>;base64,…` so the chat history can render a
+	 *  native <video controls> element directly from the stored extra. */
+	base64Url: string;
+	mimeType: string;
+	/** Pre-rendered poster frame (first/middle frame) to show in attachment
+	 *  chips without having to remount the video element. */
+	posterDataUrl?: string;
+	durationSec?: number;
+	widthPx?: number;
+	heightPx?: number;
+	/** Precomputed frame sequence for models without native video input.
+	 *  Each entry is a data URL (JPEG). Populated at attachment time so
+	 *  we don't re-decode the video on every send. */
+	fallbackFrames?: string[];
+	/** Base64-encoded WAV audio extracted from the video track. Same
+	 *  rationale — cached at attachment time. */
+	fallbackAudioBase64?: string;
+}
+
 /**
  * Legacy format from old webui - pasted content was stored as "context" type
  * @deprecated Use DatabaseMessageExtraTextFile instead
@@ -75,6 +97,7 @@ export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
+	| DatabaseMessageExtraVideoFile
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraMcpResource

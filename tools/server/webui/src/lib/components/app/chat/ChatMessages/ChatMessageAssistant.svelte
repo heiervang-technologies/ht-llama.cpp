@@ -131,10 +131,20 @@
 	// when ttsStore.speakingId transitions back to null.
 	let autoplayedMessageId: string | null = null;
 
+	// Only messages whose generation we witnessed in *this* session should
+	// trigger autoplay — otherwise opening an existing chat would start
+	// reading the last reply aloud unprompted.
+	let hasSeenStreaming = $state(isChatStreaming() || isLoading());
+
+	$effect(() => {
+		if (isChatStreaming() || isLoading()) hasSeenStreaming = true;
+	});
+
 	$effect(() => {
 		if (!ttsEnabled || !currentConfig.ttsAutoplay) return;
 		if (!isLastAssistantMessage) return;
 		if (isChatStreaming() || isLoading()) return;
+		if (!hasSeenStreaming) return;
 		if (autoplayedMessageId === message.id) return;
 		const text = messageContent ?? '';
 		if (!text.trim()) return;

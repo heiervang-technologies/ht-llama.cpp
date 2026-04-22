@@ -160,6 +160,16 @@
 							{imageClass}
 							onClick={(event) => openPreview(item, event)}
 						/>
+					{:else if item.isVideo && item.preview}
+						<div
+							class="relative flex-shrink-0 overflow-hidden rounded-md border border-border/60 bg-black {imageHeight} {limitToSingleRow
+								? 'first:ml-4 last:mr-4'
+								: ''}"
+						>
+							<!-- svelte-ignore a11y_media_has_caption -->
+							<video controls playsinline class="h-full w-full object-contain" src={item.preview}
+							></video>
+						</div>
 					{:else}
 						<ChatAttachmentThumbnailFile
 							class="flex-shrink-0 cursor-pointer {limitToSingleRow ? 'first:ml-4 last:mr-4' : ''}"
@@ -238,6 +248,14 @@
 							{imageClass}
 							onClick={(event) => openPreview(item, event)}
 						/>
+					{:else if item.isVideo && item.preview}
+						<div
+							class="relative overflow-hidden rounded-md border border-border/60 bg-black {imageHeight}"
+						>
+							<!-- svelte-ignore a11y_media_has_caption -->
+							<video controls playsinline class="h-full w-full object-contain" src={item.preview}
+							></video>
+						</div>
 					{:else}
 						<ChatAttachmentThumbnailFile
 							class="cursor-pointer"
