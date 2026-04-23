@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { ChatMessage } from '$lib/components/app';
+	import { ChatMessage, ChatMessagePhantomContext } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -226,6 +226,10 @@
 	class="flex h-full flex-col space-y-10 pt-24 {className}"
 	style="height: auto; min-height: calc(100dvh - 14rem);"
 >
+	{#if currentConfig.showToolMessagesAsStandalone}
+		<ChatMessagePhantomContext />
+	{/if}
+
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 		<div use:fadeInView>
 			<ChatMessage
