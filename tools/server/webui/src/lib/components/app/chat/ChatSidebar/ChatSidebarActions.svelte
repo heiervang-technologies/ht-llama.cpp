@@ -87,7 +87,7 @@
 
 		<Button
 			class="w-full justify-start backdrop-blur-none!"
-			href="/artifacts"
+			href="#/artifacts"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
 		>

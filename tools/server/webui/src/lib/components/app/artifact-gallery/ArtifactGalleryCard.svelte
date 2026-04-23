@@ -52,7 +52,7 @@
 <button
 	type="button"
 	class="group flex h-full flex-col overflow-hidden rounded-xl border bg-card text-left shadow-sm transition hover:border-primary hover:shadow-md"
-	onclick={() => goto(`/artifacts/${artifact.id}`)}
+	onclick={() => goto(`#/artifacts/${artifact.id}`)}
 >
 	<div
 		class="relative flex h-40 w-full items-center justify-center overflow-hidden bg-muted/50 text-muted-foreground"
@@ -78,7 +78,7 @@
 			<div class="flex h-full w-full items-center justify-center p-4">{@html thumb.markup}</div>
 		{:else if thumb && (thumb.kind === 'code' || thumb.kind === 'html' || thumb.kind === 'markdown')}
 			<pre
-				class="w-full overflow-hidden whitespace-pre-wrap break-words p-3 font-mono text-[11px] leading-snug">{thumb.excerpt}</pre>
+				class="w-full overflow-hidden p-3 font-mono text-[11px] leading-snug break-words whitespace-pre-wrap">{thumb.excerpt}</pre>
 		{:else}
 			<Icon class="h-8 w-8" />
 		{/if}
@@ -87,7 +87,7 @@
 		<div class="flex items-center justify-between gap-2">
 			<span class="truncate text-sm font-medium">{artifact.title}</span>
 			<span
-				class="flex-shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary"
+				class="flex-shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary uppercase"
 				>{artifact.kind}</span
 			>
 		</div>

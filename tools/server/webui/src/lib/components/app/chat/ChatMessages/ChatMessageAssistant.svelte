@@ -30,7 +30,8 @@
 	import { ttsStore } from '$lib/stores/tts.svelte';
 	import { artifactsStore } from '$lib/stores/artifacts.svelte';
 	import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
-	import { extractGalleryArtifacts } from '$lib/utils/artifacts';
+	import { extractGalleryArtifacts, hashString } from '$lib/utils/artifacts';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 
@@ -158,6 +159,16 @@
 	// Register finished assistant content with the artifact store so HTML/SVG blocks
 	// surface in the side drawer. Skips while streaming so we don't flicker on every
 	// token — only the final content lands in the store.
+	//
+	// Component-local guard for the gallery capture path: $effect may re-run after
+	// streaming ends (post-stream metadata updates, message object re-identity from
+	// the store, remount during scroll virtualization). Without this guard, each
+	// re-run fires another `captureFromChat` for the same slot, and the async
+	// `findArtifactBySlot → createArtifact` pair inside the store races with itself,
+	// producing duplicate artifacts ("same instance three times, multiplying each
+	// turn"). We track the per-slot content hash we last submitted and short-circuit
+	// on a match so the store only sees one call per unique content-per-slot.
+	const submittedSlotHashes = new SvelteMap<string, string>();
 	$effect(() => {
 		if (isChatStreaming() || isLoading()) return;
 		const text = messageContent ?? '';
@@ -173,10 +184,13 @@
 		if (!convId || !slotParent) return;
 		const candidates = extractGalleryArtifacts(text);
 		if (candidates.length === 0) return;
-		// Fire-and-forget; errors go to console rather than a toast so a
-		// backgrounded capture can't hijack the chat UI.
 		for (const c of candidates) {
 			const slot = `${slotParent}#${c.index}`;
+			const contentKey = c.text != null ? hashString(c.text) : `blob:${c.blob?.size ?? 0}`;
+			if (submittedSlotHashes.get(slot) === contentKey) continue;
+			submittedSlotHashes.set(slot, contentKey);
+			// Fire-and-forget; errors go to console rather than a toast so a
+			// backgrounded capture can't hijack the chat UI.
 			void artifactGalleryStore
 				.captureFromChat(
 					{
@@ -194,7 +208,12 @@
 						summary: c.summary
 					}
 				)
-				.catch((err) => console.warn('[artifact-gallery] capture failed', err));
+				.catch((err) => {
+					// Undo the optimistic guard on failure so a retry with the same
+					// content can actually retry.
+					submittedSlotHashes.delete(slot);
+					console.warn('[artifact-gallery] capture failed', err);
+				});
 		}
 	});
 

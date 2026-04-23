@@ -40,11 +40,7 @@ export function buildThumb(
 		return { kind: 'svg', markup };
 	}
 
-	const excerpt = text
-		.split('\n')
-		.slice(0, EXCERPT_LINES)
-		.join('\n')
-		.slice(0, EXCERPT_CHARS);
+	const excerpt = text.split('\n').slice(0, EXCERPT_LINES).join('\n').slice(0, EXCERPT_CHARS);
 	return { kind: kind === 'html' ? 'html' : kind === 'markdown' ? 'markdown' : 'code', excerpt };
 }
 
