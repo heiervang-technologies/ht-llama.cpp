@@ -530,6 +530,17 @@ export class DatabaseService {
 		return await db.docs.get(id);
 	}
 
+	/**
+	 * Look up a doc by `name`, case-insensitively. Used by the ai-patch
+	 * live-chat bootstrap (commit 5) to resolve a filename line above a
+	 * SEARCH/REPLACE fence to a persisted doc. Returns `undefined` on miss;
+	 * callers treat that as an unambiguous `E_NO_TARGET` (never a fuzzy
+	 * filename guess).
+	 */
+	static async findDocByName(name: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.where('name').equalsIgnoreCase(name).first();
+	}
+
 	static async createDoc(name: string, content = ''): Promise<DatabaseDoc> {
 		const now = Date.now();
 		const doc: DatabaseDoc = {

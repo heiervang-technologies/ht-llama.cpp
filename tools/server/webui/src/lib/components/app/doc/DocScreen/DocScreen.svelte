@@ -397,6 +397,7 @@
 							content={doc.content}
 							onChange={scheduleSave}
 							onReady={(api) => (editorApi = api)}
+							docId={doc.id}
 						/>
 					{/key}
 				</div>
