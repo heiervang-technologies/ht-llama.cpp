@@ -280,6 +280,22 @@ register({
 		if (!text) return err('text is required (non-empty)');
 		const autoEnter = Boolean(args.auto_enter);
 
+		// Per-terminal mode gate. Default is `solo` so a freshly
+		// created terminal is opaque to the model until the user
+		// explicitly flips it to `shared`. Review mode is wired but
+		// currently behaves like solo — full queueing UI lands in a
+		// follow-up. Imported lazily to avoid pulling Svelte
+		// reactivity into the builtin-tools module graph.
+		const { terminalModes } = await import('$lib/stores/terminal-modes.svelte');
+		const mode = terminalModes.snapshot(terminalId);
+		if (mode !== 'shared') {
+			return err(
+				mode === 'review'
+					? `Terminal ${terminalId} is in "review" mode; send_keys must be approved by the user. Ask them to either approve the pending request or switch the terminal to "shared" mode.`
+					: `Terminal ${terminalId} is in "solo" mode; send_keys is blocked. Ask the user to switch it to "shared" mode if they want you to type into this terminal.`
+			);
+		}
+
 		// Reuse the termd service's URL resolution so `send_keys`
 		// works identically from the Tauri sidecar or a manually-
 		// configured endpoint. Imported lazily to avoid a circular
@@ -305,7 +321,7 @@ register({
 			}
 			return err(detail || `HTTP ${res.status}`);
 		}
-		return ok({ sent: text.length });
+		return ok({ sent: text.length, mode });
 	}
 });
 
