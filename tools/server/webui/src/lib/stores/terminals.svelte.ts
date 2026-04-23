@@ -44,14 +44,16 @@ class TerminalsStore {
 		}
 	}
 
-	async create(name?: string): Promise<TerminalHandle | null> {
+	async create(
+		body: Parameters<typeof TermdService.create>[0] = {}
+	): Promise<TerminalHandle | null> {
 		if (!this.available) {
 			this.error = new TermdUnavailable().message;
 			return null;
 		}
 		this.creating = true;
 		try {
-			const t = await TermdService.create(name ? { name } : {});
+			const t = await TermdService.create(body);
 			this.terminals = [t, ...this.terminals.filter((x) => x.id !== t.id)];
 			this.error = null;
 			return t;

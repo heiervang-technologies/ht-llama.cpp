@@ -16,6 +16,7 @@
 mod docker;
 mod http;
 mod sandbox_guard;
+mod session;
 mod state;
 mod ws;
 
