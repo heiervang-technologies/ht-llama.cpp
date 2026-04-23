@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount, onDestroy as onTileDestroy } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
@@ -12,24 +13,54 @@
 
 	let { terminal, onDestroy }: Props = $props();
 
+	// Reactive clock: bumps once a minute so "just now" → "1m ago" → "2m ago"
+	// updates without needing a route change. Kept coarse (60s) since the
+	// label is coarse; avoids a sub-second repaint storm on the gallery.
+	let now = $state(Date.now());
+	let timer: ReturnType<typeof setInterval> | undefined;
+	onMount(() => {
+		timer = setInterval(() => (now = Date.now()), 60_000);
+	});
+	onTileDestroy(() => {
+		if (timer) clearInterval(timer);
+	});
+
 	// The container_id we get from Docker is 64 hex chars — way too
 	// long for a tile. xterm users care more about "when did I open
 	// this", so we show an age label instead.
-	function ageLabel(createdAt: number): string {
+	let age = $derived.by(() => {
+		const createdAt = terminal.created_at;
 		if (!createdAt) return 'just now';
 		// Docker's `created` from the list endpoint is seconds, not ms.
 		const ts = createdAt > 1e12 ? createdAt : createdAt * 1000;
-		const delta = Date.now() - ts;
+		const delta = now - ts;
 		if (delta < 60_000) return 'just now';
 		if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`;
 		if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`;
 		return `${Math.round(delta / 86_400_000)}d ago`;
+	});
+
+	function open() {
+		goto(`#/terminals/${terminal.id}`);
+	}
+
+	function handleKeydown(e: KeyboardEvent) {
+		// Enter / Space on a role="button" Card should navigate, matching
+		// what a native <button> would do. Anything else passes through.
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault();
+			open();
+		}
 	}
 </script>
 
 <Card
-	class="group flex cursor-pointer flex-col gap-2 overflow-hidden p-4 transition hover:border-primary/60"
-	onclick={() => goto(`#/terminals/${terminal.id}`)}
+	class="group flex cursor-pointer flex-col gap-2 overflow-hidden p-4 transition hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+	role="button"
+	tabindex={0}
+	aria-label={`Open terminal ${terminal.name}`}
+	onclick={open}
+	onkeydown={handleKeydown}
 >
 	<header class="flex items-center justify-between gap-2">
 		<div class="flex min-w-0 items-center gap-2">
@@ -47,7 +78,7 @@
 	</header>
 	<div class="flex items-center gap-2 text-xs text-muted-foreground">
 		<Clock class="h-3 w-3" aria-hidden="true" />
-		<span>{ageLabel(terminal.created_at)}</span>
+		<span>{age}</span>
 	</div>
 	<div class="truncate font-mono text-[11px] text-muted-foreground/70">
 		{terminal.image}
