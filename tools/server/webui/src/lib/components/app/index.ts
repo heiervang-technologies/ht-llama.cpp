@@ -1,4 +1,5 @@
 export * from './actions';
+export * from './artifact-gallery';
 export * from './badges';
 export * from './chat';
 export * from './content';

@@ -29,6 +29,8 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { ttsStore } from '$lib/stores/tts.svelte';
 	import { artifactsStore } from '$lib/stores/artifacts.svelte';
+	import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
+	import { extractGalleryArtifacts } from '$lib/utils/artifacts';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 
@@ -161,6 +163,39 @@
 		const text = messageContent ?? '';
 		if (!text) return;
 		artifactsStore.register(message.id, text);
+
+		// Also persist qualifying artifacts to the gallery. The slot id keys on
+		// the message's parent, so regenerating the same turn (new assistant
+		// sibling under the same user prompt) lands as a new revision of the
+		// existing gallery entry rather than a twin artifact.
+		const convId = message.convId;
+		const slotParent = message.parent;
+		if (!convId || !slotParent) return;
+		const candidates = extractGalleryArtifacts(text);
+		if (candidates.length === 0) return;
+		// Fire-and-forget; errors go to console rather than a toast so a
+		// backgrounded capture can't hijack the chat UI.
+		for (const c of candidates) {
+			const slot = `${slotParent}#${c.index}`;
+			void artifactGalleryStore
+				.captureFromChat(
+					{
+						conversationId: convId,
+						slot,
+						messageId: message.id,
+						reason: 'initial'
+					},
+					{
+						kind: c.kind,
+						title: c.title,
+						mimeType: c.mimeType,
+						text: c.text,
+						blob: c.blob,
+						summary: c.summary
+					}
+				)
+				.catch((err) => console.warn('[artifact-gallery] capture failed', err));
+		}
 	});
 
 	let rawOutputContent = $derived.by(() => {

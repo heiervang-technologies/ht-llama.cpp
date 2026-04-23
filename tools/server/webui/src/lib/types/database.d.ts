@@ -141,3 +141,44 @@ export interface DatabaseDoc {
 	createdAt: number;
 	lastModified: number;
 }
+
+export type DatabaseArtifactKind =
+	| 'html'
+	| 'svg'
+	| 'image'
+	| 'code'
+	| 'audio'
+	| 'video'
+	| 'pdf'
+	| 'markdown';
+
+export interface DatabaseArtifact {
+	id: string;
+	title: string;
+	kind: DatabaseArtifactKind;
+	currentRevisionId: string;
+	tags: string[];
+	createdAt: number;
+	updatedAt: number;
+	sourceConversationId?: string;
+	sourceMessageSlot?: string;
+	summary?: string;
+}
+
+export interface DatabaseArtifactRevision {
+	id: string;
+	artifactId: string;
+	revisionNumber: number;
+	createdAt: number;
+	reason: 'initial' | 'regenerate' | 'edit' | 'fork';
+	parentRevisionId?: string;
+	contentHash: string;
+	mimeType: string;
+	/** Present for text-like kinds (html/svg/code/markdown). */
+	text?: string;
+	/** Present for binary kinds (image/audio/video/pdf) — stored as a Blob so
+	 *  IndexedDB avoids the base64 inflation you'd get from a string field. */
+	blob?: Blob;
+	sourceMessageId?: string;
+	metadata?: Record<string, unknown>;
+}
