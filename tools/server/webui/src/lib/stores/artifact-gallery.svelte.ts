@@ -8,7 +8,7 @@
  * `saveManual`.
  */
 
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { hashString } from '$lib/utils/artifacts';
 import { DatabaseService } from '$lib/services/database.service';
 import type {
@@ -44,6 +44,9 @@ class ArtifactGalleryStore {
 	artifacts = $state<DatabaseArtifact[]>([]);
 	loaded = $state(false);
 	loading = $state(false);
+	/** Runs once per process to clean up same-slot duplicates left over from
+	 *  the pre-lock race bug. Idempotent. */
+	private dedupedOnce = false;
 
 	/**
 	 * Per-slot in-flight promise so concurrent `captureFromChat` calls for the
@@ -59,11 +62,67 @@ class ArtifactGalleryStore {
 		if (this.loading) return;
 		this.loading = true;
 		try {
+			if (!this.dedupedOnce) {
+				this.dedupedOnce = true;
+				await this.dedupSameSlotArtifacts();
+			}
 			this.artifacts = await DatabaseService.listArtifacts();
 			this.loaded = true;
 		} finally {
 			this.loading = false;
 		}
+	}
+
+	/**
+	 * One-shot cleanup for the pre-fix race bug that left multiple artifacts
+	 * sharing the same `(sourceConversationId, sourceMessageSlot)` key.
+	 *
+	 * Strategy: group by slot, keep the earliest artifact in each group, fold
+	 * every other sibling's revisions into the keeper as fresh revisions
+	 * (reason=regenerate so they're visually distinct from genuine edits),
+	 * then delete the siblings. Does nothing when no groups have duplicates,
+	 * so re-running is cheap.
+	 */
+	async dedupSameSlotArtifacts(): Promise<number> {
+		const all = await DatabaseService.listArtifacts();
+		const groups = new SvelteMap<string, DatabaseArtifact[]>();
+		for (const a of all) {
+			if (!a.sourceConversationId || !a.sourceMessageSlot) continue;
+			const key = `${a.sourceConversationId}::${a.sourceMessageSlot}`;
+			const arr = groups.get(key);
+			if (arr) arr.push(a);
+			else groups.set(key, [a]);
+		}
+		let merged = 0;
+		for (const group of groups.values()) {
+			if (group.length < 2) continue;
+			// Earliest createdAt is the keeper; stable within the group.
+			group.sort((x, y) => x.createdAt - y.createdAt);
+			const keeper = group[0];
+			const dupes = group.slice(1);
+			const keeperRevs = await DatabaseService.listArtifactRevisions(keeper.id);
+			const seenHashes = new SvelteSet(keeperRevs.map((r) => r.contentHash));
+			for (const dupe of dupes) {
+				const dupeRevs = await DatabaseService.listArtifactRevisions(dupe.id);
+				for (const rev of dupeRevs) {
+					// Skip revisions we already have (deduped by content hash).
+					if (seenHashes.has(rev.contentHash)) continue;
+					seenHashes.add(rev.contentHash);
+					await DatabaseService.appendArtifactRevision(keeper.id, {
+						reason: 'regenerate',
+						contentHash: rev.contentHash,
+						mimeType: rev.mimeType,
+						text: rev.text,
+						blob: rev.blob,
+						sourceMessageId: rev.sourceMessageId,
+						metadata: { ...(rev.metadata ?? {}), mergedFromArtifactId: dupe.id }
+					});
+				}
+				await DatabaseService.deleteArtifact(dupe.id);
+				merged++;
+			}
+		}
+		return merged;
 	}
 
 	/**
@@ -213,6 +272,18 @@ class ArtifactGalleryStore {
 
 	async remove(artifactId: string): Promise<void> {
 		await DatabaseService.deleteArtifact(artifactId);
+		await this.load();
+	}
+
+	/**
+	 * Bulk delete. Single `load()` at the end so the gallery doesn't re-render
+	 * N times during a multi-select wipe.
+	 */
+	async removeMany(artifactIds: string[]): Promise<void> {
+		if (artifactIds.length === 0) return;
+		for (const id of artifactIds) {
+			await DatabaseService.deleteArtifact(id);
+		}
 		await this.load();
 	}
 }
