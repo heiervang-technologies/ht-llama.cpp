@@ -54,7 +54,8 @@
 			const keep = activeRevision?.id
 				? revisions.find((r) => r.id === activeRevision!.id)
 				: undefined;
-			activeRevision = keep ?? revisions.find((r) => r.id === a.currentRevisionId) ?? revisions.at(-1) ?? null;
+			activeRevision =
+				keep ?? revisions.find((r) => r.id === a.currentRevisionId) ?? revisions.at(-1) ?? null;
 		} finally {
 			loading = false;
 		}
@@ -79,7 +80,7 @@
 		if (!artifact) return;
 		if (!confirm(`Delete "${artifact.title}" and all ${revisions.length} revisions?`)) return;
 		await artifactGalleryStore.remove(artifactId);
-		goto('/artifacts');
+		goto('#/artifacts');
 	}
 
 	async function handleRename() {
@@ -106,9 +107,9 @@
 
 	function handleDownload() {
 		if (!artifact || !activeRevision) return;
-		const ext = (
-			activeRevision.mimeType.split('/')[1] || inferExt(artifact.kind) || 'bin'
-		).split(';')[0];
+		const ext = (activeRevision.mimeType.split('/')[1] || inferExt(artifact.kind) || 'bin').split(
+			';'
+		)[0];
 		const filename = `${artifact.title.replace(/[^\w.-]+/g, '_') || 'artifact'}.rev${activeRevision.revisionNumber}.${ext}`;
 		const blob =
 			activeRevision.blob ??
@@ -182,7 +183,7 @@
 
 	function openInChat() {
 		if (!artifact?.sourceConversationId) return;
-		goto(`/chat/${artifact.sourceConversationId}`);
+		goto(`#/chat/${artifact.sourceConversationId}`);
 	}
 </script>
 
@@ -194,7 +195,7 @@
 	<header
 		class="sticky top-0 z-20 flex items-center gap-2 border-b bg-background/80 p-3 backdrop-blur md:p-4"
 	>
-		<Button variant="ghost" size="sm" onclick={() => goto('/artifacts')}>
+		<Button variant="ghost" size="sm" onclick={() => goto('#/artifacts')}>
 			<ArrowLeft class="h-4 w-4" />
 			<span class="hidden md:inline">Gallery</span>
 		</Button>
@@ -272,7 +273,7 @@
 			{:else if !artifact || !activeRevision}
 				<div class="flex h-full flex-col items-center justify-center gap-2 text-center">
 					<p class="text-sm text-muted-foreground">Artifact not found.</p>
-					<Button variant="outline" size="sm" onclick={() => goto('/artifacts')}>
+					<Button variant="outline" size="sm" onclick={() => goto('#/artifacts')}>
 						Back to gallery
 					</Button>
 				</div>
@@ -283,12 +284,7 @@
 					spellcheck="false"
 				></textarea>
 				<div class="flex justify-end gap-2">
-					<Button
-						variant="ghost"
-						size="sm"
-						onclick={() => (editing = false)}
-						disabled={saving}
-					>
+					<Button variant="ghost" size="sm" onclick={() => (editing = false)} disabled={saving}>
 						<X class="h-4 w-4" />
 						Cancel
 					</Button>
@@ -303,7 +299,7 @@
 		</main>
 
 		<aside class="hidden w-60 flex-shrink-0 overflow-y-auto border-l p-3 md:block">
-			<h2 class="mb-2 text-xs font-medium uppercase text-muted-foreground">Revisions</h2>
+			<h2 class="mb-2 text-xs font-medium text-muted-foreground uppercase">Revisions</h2>
 			{#if artifact}
 				<ArtifactRevisionList
 					{revisions}

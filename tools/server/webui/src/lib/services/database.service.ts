@@ -658,10 +658,7 @@ export class DatabaseService {
 			const artifact = await db.artifacts.get(artifactId);
 			if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
 			const last = (
-				await db.artifactRevisions
-					.where('artifactId')
-					.equals(artifactId)
-					.sortBy('revisionNumber')
+				await db.artifactRevisions.where('artifactId').equals(artifactId).sortBy('revisionNumber')
 			).at(-1);
 			const now = Date.now();
 			const rev: DatabaseArtifactRevision = {

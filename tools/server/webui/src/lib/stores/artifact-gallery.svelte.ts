@@ -8,6 +8,7 @@
  * `saveManual`.
  */
 
+import { SvelteMap } from 'svelte/reactivity';
 import { hashString } from '$lib/utils/artifacts';
 import { DatabaseService } from '$lib/services/database.service';
 import type {
@@ -44,6 +45,16 @@ class ArtifactGalleryStore {
 	loaded = $state(false);
 	loading = $state(false);
 
+	/**
+	 * Per-slot in-flight promise so concurrent `captureFromChat` calls for the
+	 * same (conversation, slot) serialize. Without this, two racers both see
+	 * `findArtifactBySlot → undefined` before either `createArtifact` commits,
+	 * and end up inserting twin artifacts for the same content. The race is
+	 * real: a remounting ChatMessageAssistant, an HMR reload mid-stream, or a
+	 * scroll-virtualized re-render can all trigger overlapping captures.
+	 */
+	private slotLocks = new SvelteMap<string, Promise<DatabaseArtifact | null>>();
+
 	async load(): Promise<void> {
 		if (this.loading) return;
 		this.loading = true;
@@ -61,6 +72,25 @@ class ArtifactGalleryStore {
 	 * content hash so a no-op streaming update doesn't bloat the timeline.
 	 */
 	async captureFromChat(
+		source: CaptureSource,
+		payload: CapturePayload
+	): Promise<DatabaseArtifact | null> {
+		const lockKey = `${source.conversationId}::${source.slot}`;
+		const inFlight = this.slotLocks.get(lockKey);
+		// Chain onto any in-flight capture for this slot so the two calls see
+		// each other's writes (the second call will hit the `existing` branch
+		// once the first commits).
+		const run = (inFlight ?? Promise.resolve(null)).then(() => this.#captureImpl(source, payload));
+		this.slotLocks.set(lockKey, run);
+		try {
+			return await run;
+		} finally {
+			// Only clear if nobody else has taken the lock in the meantime.
+			if (this.slotLocks.get(lockKey) === run) this.slotLocks.delete(lockKey);
+		}
+	}
+
+	async #captureImpl(
 		source: CaptureSource,
 		payload: CapturePayload
 	): Promise<DatabaseArtifact | null> {
