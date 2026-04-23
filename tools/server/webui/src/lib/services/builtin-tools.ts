@@ -248,6 +248,71 @@ register({
 	definition: {
 		type: 'function',
 		function: {
+			name: 'send_keys',
+			description:
+				"Type into a sandbox terminal's shared PTY. The user sees everything you type appear in their xterm in real time; use this for pair-debugging, running commands on the user's behalf, or reacting to program output. The terminal must already exist and have been opened at least once (so a bash session is live). Ends with a newline automatically if `auto_enter` is true.",
+			parameters: {
+				type: 'object',
+				properties: {
+					terminalId: {
+						type: 'string',
+						description: 'The id of the terminal (from list_terminals or the URL the user shared).'
+					},
+					text: {
+						type: 'string',
+						description:
+							'Exact characters to type. Include control chars verbatim — e.g. "\\u0003" for Ctrl+C. Mutually exclusive with `base64`.'
+					},
+					auto_enter: {
+						type: 'boolean',
+						description:
+							'If true, append a newline to `text` so the shell executes it as a single command. Default false — use false when injecting partial input or control sequences.'
+					}
+				},
+				required: ['terminalId']
+			}
+		}
+	},
+	async execute(args) {
+		const terminalId = String(args.terminalId ?? '');
+		if (!terminalId) return err('terminalId is required');
+		const text = typeof args.text === 'string' ? args.text : '';
+		if (!text) return err('text is required (non-empty)');
+		const autoEnter = Boolean(args.auto_enter);
+
+		// Reuse the termd service's URL resolution so `send_keys`
+		// works identically from the Tauri sidecar or a manually-
+		// configured endpoint. Imported lazily to avoid a circular
+		// dependency with `services/termd.service.ts` at module load.
+		const { resolveTermdUrl } = await import('./termd.service');
+		const base = resolveTermdUrl();
+		if (!base) return err('terminals are not configured (no ht-termd URL)');
+
+		const res = await fetch(
+			`${base.replace(/\/+$/, '')}/v1/terminals/${encodeURIComponent(terminalId)}/input`,
+			{
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ text, auto_enter: autoEnter })
+			}
+		);
+		if (!res.ok) {
+			let detail = '';
+			try {
+				detail = ((await res.json()) as { error?: string }).error ?? '';
+			} catch {
+				/* ignore non-JSON error body */
+			}
+			return err(detail || `HTTP ${res.status}`);
+		}
+		return ok({ sent: text.length });
+	}
+});
+
+register({
+	definition: {
+		type: 'function',
+		function: {
 			name: 'fork_artifact',
 			description:
 				'Create an independent copy of an artifact (current revision by default) as a new gallery entry. The fork starts its own revision chain; use this when you want to iterate in a new direction without touching the original. The original is unchanged; the new artifact gets a "forked" tag and metadata pointers back to the source.',

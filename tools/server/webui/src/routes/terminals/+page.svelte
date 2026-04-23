@@ -4,8 +4,14 @@
 	import { Button } from '$lib/components/ui/button';
 	import { TerminalSquare, Plus, RefreshCw } from '@lucide/svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
-	import { SandboxSetupBanner, TerminalTile } from '$lib/components/app/terminals';
-	import { resolveTermdUrl } from '$lib/services/termd.service';
+	import {
+		SandboxSetupBanner,
+		TerminalTile,
+		CreateTerminalDialog
+	} from '$lib/components/app/terminals';
+	import { resolveTermdUrl, type CreateTerminalBody } from '$lib/services/termd.service';
+
+	let showCreateDialog = $state(false);
 
 	let creating = $derived(terminalsStore.creating);
 	let terminals = $derived(terminalsStore.terminals);
@@ -18,8 +24,9 @@
 		terminalsStore.refresh();
 	});
 
-	async function handleCreate() {
-		const t = await terminalsStore.create();
+	async function handleCreate(body: CreateTerminalBody) {
+		showCreateDialog = false;
+		const t = await terminalsStore.create(body);
 		if (t) toast.success(`Spawned sandbox "${t.name}"`);
 	}
 
@@ -50,7 +57,11 @@
 			<RefreshCw class="h-3.5 w-3.5" />
 			<span class="hidden sm:inline">Refresh</span>
 		</Button>
-		<Button size="sm" onclick={handleCreate} disabled={creating || needsSetup || !available}>
+		<Button
+			size="sm"
+			onclick={() => (showCreateDialog = true)}
+			disabled={creating || needsSetup || !available}
+		>
 			<Plus class="h-3.5 w-3.5" />
 			{creating ? 'Spawning…' : 'New terminal'}
 		</Button>
@@ -77,7 +88,7 @@
 			>
 				<TerminalSquare class="h-8 w-8 opacity-40" />
 				<p>No sandboxes yet.</p>
-				<Button size="sm" onclick={handleCreate} disabled={creating}>
+				<Button size="sm" onclick={() => (showCreateDialog = true)} disabled={creating}>
 					<Plus class="h-3.5 w-3.5" />
 					Spawn your first terminal
 				</Button>
@@ -97,3 +108,5 @@
 		{/if}
 	</footer>
 </div>
+
+<CreateTerminalDialog bind:open={showCreateDialog} onSubmit={handleCreate} />

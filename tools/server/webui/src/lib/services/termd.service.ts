@@ -31,6 +31,16 @@ export interface TerminalHandle {
 
 export interface CreateTerminalBody {
 	name?: string;
+	/** Shell snippet that runs once, as root, inside the container
+	 *  after files have been written. Output captured in the
+	 *  per-terminal bootstrap log accessible via
+	 *  `fetchBootstrapLog(id)`. */
+	bootstrap?: string;
+	/** Extra env vars for every docker-exec invocation. */
+	env?: Record<string, string>;
+	/** Files to drop before the bootstrap runs. Text passes through
+	 *  verbatim; prefix `base64:` for binary. */
+	files?: Array<{ path: string; content: string; mode?: number }>;
 }
 
 export class TermdUnavailable extends Error {
@@ -105,6 +115,31 @@ export const TermdService = {
 
 	async destroy(id: string): Promise<void> {
 		await request(`/v1/terminals/${encodeURIComponent(id)}`, { method: 'DELETE' });
+	},
+
+	/**
+	 * Send keys into an existing terminal's shared PTY. Matches the
+	 * server-side `/input` shape exactly; used both by the Review-mode
+	 * "approve" button and by the model via the `send_keys` built-in
+	 * tool.
+	 */
+	async sendInput(
+		id: string,
+		body: { text?: string; base64?: string; auto_enter?: boolean }
+	): Promise<void> {
+		await request(`/v1/terminals/${encodeURIComponent(id)}/input`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body)
+		});
+	},
+
+	/** Reads the bootstrap log (stdout + stderr of the setup script). */
+	async bootstrapLog(id: string): Promise<string> {
+		const r = await request<{ log: string }>(
+			`/v1/terminals/${encodeURIComponent(id)}/bootstrap-log`
+		);
+		return r.log;
 	},
 
 	/**

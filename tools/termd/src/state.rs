@@ -6,6 +6,8 @@ use anyhow::{Context, Result};
 use bollard::Docker;
 use std::sync::Arc;
 
+use crate::session::SessionRegistry;
+
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Inner>,
@@ -15,6 +17,7 @@ pub struct Inner {
     pub docker: Docker,
     pub image: String,
     pub network: String,
+    pub sessions: SessionRegistry,
 }
 
 impl AppState {
@@ -32,6 +35,7 @@ impl AppState {
                 docker,
                 image,
                 network,
+                sessions: SessionRegistry::new(),
             }),
         })
     }
@@ -44,5 +48,8 @@ impl AppState {
     }
     pub fn network(&self) -> &str {
         &self.inner.network
+    }
+    pub fn sessions(&self) -> &SessionRegistry {
+        &self.inner.sessions
     }
 }

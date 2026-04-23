@@ -1,20 +1,20 @@
-//! WebSocket ↔ `docker exec -it bash` bridge.
+//! WebSocket bridge from the browser's xterm.js to the shared PTY
+//! session (see `session.rs`). Multiple WS connections on the same
+//! terminal id share a single bash — fan-in inputs, fan-out outputs.
 //!
-//! Protocol: raw container bytes in both directions for stdin/stdout.
-//! Control frames are JSON text messages the webui sends for
-//! out-of-band signals — currently just `{"t":"resize","cols":N,"rows":N}`.
-//! Everything else is binary and passed through verbatim.
+//! Protocol: **binary** frames are raw PTY bytes in both directions.
+//! **Text** frames are JSON control messages:
+//!   `{"t":"resize","cols":N,"rows":N}`
+//! Unknown text is forwarded to stdin verbatim so legacy clients
+//! that send keystrokes as text still work.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
-use bollard::container::ResizeContainerTtyOptions;
-use bollard::exec::{CreateExecOptions, ResizeExecOptions, StartExecOptions, StartExecResults};
-use bollard::Docker;
-use futures_util::StreamExt;
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
-use tokio::io::AsyncWriteExt;
+use tokio::sync::broadcast::error::RecvError;
 
-use crate::docker::find_container_id;
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -32,123 +32,63 @@ pub async fn bridge(state: AppState, terminal_id: String, socket: WebSocket) {
 async fn run_bridge(
     state: AppState,
     terminal_id: &str,
-    mut socket: WebSocket,
+    socket: WebSocket,
 ) -> Result<()> {
-    let container_id = find_container_id(&state, terminal_id).await?;
-    let docker = state.docker().clone();
+    let session = state.sessions().attach(&state, terminal_id).await?;
+    let (mut sink, mut stream) = socket.split();
 
-    let exec = docker
-        .create_exec(
-            &container_id,
-            CreateExecOptions {
-                attach_stdin: Some(true),
-                attach_stdout: Some(true),
-                attach_stderr: Some(true),
-                tty: Some(true),
-                cmd: Some(vec!["/bin/bash".to_string()]),
-                env: Some(vec!["TERM=xterm-256color".to_string(), "HOME=/root".to_string()]),
-                working_dir: Some("/workspace".to_string()),
-                // Run as root inside the sandbox. gVisor + the
-                // sandbox-network iptables rules are the real
-                // security boundary; forcing a non-root user here
-                // just breaks `sudo` and package installs for no
-                // gain outside the runsc jail.
-                ..Default::default()
-            },
-        )
-        .await
-        .context("create_exec")?;
+    // Replay the backlog to this subscriber so a late joiner or a
+    // mode-switch remount sees the last screen worth of output.
+    let backlog = session.backlog_snapshot().await;
+    if !backlog.is_empty() {
+        sink.send(Message::Binary(backlog.to_vec())).await.ok();
+    }
 
-    let started = docker
-        .start_exec(&exec.id, Some(StartExecOptions { detach: false, tty: true, output_capacity: None }))
-        .await
-        .context("start_exec")?;
+    let mut out_rx = session.output.subscribe();
+    let mut running = true;
 
-    let (mut output, mut stdin) = match started {
-        StartExecResults::Attached { output, input } => (output, input),
-        StartExecResults::Detached => {
-            return Err(anyhow!("start_exec returned Detached; expected Attached"))
-        }
-    };
-
-    loop {
+    while running {
         tokio::select! {
-            // Container → WebSocket
-            next = output.next() => {
-                match next {
-                    Some(Ok(chunk)) => {
-                        let bytes = chunk.into_bytes();
-                        if bytes.is_empty() { continue; }
-                        if socket.send(Message::Binary(bytes.to_vec())).await.is_err() {
-                            break;
-                        }
+            // Shared PTY → this WS
+            msg = out_rx.recv() => {
+                match msg {
+                    Ok(bytes) => {
+                        if sink.send(Message::Binary(bytes.to_vec())).await.is_err() { break; }
                     }
-                    Some(Err(err)) => {
-                        tracing::debug!(%err, "exec output stream error");
-                        break;
+                    Err(RecvError::Lagged(_)) => {
+                        // Fell behind — repaint the backlog so the
+                        // subscriber isn't left with a gap, then
+                        // keep reading.
+                        let snap = session.backlog_snapshot().await;
+                        if sink.send(Message::Binary(snap.to_vec())).await.is_err() { break; }
                     }
-                    None => break,
+                    Err(RecvError::Closed) => break,
                 }
             }
-            // WebSocket → container / control
-            incoming = socket.recv() => {
+            // This WS → shared PTY
+            incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Binary(bytes))) => {
-                        if stdin.write_all(&bytes).await.is_err() { break; }
+                        session.send_input(Bytes::from(bytes)).await.ok();
                     }
                     Some(Ok(Message::Text(text))) => {
                         if let Ok(frame) = serde_json::from_str::<ControlFrame>(&text) {
-                            handle_control(&docker, &container_id, &exec.id, frame).await;
+                            match frame {
+                                ControlFrame::Resize { cols, rows } => {
+                                    let _ = session.resize(state.docker(), cols, rows).await;
+                                }
+                            }
                         } else {
-                            // Legacy clients may send raw text; forward as stdin.
-                            if stdin.write_all(text.as_bytes()).await.is_err() { break; }
+                            session.send_input(Bytes::from(text.into_bytes())).await.ok();
                         }
                     }
                     Some(Ok(Message::Ping(_)))
                     | Some(Ok(Message::Pong(_))) => { /* axum handles keepalive */ }
-                    Some(Ok(Message::Close(_))) => break,
-                    Some(Err(_)) | None => break,
+                    Some(Ok(Message::Close(_))) => { running = false; }
+                    Some(Err(_)) | None => { running = false; }
                 }
             }
         }
     }
-
-    // Best-effort: let the remote shell flush on its own; we don't
-    // kill the exec because the container is still owned by the
-    // sandbox and a fresh attach can get a new bash on demand.
-    let _ = stdin.shutdown().await;
     Ok(())
-}
-
-async fn handle_control(
-    docker: &Docker,
-    container_id: &str,
-    exec_id: &str,
-    frame: ControlFrame,
-) {
-    match frame {
-        ControlFrame::Resize { cols, rows } => {
-            // Resize both the exec PTY (so bash sees SIGWINCH) and
-            // the container's TTY (keeps tools that peek at the
-            // container-level size happy).
-            let _ = docker
-                .resize_exec(
-                    exec_id,
-                    ResizeExecOptions {
-                        height: rows,
-                        width: cols,
-                    },
-                )
-                .await;
-            let _ = docker
-                .resize_container_tty(
-                    container_id,
-                    ResizeContainerTtyOptions {
-                        height: rows,
-                        width: cols,
-                    },
-                )
-                .await;
-        }
-    }
 }
