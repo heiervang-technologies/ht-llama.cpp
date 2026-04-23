@@ -21,11 +21,7 @@
 import { DatabaseService } from './database.service';
 import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
 import type { DatabaseArtifactKind } from '$lib/types/database';
-import type {
-	MCPToolCall,
-	OpenAIToolDefinition,
-	ToolExecutionResult
-} from '$lib/types/mcp';
+import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$lib/types/mcp';
 
 /**
  * A built-in tool is defined in the OpenAI function-calling shape the
@@ -181,7 +177,7 @@ register({
 		function: {
 			name: 'get_artifact',
 			description:
-				'Read an artifact\'s current revision (or a specific revision) so you can reason about its content or produce an exact SEARCH/REPLACE anchor. For binary kinds (image/audio/video/pdf) only metadata is returned; use the UI to view the payload.',
+				"Read an artifact's current revision (or a specific revision) so you can reason about its content or produce an exact SEARCH/REPLACE anchor. For binary kinds (image/audio/video/pdf) only metadata is returned; use the UI to view the payload.",
 			parameters: {
 				type: 'object',
 				properties: {
@@ -191,8 +187,7 @@ register({
 					},
 					revisionId: {
 						type: 'string',
-						description:
-							'Optional specific revision to read. Omit for the current pinned revision.'
+						description: 'Optional specific revision to read. Omit for the current pinned revision.'
 					},
 					maxChars: {
 						type: 'integer',

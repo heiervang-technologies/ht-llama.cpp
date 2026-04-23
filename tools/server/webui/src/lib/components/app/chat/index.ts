@@ -501,6 +501,12 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.svelte';
 
 /**
+ * Tool message display component. Renders a role=tool result as a dim
+ * dashed-border card when `showToolMessagesAsStandalone` is on.
+ */
+export { default as ChatMessageTool } from './ChatMessages/ChatMessageTool.svelte';
+
+/**
  * User message display component. Renders user messages with right-aligned bubble styling.
  * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
  * Supports inline editing mode with ChatMessageEditForm integration.
