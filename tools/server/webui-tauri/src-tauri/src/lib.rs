@@ -23,10 +23,43 @@ pub fn run() {
 				}
 			}
 
+			// Inject platform defaults into the webview's global scope so
+			// a fresh install on Android auto-targets the user's
+			// tailnet-reachable llama.cpp instead of showing an empty
+			// Settings form. Desktop builds with HT_DEFAULT_* unset
+			// inject empty strings — the webui treats those as "no
+			// preference" and falls back to llama-server's /props as
+			// before.
+			if let Some(window) = app.get_webview_window("main") {
+				let script = defaults_init_script();
+				if let Err(err) = window.eval(&script) {
+					log::warn!("failed to inject platform defaults: {err:?}");
+				}
+			}
+
 			Ok(())
 		})
 		.run(tauri::generate_context!())
 		.expect("error while running tauri application");
+}
+
+/// Defaults baked into the bundle at build time. Read by the webui as
+/// fallbacks when `config().backendBaseUrl` / `terminalsBaseUrl` are
+/// empty — the user can still override in Settings.
+///
+/// These values come from `HT_DEFAULT_BACKEND_URL` /
+/// `HT_DEFAULT_TERMINALS_URL` at build time, so a desktop bundle and
+/// an Android APK can carry different presets without a code
+/// difference. An Android APK is built with the tailnet URLs so the
+/// phone just works.
+fn defaults_init_script() -> String {
+	let backend = option_env!("HT_DEFAULT_BACKEND_URL").unwrap_or("");
+	let terminals = option_env!("HT_DEFAULT_TERMINALS_URL").unwrap_or("");
+	format!(
+		"window.__HT_DEFAULT_BACKEND_URL__ = {backend_js}; window.__HT_DEFAULT_TERMINALS_URL__ = {terminals_js};",
+		backend_js = serde_json::to_string(backend).unwrap_or_else(|_| "\"\"".to_string()),
+		terminals_js = serde_json::to_string(terminals).unwrap_or_else(|_| "\"\"".to_string()),
+	)
 }
 
 #[cfg(target_os = "linux")]
