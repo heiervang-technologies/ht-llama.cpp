@@ -11,8 +11,10 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
+		ChatMessageTool,
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
+	import { config } from '$lib/stores/settings.svelte';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 
@@ -252,7 +254,9 @@
 	}
 </script>
 
-{#if message.role === MessageRole.SYSTEM}
+{#if message.role === MessageRole.TOOL && config().showToolMessagesAsStandalone}
+	<ChatMessageTool class={className} {message} />
+{:else if message.role === MessageRole.SYSTEM}
 	<ChatMessageSystem
 		bind:textareaElement
 		class={className}

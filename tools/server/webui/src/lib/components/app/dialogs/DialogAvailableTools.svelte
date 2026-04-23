@@ -129,7 +129,7 @@
 					<h3 class="flex items-center gap-2 text-sm font-semibold">
 						<Boxes class="h-4 w-4 text-primary" />
 						Built-in tools
-						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">
+						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary uppercase">
 							sent to model
 						</span>
 						<span class="text-xs font-normal text-muted-foreground">
