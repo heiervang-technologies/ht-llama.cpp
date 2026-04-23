@@ -74,6 +74,27 @@
 		);
 	}
 
+	// Clipboard image → inline markdown image. CodeMirror's default paste
+	// handler ignores non-text clipboard items, so we intercept the DOM event
+	// before it bubbles up. Returning true tells CM we handled the paste and
+	// keeps it from also pasting an empty string.
+	function insertPastedImage(view: EditorView, blob: Blob) {
+		const reader = new FileReader();
+		reader.onload = () => {
+			const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+			if (!dataUrl) return;
+			const insert = `\n![pasted image](${dataUrl})\n`;
+			const pos = view.state.selection.main.to;
+			view.dispatch({
+				changes: { from: pos, to: pos, insert },
+				selection: { anchor: pos + insert.length },
+				scrollIntoView: true,
+				userEvent: 'input.paste'
+			});
+		};
+		reader.readAsDataURL(blob);
+	}
+
 	function buildExtensions(isDark: boolean) {
 		return [
 			lineNumbers(),
@@ -86,6 +107,23 @@
 			inlineCompletion(),
 			keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
 			EditorView.lineWrapping,
+			EditorView.domEventHandlers({
+				paste(event, view) {
+					const items = event.clipboardData?.items;
+					if (!items) return false;
+					for (const item of items) {
+						if (item.kind === 'file' && item.type.startsWith('image/')) {
+							const blob = item.getAsFile();
+							if (blob) {
+								event.preventDefault();
+								insertPastedImage(view, blob);
+								return true;
+							}
+						}
+					}
+					return false;
+				}
+			}),
 			EditorView.updateListener.of((update) => {
 				if (update.docChanged) {
 					const value = update.state.doc.toString();

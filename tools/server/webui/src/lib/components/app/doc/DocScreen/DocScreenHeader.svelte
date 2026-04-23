@@ -8,11 +8,13 @@
 		Sparkles,
 		Mic,
 		Square,
-		Loader2
+		Loader2,
+		NotebookPen
 	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Popover from '$lib/components/ui/popover';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { BackendPill } from '$lib/components/app/navigation';
@@ -24,6 +26,9 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/audio-recording';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { selectedModelId } from '$lib/stores/models.svelte';
+	import ChainPicker from '$lib/components/app/chat/ChatForm/ChatFormActions/ChainPicker.svelte';
 	import AiCommandsMenu from './AiCommandsMenu.svelte';
 	import DocMoreActionsMenu from './DocMoreActionsMenu.svelte';
 
@@ -84,6 +89,22 @@
 
 	let localName = $derived(name);
 	let inlineOn = $derived(Boolean(config().inlineCompletionEnabled));
+
+	// Mirror of the global system prompt while the popover is open. Flushed to
+	// config only on Save so half-typed drafts don't leak into new chats.
+	let systemPromptDraft = $state('');
+	let systemPromptOpen = $state(false);
+	$effect(() => {
+		if (systemPromptOpen) systemPromptDraft = config().systemMessage ?? '';
+	});
+	function saveSystemPrompt() {
+		settingsStore.updateConfig('systemMessage', systemPromptDraft);
+		systemPromptOpen = false;
+		toast.success('System prompt updated');
+	}
+
+	let activeModelId = $derived(selectedModelId());
+	let isRouter = $derived(isRouterMode());
 
 	// Dictation: identical pattern to ChatForm's mic button, but the transcribed
 	// text is inserted at the editor cursor instead of into a textarea. Gated on
@@ -276,6 +297,45 @@
 				</Tooltip.Content>
 			</Tooltip.Root>
 		{/if}
+
+		<ChainPicker class="hidden md:flex" {activeModelId} {isRouter} />
+
+		<Popover.Root bind:open={systemPromptOpen}>
+			<Popover.Trigger>
+				{#snippet child({ props })}
+					<Button
+						{...props}
+						variant="ghost"
+						size="sm"
+						class="gap-1.5 rounded-full backdrop-blur-lg"
+						title="Edit system prompt (global)"
+					>
+						<NotebookPen class="h-4 w-4" />
+						<span class="hidden md:inline">System</span>
+					</Button>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content class="w-[min(28rem,90vw)]">
+				<div class="flex flex-col gap-2">
+					<p class="text-sm font-medium">System prompt</p>
+					<p class="text-xs text-muted-foreground">
+						Applies to all new chats and to the AI commands run from this editor.
+					</p>
+					<textarea
+						bind:value={systemPromptDraft}
+						rows="6"
+						class="w-full rounded-md border bg-background p-2 text-sm outline-none focus:ring-2 focus:ring-ring"
+						placeholder="You are a helpful assistant…"
+					></textarea>
+					<div class="flex justify-end gap-2">
+						<Button variant="ghost" size="sm" onclick={() => (systemPromptOpen = false)}>
+							Cancel
+						</Button>
+						<Button size="sm" onclick={saveSystemPrompt}>Save</Button>
+					</div>
+				</div>
+			</Popover.Content>
+		</Popover.Root>
 
 		<AiCommandsMenu onRun={onRunAiCommand} bind:open={commandsMenuOpen} />
 

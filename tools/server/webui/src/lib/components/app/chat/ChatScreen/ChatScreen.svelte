@@ -7,10 +7,10 @@
 		ChatMessages,
 		ChatScreenProcessingInfo,
 		DialogEmptyFileAlert,
-		DialogChatError,
 		ServerLoadingSplash,
 		DialogConfirmation
 	} from '$lib/components/app';
+	import { toast } from 'svelte-sonner';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { KeyboardKey } from '$lib/enums';
@@ -184,11 +184,31 @@
 		}
 	}
 
-	function handleErrorDialogOpenChange(open: boolean) {
-		if (!open) {
-			chatStore.dismissErrorDialog();
-		}
-	}
+	$effect(() => {
+		const err = activeErrorDialog;
+		if (!err) return;
+		// Render the error as a non-blocking toast instead of a modal takeover.
+		// The chat history stays visible and the user can keep typing while
+		// they read the message.
+		const isTimeout = err.type === ErrorDialogType.TIMEOUT;
+		const title = isTimeout ? 'Request timed out' : 'Server error';
+		const ctx = err.contextInfo;
+		const detail = ctx
+			? `${err.message}\nPrompt tokens: ${ctx.n_prompt_tokens.toLocaleString()}${
+					ctx.n_ctx ? ` · context size: ${ctx.n_ctx.toLocaleString()}` : ''
+				}`
+			: err.message;
+		toast.error(title, {
+			description: detail,
+			// Long enough to read, short enough not to linger. Users can dismiss
+			// manually via the X.
+			duration: 10_000,
+			closeButton: true
+		});
+		// Drain the state immediately so the effect doesn't retrigger and so
+		// subsequent errors always fire a fresh toast.
+		chatStore.dismissErrorDialog();
+	});
 
 	function handleDragOver(event: DragEvent) {
 		event.preventDefault();
@@ -385,7 +405,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
+		class="chat-scroll-container flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -616,17 +636,22 @@
 	}}
 />
 
-<DialogChatError
-	message={activeErrorDialog?.message ?? ''}
-	contextInfo={activeErrorDialog?.contextInfo}
-	onOpenChange={handleErrorDialogOpenChange}
-	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
-/>
-
 <ArtifactDrawer />
 
 <style>
+	/*
+	 * Chrome/WebKit scroll anchoring picks an element near the top of the
+	 * viewport and shifts scrollTop to keep it in view as content grows. In a
+	 * column-reverse streaming chat this fights our AutoScrollController — the
+	 * browser clings to an older message while new tokens arrive, producing a
+	 * "scroll jumps back up" effect. Letting the controller own scroll
+	 * position by disabling the browser heuristic.
+	 */
+	.chat-scroll-container,
+	.chat-scroll-container * {
+		overflow-anchor: none;
+	}
+
 	.conversation-chat-form {
 		position: relative;
 
