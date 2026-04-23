@@ -89,7 +89,13 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	inlineCompletionMaxTokens: 48,
 	// user-defined AI commands invoked from the doc editor header
 	// (stored as JSON string; empty string = use built-in defaults)
-	aiCommands: ''
+	aiCommands: '',
+	// model name (not id) to pre-select when opening a new chat / empty
+	// conversation. Empty means "no preference — let the first available
+	// model win." When set, the routes bootstrap selectModelByName on
+	// mount if the model is currently available; a missing default is
+	// silently ignored.
+	defaultModel: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -216,7 +222,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	inlineCompletionDelay:
 		'Milliseconds of idle time before an inline completion is requested (min 200).',
 	inlineCompletionMaxTokens:
-		'Max tokens requested per inline completion. Smaller values feel snappier.'
+		'Max tokens requested per inline completion. Smaller values feel snappier.',
+	defaultModel:
+		'Preferred model name pre-selected when opening a new chat (e.g. <code>gemma-4-e4b</code>). Leave empty to let the first available model win. Ignored silently when the named model is unavailable at load time.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [
