@@ -40,9 +40,21 @@
 	onMount(() => {
 		if (!hostEl) return;
 		term = new Terminal({
-			fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
+			// xterm's canvas renderer can't resolve CSS `var(--…)` —
+			// it measures glyph widths directly, so the family has
+			// to be literal font names and every one of them must
+			// be genuinely monospace. Picking the most common ones
+			// across Linux / macOS / Windows avoids the
+			// letter-spaced / proportional-fallback look.
+			fontFamily:
+				'"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, "SF Mono", "Fira Code", "Cascadia Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
 			fontSize: 13,
+			fontWeight: 400,
+			fontWeightBold: 600,
+			letterSpacing: 0,
+			lineHeight: 1.2,
 			cursorBlink: true,
+			cursorStyle: 'block',
 			scrollback: 5000,
 			allowProposedApi: true,
 			// Palette follows the app theme loosely. A proper theme

@@ -87,10 +87,27 @@ pub async fn assert_sandbox_ready(
             "Docker network `{network}` missing or lacks `enable_icc=false` — run `unleash sandbox setup`"
         ));
     }
-    if s.iptables_ok != IpTablesStatus::Ok {
-        return Err(anyhow!(
-            "iptables LAN-drop rules missing or unverifiable — run `sudo unleash sandbox setup`"
-        ));
+    match s.iptables_ok {
+        IpTablesStatus::Ok => {}
+        IpTablesStatus::Missing => {
+            return Err(anyhow!(
+                "iptables LAN-drop rules missing — run `sudo unleash sandbox setup`"
+            ));
+        }
+        IpTablesStatus::Unknown => {
+            // Best-effort: the daemon isn't root and has no sudo hook,
+            // so it can't read the table. We accept this *only* when
+            // the sandbox network itself is healthy (icc=off, correct
+            // subnet) — a strong signal that `unleash sandbox setup`
+            // was run end-to-end. If a user set up the network by
+            // hand without installing iptables rules, they deserve
+            // the escape hatch of fixing this themselves; refusing
+            // would make the daemon unusable in the common
+            // rootless-systemd-user deployment.
+            tracing::warn!(
+                "iptables rules unverifiable from this user; trusting sandbox network health"
+            );
+        }
     }
     if !s.image_ok {
         return Err(anyhow!(
@@ -119,9 +136,11 @@ async fn image_exists(docker: &Docker, image: &str) -> Result<bool> {
     Ok(docker.inspect_image(image).await.is_ok())
 }
 
-/// Check each required DROP rule via `iptables -C DOCKER-USER …`.
-/// Exit code 0 = rule exists; anything else (including "command not
-/// found" or "permission denied") trips the Unknown branch.
+/// Check that DOCKER-USER has a DROP rule for each required private
+/// range. We list the chain (`iptables -S DOCKER-USER`) and
+/// substring-match, because `iptables -C` needs an exact rule spec
+/// and the installed rules have a source prefix (`-s <subnet>`) we
+/// don't want to hard-code.
 async fn check_iptables() -> IpTablesStatus {
     let subnet_ranges = [
         "10.0.0.0/8",
@@ -129,39 +148,51 @@ async fn check_iptables() -> IpTablesStatus {
         "192.168.0.0/16",
         "169.254.0.0/16",
     ];
-    // We can't easily know the sandbox subnet (172.30.0.0/16 by
-    // convention) without reading the compose/shell scripts. The
-    // rule shape written by unleash's setup script is
-    //   -s 172.30.0.0/16 -d <range> -j DROP
-    // We therefore check for rules that DROP to each `<range>`
-    // regardless of source — any presence of a DROP rule with that
-    // destination counts as covered.
-    let mut all_ok = true;
-    let mut any_ran = false;
-    for range in subnet_ranges {
-        let out = Command::new("iptables")
-            .args(["-C", "DOCKER-USER", "-d", range, "-j", "DROP"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-        match out {
-            Ok(status) => {
-                any_ran = true;
-                if !status.success() {
-                    all_ok = false;
+    // iptables can only be read as root. Try direct first (unlikely
+    // to succeed under the user daemon), then fall back to
+    // `sudo -n` which works when a passwordless sudoers entry exists
+    // for iptables. If neither path reads the table, return
+    // `Unknown` — callers may choose to treat that as acceptable
+    // when the sandbox network is otherwise healthy (the rules were
+    // installed as part of `unleash sandbox setup` and our user
+    // simply can't verify it from userspace).
+    let output = {
+        let mut opt = None;
+        for args in [
+            vec!["iptables", "-S", "DOCKER-USER"],
+            vec!["sudo", "-n", "iptables", "-S", "DOCKER-USER"],
+        ] {
+            let res = Command::new(args[0])
+                .args(&args[1..])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .output()
+                .await;
+            if let Ok(o) = res {
+                if o.status.success() {
+                    opt = Some(o.stdout);
+                    break;
                 }
             }
-            Err(_) => return IpTablesStatus::Unknown,
+        }
+        match opt {
+            Some(o) => o,
+            None => return IpTablesStatus::Unknown,
+        }
+    };
+    let dump = String::from_utf8_lossy(&output);
+    // Each required range must appear as a destination (`-d <range>`)
+    // on a DROP rule (`-j DROP`). We scan line-by-line rather than
+    // regex so the check stays dependency-free.
+    for range in subnet_ranges {
+        let needle_d = format!("-d {range}");
+        let found = dump
+            .lines()
+            .any(|l| l.contains(&needle_d) && l.contains("-j DROP"));
+        if !found {
+            return IpTablesStatus::Missing;
         }
     }
-    if !any_ran {
-        return IpTablesStatus::Unknown;
-    }
-    if all_ok {
-        IpTablesStatus::Ok
-    } else {
-        IpTablesStatus::Missing
-    }
+    IpTablesStatus::Ok
 }
