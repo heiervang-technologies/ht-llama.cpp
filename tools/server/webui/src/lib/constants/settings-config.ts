@@ -101,7 +101,11 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// assistant turn's agentic section. Combines well with
 	// `showSystemMessage` + `alwaysShowAgenticTurns` for a full
 	// prompt-transparency view.
-	showToolMessagesAsStandalone: false
+	showToolMessagesAsStandalone: false,
+	// Override for the `ht-termd` sidecar URL. Empty = Tauri auto-spawn
+	// or llama-server `/props.terminals.url` take precedence. Set for
+	// web deployments that point at a remote termd instance (rare).
+	terminalsBaseUrl: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -232,7 +236,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	defaultModel:
 		'Preferred model name pre-selected when opening a new chat (e.g. <code>gemma-4-e4b</code>). Leave empty to let the first available model win. Ignored silently when the named model is unavailable at load time.',
 	showToolMessagesAsStandalone:
-		'Render each tool call + tool result as its own card in the chat log, before the next user message. Off by default (tool exchanges stay folded inside the assistant turn).'
+		'Render each tool call + tool result as its own card in the chat log, before the next user message. Off by default (tool exchanges stay folded inside the assistant turn).',
+	terminalsBaseUrl:
+		'Base URL of the <code>ht-termd</code> sidecar (e.g. <code>http://127.0.0.1:43127</code>). Leave empty in the Tauri app (the sidecar is auto-spawned). Only set this for web deployments pointing at a remote daemon.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FileText, Images, Search, SquarePen, X } from '@lucide/svelte';
+	import { FileText, Images, Search, SquarePen, TerminalSquare, X } from '@lucide/svelte';
 	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -95,6 +95,19 @@
 				<Images class="h-4 w-4" />
 
 				Artifacts
+			</div>
+		</Button>
+
+		<Button
+			class="w-full justify-start backdrop-blur-none!"
+			href="#/terminals"
+			onclick={handleMobileSidebarItemClick}
+			variant="ghost"
+		>
+			<div class="flex items-center gap-2">
+				<TerminalSquare class="h-4 w-4" />
+
+				Terminals
 			</div>
 		</Button>
 
