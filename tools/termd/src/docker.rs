@@ -118,19 +118,30 @@ pub async fn create_terminal(
             ..Default::default()
         }]),
         auto_remove: Some(false),
-        // Defensive caps — the image ships stock, but in case a
-        // user rebuilds with additional bits we want to make sure
-        // common escape vectors stay blocked.
+        // Defensive caps — keep the set small, but include what
+        // sudo + package managers inside the image actually need.
+        // The real sandbox boundary is gVisor (runsc) plus the
+        // LAN-block iptables rules on the unleash-sandbox network;
+        // stripping caps below this point doesn't add security, it
+        // just breaks basic shell operations.
+        //
+        // Deliberately NOT setting `no-new-privileges:true` — that
+        // would block sudo's setuid transition even though sudo is
+        // installed, which was surprising and wrong for an
+        // interactive sandbox.
         cap_drop: Some(vec!["ALL".to_string()]),
         cap_add: Some(vec![
-            // Just what bash + git + tmux actually need inside.
             "CHOWN".to_string(),
             "DAC_OVERRIDE".to_string(),
             "FOWNER".to_string(),
+            "FSETID".to_string(),
             "SETUID".to_string(),
             "SETGID".to_string(),
+            "SETPCAP".to_string(),
+            "NET_BIND_SERVICE".to_string(),
+            "KILL".to_string(),
+            "AUDIT_WRITE".to_string(),
         ]),
-        security_opt: Some(vec!["no-new-privileges:true".to_string()]),
         ..Default::default()
     };
 

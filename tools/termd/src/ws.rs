@@ -46,12 +46,13 @@ async fn run_bridge(
                 attach_stderr: Some(true),
                 tty: Some(true),
                 cmd: Some(vec!["/bin/bash".to_string()]),
-                env: Some(vec![
-                    "TERM=xterm-256color".to_string(),
-                    "HOME=/home/unleash".to_string(),
-                ]),
+                env: Some(vec!["TERM=xterm-256color".to_string(), "HOME=/root".to_string()]),
                 working_dir: Some("/workspace".to_string()),
-                user: Some("unleash".to_string()),
+                // Run as root inside the sandbox. gVisor + the
+                // sandbox-network iptables rules are the real
+                // security boundary; forcing a non-root user here
+                // just breaks `sudo` and package installs for no
+                // gain outside the runsc jail.
                 ..Default::default()
             },
         )

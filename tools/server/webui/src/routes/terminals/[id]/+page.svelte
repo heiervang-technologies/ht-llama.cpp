@@ -4,12 +4,36 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
-	import { ArrowLeft, Trash2 } from '@lucide/svelte';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { ArrowLeft, Trash2, Palette } from '@lucide/svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
 	import { TerminalView } from '$lib/components/app/terminals';
+	import {
+		TERMINAL_THEMES,
+		DEFAULT_TERMINAL_THEME_ID,
+		resolveTheme
+	} from '$lib/components/app/terminals/terminal-themes';
 
 	let id = $derived(page.params.id);
 	let terminal = $derived(terminalsStore.terminals.find((t) => t.id === id) ?? null);
+
+	// Theme selection persists in localStorage per-device so a user's
+	// preferred CRT skin survives a reload without adding another
+	// settings field.
+	const THEME_KEY = 'ht-llama.terminalThemeId';
+	let themeId = $state<string>(DEFAULT_TERMINAL_THEME_ID);
+	if (typeof localStorage !== 'undefined') {
+		themeId = localStorage.getItem(THEME_KEY) ?? DEFAULT_TERMINAL_THEME_ID;
+	}
+	let activeTheme = $derived(resolveTheme(themeId));
+	function pickTheme(next: string) {
+		themeId = next;
+		try {
+			localStorage.setItem(THEME_KEY, next);
+		} catch {
+			/* private mode — ignore */
+		}
+	}
 
 	onMount(async () => {
 		if (terminalsStore.terminals.length === 0) {
@@ -51,6 +75,28 @@
 				</p>
 			{/if}
 		</div>
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				<Button variant="ghost" size="sm" title="Terminal theme">
+					<Palette class="h-4 w-4" />
+					<span class="hidden md:inline">{activeTheme.label}</span>
+				</Button>
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-64">
+				{#each TERMINAL_THEMES as opt (opt.id)}
+					<DropdownMenu.Item
+						onclick={() => pickTheme(opt.id)}
+						class={opt.id === themeId ? 'bg-accent' : ''}
+					>
+						<div class="flex flex-col">
+							<span class="font-medium">{opt.label}</span>
+							<span class="text-[10px] text-muted-foreground">{opt.description}</span>
+						</div>
+					</DropdownMenu.Item>
+				{/each}
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+
 		<Button
 			variant="ghost"
 			size="sm"
@@ -66,9 +112,10 @@
 		{#if terminal}
 			{#key terminal.id}
 				<div
-					class="relative h-full w-full overflow-hidden rounded-xl border border-border/60 bg-[#0b0b10] p-2 shadow-sm"
+					class="relative h-full w-full overflow-hidden rounded-xl border border-border/60 p-2 shadow-sm"
+					style:background={activeTheme.palette.background}
 				>
-					<TerminalView terminalId={terminal.id} onDisconnect={handleDisconnect} />
+					<TerminalView terminalId={terminal.id} {themeId} onDisconnect={handleDisconnect} />
 				</div>
 			{/key}
 		{:else}
