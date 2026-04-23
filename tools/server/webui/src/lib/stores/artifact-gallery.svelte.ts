@@ -239,17 +239,51 @@ class ArtifactGalleryStore {
 	/**
 	 * Creates a new revision by hand — e.g. user opens an artifact, edits the
 	 * HTML/SVG/code in place, saves.
+	 *
+	 * `opts.parentRevisionId` pins the parent to a specific revision rather
+	 * than the latest-at-write-time one. The ai-patch dispatcher uses this
+	 * to snapshot the revision that was current when the patch *session
+	 * started*, so concurrent edits during streaming don't silently re-parent
+	 * the new revision onto whatever happens to be current at commit time.
+	 * Callers that omit it keep the original behaviour.
+	 *
+	 * Dedup rule (must hold regardless of `opts.parentRevisionId`):
+	 * - If the latest revision's contentHash equals the new hash AND the
+	 *   caller's pinned parent is either omitted or equal to the latest
+	 *   revision's id, we've produced a byte-for-byte duplicate of the
+	 *   current tip — return the existing revision instead of appending.
+	 * - If the caller pinned to an older revision and the new hash matches
+	 *   the tip, we still append (the edit represents a divergent branch
+	 *   that coincidentally arrived at the current tip text, and the
+	 *   revision timeline should record that).
 	 */
 	async addUserEditRevision(
 		artifactId: string,
-		payload: CapturePayload
+		payload: CapturePayload,
+		opts?: { parentRevisionId?: string }
 	): Promise<DatabaseArtifactRevision> {
 		const contentHash = await hashPayload(payload);
 		const revs = await DatabaseService.listArtifactRevisions(artifactId);
 		const latest = revs.at(-1);
+
+		const pinnedParent = opts?.parentRevisionId;
+		const effectiveParent = pinnedParent ?? latest?.id;
+
+		// Short-circuit when the new content matches the tip and the caller
+		// is parented off the tip (either by omission or by explicit pin).
+		// Without this guard, an ai-patch session that "no-ops" — e.g. a
+		// block matched but REPLACE was identical to SEARCH — would bloat
+		// the revision list. The override path needed the same guard; see
+		// commit message for context.
+		if (latest && latest.contentHash === contentHash) {
+			if (!pinnedParent || pinnedParent === latest.id) {
+				return latest;
+			}
+		}
+
 		const rev = await DatabaseService.appendArtifactRevision(artifactId, {
 			reason: 'edit',
-			parentRevisionId: latest?.id,
+			parentRevisionId: effectiveParent,
 			contentHash,
 			mimeType: payload.mimeType,
 			text: payload.text,
@@ -258,6 +292,58 @@ class ArtifactGalleryStore {
 		});
 		await this.load();
 		return rev;
+	}
+
+	/**
+	 * ai-patch entry point for inline / autocapture targets. Thin wrapper
+	 * over `captureFromChat` that:
+	 *   - creates the artifact on first hit (delegates to the usual
+	 *     create-on-slot-miss path);
+	 *   - on subsequent hits threads `parentRevisionId` through
+	 *     `addUserEditRevision` so the edit is parented off the revision
+	 *     that was current when the patch session started, not the one at
+	 *     commit time.
+	 * Returns both ids so the dispatcher can flip an inline target in-place
+	 * to an artifact handle after first commit.
+	 */
+	async captureFromChatForPatch(
+		source: CaptureSource,
+		payload: CapturePayload,
+		opts?: { parentRevisionId?: string }
+	): Promise<{ artifactId: string; revisionId: string }> {
+		const existing = await DatabaseService.findArtifactBySlot(source.conversationId, source.slot);
+		if (!existing) {
+			// Slot has no persisted record yet — create + initial revision in
+			// one transaction, matching `captureFromChat`'s miss path.
+			const contentHash = await hashPayload(payload);
+			const { artifact, revision } = await DatabaseService.createArtifact(
+				{
+					title: payload.title,
+					kind: payload.kind,
+					tags: payload.tags ?? [],
+					sourceConversationId: source.conversationId,
+					sourceMessageSlot: source.slot,
+					summary: payload.summary
+				},
+				{
+					contentHash,
+					mimeType: payload.mimeType,
+					text: payload.text,
+					blob: payload.blob,
+					sourceMessageId: source.messageId,
+					metadata: payload.metadata,
+					reason: 'initial'
+				}
+			);
+			await this.load();
+			return { artifactId: artifact.id, revisionId: revision.id };
+		}
+
+		// Existing slot — append a patch-derived edit. Reuse the dedup-aware
+		// override path so a no-op edit against the current tip doesn't
+		// bloat the revision list.
+		const rev = await this.addUserEditRevision(existing.id, payload, opts);
+		return { artifactId: existing.id, revisionId: rev.id };
 	}
 
 	async setCurrentRevision(artifactId: string, revisionId: string): Promise<void> {
@@ -285,6 +371,57 @@ class ArtifactGalleryStore {
 			await DatabaseService.deleteArtifact(id);
 		}
 		await this.load();
+	}
+
+	/**
+	 * Roll back an artifact to a prior revision by appending a new
+	 * `reason: 'rollback'` revision that duplicates the target revision's
+	 * payload. The artifact's `currentRevisionId` advances to the new
+	 * revision so the rollback is the new tip.
+	 *
+	 * Dedup short-circuit: rolling back to the current tip is a no-op —
+	 * we compare `contentHash` rather than id so rolling back to a
+	 * different-id-but-identical-content revision also dedupes.
+	 *
+	 * Metadata threaded through:
+	 *   - `metadata.rolledBackFrom` — the tip at time of rollback
+	 *   - `metadata.rolledBackTo`   — the target revision
+	 */
+	async rollbackToRevision(
+		artifactId: string,
+		targetRevisionId: string
+	): Promise<DatabaseArtifactRevision> {
+		const [artifact, targetRev] = await Promise.all([
+			DatabaseService.getArtifact(artifactId),
+			DatabaseService.getArtifactRevision(targetRevisionId)
+		]);
+		if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+		if (!targetRev || targetRev.artifactId !== artifactId) {
+			throw new Error(`Revision ${targetRevisionId} not found on artifact ${artifactId}`);
+		}
+		const currentRevisionId = artifact.currentRevisionId;
+		const allRevs = await DatabaseService.listArtifactRevisions(artifactId);
+		const currentRev = allRevs.find((r) => r.id === currentRevisionId) ?? allRevs.at(-1);
+
+		if (currentRev && currentRev.contentHash === targetRev.contentHash) {
+			return currentRev;
+		}
+
+		const rev = await DatabaseService.appendArtifactRevision(artifactId, {
+			reason: 'rollback',
+			parentRevisionId: currentRevisionId,
+			contentHash: targetRev.contentHash,
+			mimeType: targetRev.mimeType,
+			text: targetRev.text,
+			blob: targetRev.blob,
+			metadata: {
+				...(targetRev.metadata ?? {}),
+				rolledBackFrom: currentRevisionId,
+				rolledBackTo: targetRevisionId
+			}
+		});
+		await this.load();
+		return rev;
 	}
 }
 

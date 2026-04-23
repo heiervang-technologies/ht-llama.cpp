@@ -47,9 +47,33 @@ import type {
 } from '$lib/types/chat';
 import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import {
+	consumeCompletedPatchSession,
+	handleCompletedPatchSession
+} from '$lib/editor/ai-patch/chat-integration';
+import {
+	createChatPatchBootstrap,
+	type ChatPatchBootstrap
+} from '$lib/editor/ai-patch/chat-bootstrap';
+import type { InlineSeed } from '$lib/editor/ai-patch/target-resolution';
+import { toast } from 'svelte-sonner';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
+}
+
+/**
+ * Read `/artifacts/<id>` from the current route, if present. Used by the
+ * ai-patch bootstrap to decide whether the user has an artifact
+ * foregrounded at turn-start — a naked SEARCH/REPLACE fence then targets
+ * that artifact instead of falling through to the autocapture-slot
+ * fallback. SSR-safe: returns `null` when `window` is unavailable.
+ */
+function readCurrentArtifactIdFromRoute(): string | null {
+	if (typeof window === 'undefined') return null;
+	const path = window.location?.pathname ?? '';
+	const match = /\/artifacts\/([^/?#]+)/.exec(path);
+	return match ? decodeURIComponent(match[1]) : null;
 }
 
 class ChatStore {
@@ -516,6 +540,12 @@ class ChatStore {
 				conversationsStore.activeMessages.slice(0, -1),
 				assistantMessage
 			);
+			// ai-patch repair loop: if the assistant turn owned a PatchSession
+			// and it ended with a repairable failure (F2/F3/F6/F7/F11/F14),
+			// inject a synthetic user turn quoting the error and re-run the
+			// stream. See `$lib/editor/ai-patch/chat-integration.ts` for the
+			// one-step-of-the-loop contract and the reflection-budget cap.
+			await this.maybeRunPatchRepairLoop(currentConv.id, assistantMessage.id);
 		} catch (error) {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
@@ -565,6 +595,43 @@ class ChatStore {
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
 
+		// ai-patch live-chat bootstrap (commit 5). Lazily opens a
+		// PatchSession the first time the assistant stream emits a
+		// `<<<<<<< SEARCH` marker. Until then it's inert — no DB writes,
+		// no registry entries, no toasts. On stream end (success or
+		// error) we call `bootstrap.end()` so the CommitResult lands in
+		// the completed-session registry; `maybeRunPatchRepairLoop` then
+		// consumes it.
+		const parentMessageId = assistantMessage.parent ?? '';
+		const patchBootstrap: ChatPatchBootstrap = createChatPatchBootstrap({
+			messageId: assistantMessage.id,
+			modelId: effectiveModel ?? selectedModelName() ?? '',
+			conversationId: convId,
+			parentMessageId,
+			getCurrentArtifactId: readCurrentArtifactIdFromRoute,
+			getInlineSeed: (): InlineSeed | null => {
+				// Default seed — html/text/plain. The autocapture path
+				// doesn't sniff the REPLACE payload yet; commit 6
+				// territory. For now we accept the v1 limitation: the
+				// inline seed only materialises a fresh artifact when
+				// a naked-fence block has no current artifact open and
+				// the dispatcher's inline→artifact upgrade fires on
+				// first commit. If the content turns out not to be
+				// html-shaped the artifact will still render via the
+				// gallery's "code" kind — this is best-effort.
+				if (!streamedContent) return null;
+				return {
+					kind: 'code',
+					title: 'ai-patch draft',
+					mimeType: 'text/plain',
+					baseText: streamedContent
+				};
+			},
+			onNoTarget: (reason) => {
+				toast.error('AI-patch could not find a target buffer', { description: reason });
+			}
+		});
+
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
 			const n = normalizeModelName(modelName);
@@ -602,6 +669,11 @@ class ChatStore {
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();
+				// ai-patch tap — the bootstrap is inert until the first
+				// `<<<<<<< SEARCH` marker is sniffed. The raw text
+				// continues to render in the chat message unchanged;
+				// this tap only drives the patch-session side-effect.
+				patchBootstrap.feed(chunk);
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
@@ -771,65 +843,146 @@ class ChatStore {
 
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
 
+		// Ensure `patchBootstrap.end()` fires exactly once per turn, after
+		// both the agentic and non-agentic paths have drained their
+		// stream callbacks. This is what lands the CommitResult in the
+		// chat-integration registry so `maybeRunPatchRepairLoop` can
+		// consume it.
+		let bootstrapClosed = false;
+		const closeBootstrap = async () => {
+			if (bootstrapClosed) return;
+			bootstrapClosed = true;
+			try {
+				await patchBootstrap.end();
+			} catch (err) {
+				console.warn('[ai-patch] bootstrap.end failed', err);
+			}
+		};
+
 		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
-			const agenticResult = await agenticStore.runAgenticFlow({
-				conversationId: convId,
-				messages: allMessages,
-				options: { ...this.getApiOptions(), ...(effectiveModel ? { model: effectiveModel } : {}) },
-				callbacks: streamCallbacks,
-				signal: abortController.signal,
-				perChatOverrides
-			});
-			if (agenticResult.handled) return;
+			try {
+				const agenticResult = await agenticStore.runAgenticFlow({
+					conversationId: convId,
+					messages: allMessages,
+					options: {
+						...this.getApiOptions(),
+						...(effectiveModel ? { model: effectiveModel } : {})
+					},
+					callbacks: streamCallbacks,
+					signal: abortController.signal,
+					perChatOverrides
+				});
+				if (agenticResult.handled) {
+					await closeBootstrap();
+					return;
+				}
+			} catch (err) {
+				patchBootstrap.abort();
+				throw err;
+			}
 		}
 
 		// Non-agentic path: direct streaming into the single assistant message
-		await ChatService.sendMessage(
-			allMessages,
-			{
-				...this.getApiOptions(),
-				...(effectiveModel ? { model: effectiveModel } : {}),
-				stream: true,
-				onChunk: streamCallbacks.onChunk,
-				onReasoningChunk: streamCallbacks.onReasoningChunk,
-				onModel: streamCallbacks.onModel,
-				onTimings: streamCallbacks.onTimings,
-				onComplete: async (
-					finalContent?: string,
-					reasoningContent?: string,
-					timings?: ChatMessageTimings,
-					toolCalls?: string
-				) => {
-					const content = streamedContent || finalContent || '';
-					const reasoning = streamedReasoningContent || reasoningContent;
-					const updateData: Record<string, unknown> = {
-						content,
-						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
-					};
-					if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
-					await DatabaseService.updateMessage(currentMessageId, updateData);
-					const idx = conversationsStore.findMessageIndex(currentMessageId);
-					const uiUpdate: Partial<DatabaseMessage> = {
-						content,
-						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || ''
-					};
-					if (timings) uiUpdate.timings = timings;
-					if (resolvedModel) uiUpdate.model = resolvedModel;
-					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-					await conversationsStore.updateCurrentNode(currentMessageId);
-					cleanupStreamingState();
-					if (onComplete) await onComplete(content);
-					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+		try {
+			await ChatService.sendMessage(
+				allMessages,
+				{
+					...this.getApiOptions(),
+					...(effectiveModel ? { model: effectiveModel } : {}),
+					stream: true,
+					onChunk: streamCallbacks.onChunk,
+					onReasoningChunk: streamCallbacks.onReasoningChunk,
+					onModel: streamCallbacks.onModel,
+					onTimings: streamCallbacks.onTimings,
+					onComplete: async (
+						finalContent?: string,
+						reasoningContent?: string,
+						timings?: ChatMessageTimings,
+						toolCalls?: string
+					) => {
+						const content = streamedContent || finalContent || '';
+						const reasoning = streamedReasoningContent || reasoningContent;
+						const updateData: Record<string, unknown> = {
+							content,
+							reasoningContent: reasoning || undefined,
+							toolCalls: toolCalls || '',
+							timings
+						};
+						if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+						await DatabaseService.updateMessage(currentMessageId, updateData);
+						const idx = conversationsStore.findMessageIndex(currentMessageId);
+						const uiUpdate: Partial<DatabaseMessage> = {
+							content,
+							reasoningContent: reasoning || undefined,
+							toolCalls: toolCalls || ''
+						};
+						if (timings) uiUpdate.timings = timings;
+						if (resolvedModel) uiUpdate.model = resolvedModel;
+						conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+						await conversationsStore.updateCurrentNode(currentMessageId);
+						cleanupStreamingState();
+						if (onComplete) await onComplete(content);
+						if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					},
+					onError: streamCallbacks.onError
 				},
-				onError: streamCallbacks.onError
-			},
-			convId,
-			abortController.signal
-		);
+				convId,
+				abortController.signal
+			);
+		} catch (err) {
+			patchBootstrap.abort();
+			throw err;
+		} finally {
+			await closeBootstrap();
+		}
+	}
+
+	/**
+	 * Close the ai-patch repair loop for a just-completed assistant turn.
+	 *
+	 * The bootstrap that opens a `PatchSession` for a chat turn (commit 5
+	 * — not yet wired; commit 4d exposes the glue but doesn't create
+	 * sessions on the hot path) is expected to call
+	 * `recordCompletedPatchSession(messageId, result)` at `session.end()`
+	 * time. This method consumes that result (if any) and, for repairable
+	 * failures under the reflection budget, injects a synthetic
+	 * `patch-repair` user turn and re-runs the stream against it.
+	 *
+	 * Turns without a patch session are a no-op — the consume call
+	 * returns `null` and we fall through. This keeps the ai-patch
+	 * coupling one-way: chatStore imports the integration module, not the
+	 * other way round.
+	 */
+	private async maybeRunPatchRepairLoop(convId: string, assistantMessageId: string): Promise<void> {
+		const result = consumeCompletedPatchSession(assistantMessageId);
+		if (!result) return;
+
+		await handleCompletedPatchSession({
+			conversationId: convId,
+			parentSessionId: assistantMessageId,
+			result,
+			runAssistantTurn: async () => {
+				// Retrigger the stream against the just-injected repair turn.
+				// `injectRepairTurn` has already parented the synthetic user
+				// turn to the conversation's leaf and mirrored it into
+				// `activeMessages`, so we create a fresh assistant message
+				// under it and run streamChatCompletion — mirroring the final
+				// two steps of `sendMessage` without re-entering the guard.
+				if (conversationsStore.activeConversation?.id !== convId) return;
+				if (this.isChatLoadingInternal(convId)) return;
+				const leaf = conversationsStore.activeMessages.at(-1);
+				if (!leaf) return;
+				this.setChatLoading(convId, true);
+				const retryAssistant = await this.createAssistantMessage(leaf.id);
+				conversationsStore.addMessageToActive(retryAssistant);
+				await this.streamChatCompletion(
+					conversationsStore.activeMessages.slice(0, -1),
+					retryAssistant
+				);
+				await this.maybeRunPatchRepairLoop(convId, retryAssistant.id);
+			}
+		});
 	}
 
 	async stopGeneration(): Promise<void> {

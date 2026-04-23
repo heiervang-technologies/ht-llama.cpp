@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DatabaseArtifactRevision } from '$lib/types/database';
-	import { RefreshCw, PencilLine, GitBranch, Sparkles, Pin } from '@lucide/svelte';
+	import { RefreshCw, PencilLine, GitBranch, Sparkles, Pin, RotateCcw } from '@lucide/svelte';
 
 	interface Props {
 		revisions: DatabaseArtifactRevision[];
@@ -8,15 +8,28 @@
 		currentRevisionId: string;
 		onSelect: (revisionId: string) => void;
 		onPin?: (revisionId: string) => void;
+		/**
+		 * Append a new `reason: 'rollback'` revision that duplicates the
+		 * payload of `revisionId`. The row shows a hover-revealed
+		 * "rollback" action for every non-current revision; rolling back
+		 * to the current tip is a no-op (the store dedupes on contentHash).
+		 */
+		onRollback?: (revisionId: string) => void;
 	}
 
-	let { revisions, activeRevisionId, currentRevisionId, onSelect, onPin }: Props = $props();
+	let { revisions, activeRevisionId, currentRevisionId, onSelect, onPin, onRollback }: Props =
+		$props();
 
 	const ICON = {
 		initial: Sparkles,
 		regenerate: RefreshCw,
 		edit: PencilLine,
-		fork: GitBranch
+		fork: GitBranch,
+		// Reuse RotateCcw for "rolled back to …" rows so they're visually
+		// distinct from the pencil-icon edits that created them. Muted by
+		// default — the fact this is a rollback lives in the `reason`
+		// subline.
+		rollback: RotateCcw
 	} as const;
 </script>
 
@@ -28,7 +41,7 @@
 		<li>
 			<button
 				type="button"
-				class="flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-primary/60 {isActive
+				class="group flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-primary/60 {isActive
 					? 'border-primary bg-primary/10'
 					: 'border-transparent'}"
 				onclick={() => onSelect(rev.id)}
@@ -66,6 +79,30 @@
 							}
 						}}>pin</span
 					>
+				{/if}
+				{#if onRollback && !isPinned}
+					<!-- Rollback-to-here action. Hidden until the row is hovered to
+						   keep the list tight. Same nested-role pattern as pin. -->
+					<span
+						role="button"
+						tabindex="0"
+						aria-label="Rollback to this revision"
+						title="Rollback to rev {rev.revisionNumber}"
+						class="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-accent hover:text-foreground"
+						onclick={(e) => {
+							e.stopPropagation();
+							onRollback(rev.id);
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								onRollback(rev.id);
+							}
+						}}
+					>
+						<RotateCcw class="h-3 w-3" aria-hidden="true" />
+					</span>
 				{/if}
 			</button>
 		</li>

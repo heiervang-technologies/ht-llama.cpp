@@ -125,6 +125,13 @@ export interface DatabaseMessage {
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
 	model?: string;
+	/**
+	 * Free-form provenance bag — narrower shapes are defined in the
+	 * relevant subsystem (e.g. `MessageSource` in
+	 * `$lib/editor/ai-patch/types.ts`). The renderer switches on
+	 * `metadata?.source?.kind` to pick a specialised presentation.
+	 */
+	metadata?: Record<string, unknown>;
 }
 
 export type ExportedConversation = {
@@ -170,7 +177,7 @@ export interface DatabaseArtifactRevision {
 	artifactId: string;
 	revisionNumber: number;
 	createdAt: number;
-	reason: 'initial' | 'regenerate' | 'edit' | 'fork';
+	reason: 'initial' | 'regenerate' | 'edit' | 'fork' | 'rollback';
 	parentRevisionId?: string;
 	contentHash: string;
 	mimeType: string;

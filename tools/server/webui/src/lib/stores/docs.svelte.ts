@@ -7,9 +7,23 @@
 
 import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
+import { SvelteMap } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
+import type { DocEditorApi } from '$lib/components/app/doc/DocScreen/DocEditor.svelte';
 
 const DEFAULT_DOC_NAME = 'Untitled';
+
+/**
+ * Map of docId → live DocEditor api for currently-mounted editors. The
+ * ai-patch dispatcher consults this so it can paint streaming edits onto
+ * the real CM6 view when one is mounted, and fall back to headless
+ * string-replace when none is.
+ *
+ * `SvelteMap` rather than a plain `Map` both to satisfy the project's
+ * lint rule and because a future UI that shows "ai-patch is editing this
+ * doc" can subscribe to the registry without an extra reactive wrapper.
+ */
+const activeViews = new SvelteMap<string, DocEditorApi>();
 
 class DocsStore {
 	docs = $state<DatabaseDoc[]>([]);
@@ -116,6 +130,32 @@ class DocsStore {
 			await goto('#/');
 		}
 		await this.refresh();
+	}
+
+	/**
+	 * Register the DocEditor instance that is currently mounted for `docId`.
+	 * Called from DocEditor's `onMount`. A later mount for the same id
+	 * replaces the previous registration — Svelte's keyed `{#key doc.id}`
+	 * block in DocScreen unmounts the old editor before mounting the new
+	 * one so this is strictly sequential in practice.
+	 */
+	registerActiveView(docId: string, api: DocEditorApi): void {
+		activeViews.set(docId, api);
+	}
+
+	/** Tear down the registration for `docId`. Called from `onDestroy`. */
+	unregisterActiveView(docId: string): void {
+		activeViews.delete(docId);
+	}
+
+	/**
+	 * Look up the currently-mounted DocEditor for `docId`, if any. The
+	 * ai-patch dispatcher calls this to decide whether to attach a CM6
+	 * bridge (mounted view → attach + paint widget) or fall back to a
+	 * headless string-replace commit (no view → just updateContent).
+	 */
+	getActiveView(docId: string): DocEditorApi | undefined {
+		return activeViews.get(docId);
 	}
 }
 

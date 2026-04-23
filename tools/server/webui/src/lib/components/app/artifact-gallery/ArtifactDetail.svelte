@@ -76,6 +76,20 @@
 		await refresh();
 	}
 
+	async function rollbackRevision(revId: string) {
+		try {
+			const rev = await artifactGalleryStore.rollbackToRevision(artifactId, revId);
+			await refresh();
+			// Select the new rollback revision so the preview lands on what
+			// the user just asked for. Dedup short-circuits return the
+			// existing current tip — still select it to reassure the user.
+			activeRevision = rev;
+			toast.success(`Rolled back to rev ${rev.revisionNumber}`);
+		} catch (err) {
+			toast.error(`Rollback failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
 	async function handleDelete() {
 		if (!artifact) return;
 		if (!confirm(`Delete "${artifact.title}" and all ${revisions.length} revisions?`)) return;
@@ -307,6 +321,7 @@
 					currentRevisionId={artifact.currentRevisionId}
 					onSelect={selectRevision}
 					onPin={pinRevision}
+					onRollback={rollbackRevision}
 				/>
 			{/if}
 		</aside>
