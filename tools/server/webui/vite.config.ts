@@ -35,7 +35,15 @@ export default defineConfig({
 					$use-woff2: true;
 					$use-woff: false;
 					$use-ttf: false;
-				`
+				`,
+				// Silence the Sass deprecation spam from katex upstream
+				// — `katex/src/styles/katex.scss` still uses the legacy
+				// @import + global `nth()` / `length()` builtins. We're
+				// tracking katex, not maintaining it, so silencing the
+				// channel keeps the build log readable without masking
+				// deprecations in our own stylesheets.
+				silenceDeprecations: ['import', 'global-builtin'],
+				quietDeps: true
 			}
 		}
 	},

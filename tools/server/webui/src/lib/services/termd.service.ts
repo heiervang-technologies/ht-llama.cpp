@@ -67,6 +67,14 @@ export function resolveTermdUrl(): string | undefined {
 	}
 	const cfg = (config().terminalsBaseUrl as string | undefined)?.trim();
 	if (cfg) return cfg;
+	// Bundle-time default injected by the Tauri shell (from
+	// `HT_DEFAULT_TERMINALS_URL` at build). Empty on desktop, set to
+	// the tailnet-reachable termd on the Android APK.
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_TERMINALS_URL__?: string })
+			.__HT_DEFAULT_TERMINALS_URL__;
+		if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
+	}
 	return undefined;
 }
 

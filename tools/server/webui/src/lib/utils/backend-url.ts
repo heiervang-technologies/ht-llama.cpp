@@ -8,7 +8,19 @@ import { UrlProtocol } from '$lib/enums';
  */
 export function getBackendBaseUrl(): string {
 	const raw = config().backendBaseUrl?.toString().trim() ?? '';
-	return raw.replace(/\/+$/, '');
+	if (raw) return raw.replace(/\/+$/, '');
+	// Bundle-time default injected by the Tauri shell via
+	// `HT_DEFAULT_BACKEND_URL`. Lets the Android APK ship with the
+	// user's tailnet llama.cpp endpoint preconfigured so a fresh
+	// install works out of the box without opening Settings first.
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_BACKEND_URL__?: string })
+			.__HT_DEFAULT_BACKEND_URL__;
+		if (typeof fallback === 'string' && fallback.trim()) {
+			return fallback.trim().replace(/\/+$/, '');
+		}
+	}
+	return '';
 }
 
 /**
