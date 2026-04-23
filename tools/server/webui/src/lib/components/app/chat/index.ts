@@ -507,6 +507,14 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.s
 export { default as ChatMessageTool } from './ChatMessages/ChatMessageTool.svelte';
 
 /**
+ * Phantom context card. Rendered above the first message when
+ * `showToolMessagesAsStandalone` is on, showing the system prompt and
+ * every tool definition the model will see on the next turn — handy
+ * for eyeballing prompt context before sending.
+ */
+export { default as ChatMessagePhantomContext } from './ChatMessages/ChatMessagePhantomContext.svelte';
+
+/**
  * User message display component. Renders user messages with right-aligned bubble styling.
  * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
  * Supports inline editing mode with ChatMessageEditForm integration.

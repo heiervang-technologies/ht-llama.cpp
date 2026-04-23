@@ -23,6 +23,7 @@
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { getBuiltinToolDefinitions } from '$lib/services/builtin-tools';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { isAbortError } from '$lib/utils';
 import {
@@ -186,8 +187,15 @@ class AgenticStore {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const maxToolPreviewLines =
 			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+		// Built-in tools (list_artifacts, get_artifact, fork_artifact, etc.)
+		// count the same as MCP servers for the purpose of turning on the
+		// agentic loop — without this, a user with zero MCP servers but
+		// built-in tools available would fall through to the non-agentic
+		// path, which can't execute tool_calls. Either source enables it.
+		const hasTools =
+			mcpStore.hasEnabledServers(perChatOverrides) || getBuiltinToolDefinitions().length > 0;
 		return {
-			enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
+			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
 			maxTurns,
 			maxToolPreviewLines
 		};
@@ -199,9 +207,13 @@ class AgenticStore {
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
 
+		// Built-ins are always available; MCP may be absent. We still try to
+		// initialize MCP so configured servers come online, but a false return
+		// (no MCP configured at all) isn't fatal when built-ins are registered.
 		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-		if (!initialized) {
-			console.log('[AgenticStore] MCP not initialized, falling back to standard chat');
+		const hasBuiltins = getBuiltinToolDefinitions().length > 0;
+		if (!initialized && !hasBuiltins) {
+			console.log('[AgenticStore] No tool sources available, falling back to standard chat');
 			return { handled: false };
 		}
 
