@@ -1,10 +1,19 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
-	import { Wrench, ChevronRight, Server, FlaskConical, Sparkles, Copy } from '@lucide/svelte';
+	import {
+		Wrench,
+		ChevronRight,
+		Server,
+		FlaskConical,
+		Sparkles,
+		Copy,
+		Boxes
+	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { getBuiltinToolDefinitions } from '$lib/services/builtin-tools';
 
 	interface Props {
 		open: boolean;
@@ -15,7 +24,12 @@
 
 	// Everything derives off the live stores so the dialog mirrors exactly
 	// what the chat pipeline would send on the next request.
-	let mcpToolDefs = $derived(mcpStore.getToolDefinitionsForLLM());
+	let allToolDefs = $derived(mcpStore.getToolDefinitionsForLLM());
+	let builtinDefs = $derived(getBuiltinToolDefinitions());
+	let builtinNames = $derived(new Set(builtinDefs.map((d) => d.function.name)));
+	// Split for rendering — MCP section mirrors the MCP-specific UI (per-server
+	// grouping), built-ins get their own flat section.
+	let mcpToolDefs = $derived(allToolDefs.filter((d) => !builtinNames.has(d.function.name)));
 	let connections = $derived([...mcpStore.getConnections().values()]);
 
 	// Built-in feature flags that shape what the model sees or can do — not
@@ -108,13 +122,85 @@
 		</Dialog.Header>
 
 		<div class="flex max-h-[65vh] flex-col gap-6 overflow-y-auto pr-1">
+			<!-- Built-in tools. Bundled with the webui, always available, prepended
+				   to the tools[] array ahead of MCP. -->
+			<section class="flex flex-col gap-2">
+				<header class="flex items-center justify-between">
+					<h3 class="flex items-center gap-2 text-sm font-semibold">
+						<Boxes class="h-4 w-4 text-primary" />
+						Built-in tools
+						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">
+							sent to model
+						</span>
+						<span class="text-xs font-normal text-muted-foreground">
+							{builtinDefs.length} total
+						</span>
+					</h3>
+				</header>
+
+				{#if builtinDefs.length === 0}
+					<p class="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+						None registered.
+					</p>
+				{:else}
+					<div class="rounded-md border">
+						<div class="divide-y">
+							{#each builtinDefs as def (def.function.name)}
+								{@const key = `builtin::${def.function.name}`}
+								<div class="px-3 py-2">
+									<button
+										type="button"
+										class="flex w-full items-center justify-between gap-2 text-left"
+										onclick={() => toggle(key)}
+										aria-expanded={expanded[key] ?? false}
+									>
+										<div class="flex min-w-0 flex-col">
+											<span class="font-mono text-xs font-medium">{def.function.name}</span>
+											{#if def.function.description}
+												<span class="truncate text-xs text-muted-foreground">
+													{def.function.description}
+												</span>
+											{/if}
+										</div>
+										<ChevronRight
+											class="h-4 w-4 shrink-0 transition-transform {expanded[key]
+												? 'rotate-90'
+												: ''}"
+										/>
+									</button>
+									{#if expanded[key]}
+										<div class="mt-2 flex flex-col gap-1">
+											<div class="flex items-center justify-end">
+												<Button
+													size="sm"
+													variant="ghost"
+													class="h-6 gap-1 text-xs"
+													onclick={() => copyJson(def, def.function.name)}
+												>
+													<Copy class="h-3 w-3" />
+													Copy JSON
+												</Button>
+											</div>
+											<pre
+												class="overflow-x-auto rounded-md bg-muted/60 p-2 text-[11px] leading-snug"><code
+													>{JSON.stringify(def, null, 2)}</code
+												></pre>
+										</div>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+			</section>
+
 			<!-- MCP tools — the set actually sent in the tools[] array. -->
 			<section class="flex flex-col gap-2">
 				<header class="flex items-center justify-between">
 					<h3 class="flex items-center gap-2 text-sm font-semibold">
 						<Server class="h-4 w-4 text-primary" />
 						MCP tools
-						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] uppercase text-primary">
+						<span class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] text-primary uppercase">
 							sent to model
 						</span>
 						<span class="text-xs font-normal text-muted-foreground">
@@ -225,7 +311,7 @@
 					<FlaskConical class="h-4 w-4 text-primary" />
 					Built-in features
 					<span
-						class="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground"
+						class="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground uppercase"
 					>
 						prompt / pipeline layer
 					</span>
@@ -255,7 +341,7 @@
 					<Sparkles class="h-4 w-4 text-primary" />
 					AI commands
 					<span
-						class="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground"
+						class="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground uppercase"
 					>
 						doc editor, local
 					</span>

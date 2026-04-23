@@ -22,6 +22,11 @@
 import { browser } from '$app/environment';
 import { resolveApiUrl } from '$lib/utils/backend-url';
 import { MCPService } from '$lib/services/mcp.service';
+import {
+	dispatchBuiltin,
+	getBuiltinToolDefinitions,
+	hasBuiltinTool
+} from '$lib/services/builtin-tools';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { mode } from 'mode-watcher';
@@ -935,7 +940,12 @@ class MCPStore {
 	}
 
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
+		// Built-ins prepended so model attention lands on them before the (often
+		// longer) MCP list. Naming collisions are resolved in favour of the
+		// built-in via `executeTool`'s dispatch order — but the registry
+		// namespace is small (`list_artifacts` / `get_artifact` / `fork_artifact`)
+		// and unlikely to clash with user MCP tools in practice.
+		const tools: OpenAIToolDefinition[] = [...getBuiltinToolDefinitions()];
 
 		for (const connection of this.connections.values()) {
 			for (const tool of connection.tools) {
@@ -1124,6 +1134,11 @@ class MCPStore {
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
 
+		// Built-ins take priority so a user MCP server can't shadow a core tool.
+		if (hasBuiltinTool(toolName)) {
+			return dispatchBuiltin(toolCall, signal);
+		}
+
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 
@@ -1154,6 +1169,13 @@ class MCPStore {
 		args: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
+		if (hasBuiltinTool(toolName)) {
+			return dispatchBuiltin(
+				{ id: 'builtin', function: { name: toolName, arguments: args } },
+				signal
+			);
+		}
+
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 		const connection = this.connections.get(serverName);
