@@ -4,12 +4,9 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
-	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { ArrowLeft, Trash2 } from '@lucide/svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
 	import { TerminalView } from '$lib/components/app/terminals';
-
-	const sidebar = useSidebar();
 
 	let id = $derived(page.params.id);
 	let terminal = $derived(terminalsStore.terminals.find((t) => t.id === id) ?? null);
@@ -40,11 +37,7 @@
 	<title>{terminal?.name ?? 'Terminal'} · ht-llama.cpp</title>
 </svelte:head>
 
-<div
-	class="flex h-full flex-col duration-200 ease-linear {sidebar.open
-		? 'md:ml-[var(--sidebar-width)]'
-		: ''}"
->
+<div class="flex h-full flex-col">
 	<header class="flex items-center gap-2 border-b p-3 md:p-4">
 		<Button variant="ghost" size="sm" onclick={() => goto('#/terminals')}>
 			<ArrowLeft class="h-4 w-4" />
@@ -69,10 +62,14 @@
 		</Button>
 	</header>
 
-	<main class="min-h-0 flex-1">
+	<main class="min-h-0 flex-1 p-3 md:p-4">
 		{#if terminal}
 			{#key terminal.id}
-				<TerminalView terminalId={terminal.id} onDisconnect={handleDisconnect} />
+				<div
+					class="relative h-full w-full overflow-hidden rounded-xl border border-border/60 bg-[#0b0b10] p-2 shadow-sm"
+				>
+					<TerminalView terminalId={terminal.id} onDisconnect={handleDisconnect} />
+				</div>
 			{/key}
 		{:else}
 			<p class="p-6 text-sm text-muted-foreground">Loading terminal…</p>

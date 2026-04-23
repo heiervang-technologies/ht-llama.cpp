@@ -2,13 +2,10 @@
 	import { onMount } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
-	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { TerminalSquare, Plus, RefreshCw } from '@lucide/svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
 	import { SandboxSetupBanner, TerminalTile } from '$lib/components/app/terminals';
 	import { resolveTermdUrl } from '$lib/services/termd.service';
-
-	const sidebar = useSidebar();
 
 	let creating = $derived(terminalsStore.creating);
 	let terminals = $derived(terminalsStore.terminals);
@@ -40,11 +37,7 @@
 	<title>Sandbox terminals · ht-llama.cpp</title>
 </svelte:head>
 
-<div
-	class="flex h-full flex-col gap-4 p-4 duration-200 ease-linear md:p-6 {sidebar.open
-		? 'md:ml-[var(--sidebar-width)]'
-		: ''}"
->
+<div class="flex h-full flex-col gap-4 p-4 md:p-6">
 	<header class="flex items-center gap-3 border-b pb-3">
 		<TerminalSquare class="h-5 w-5 text-primary" />
 		<div class="flex-1">

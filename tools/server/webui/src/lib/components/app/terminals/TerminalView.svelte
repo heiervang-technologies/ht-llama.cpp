@@ -117,7 +117,10 @@
 </script>
 
 <div class="relative h-full w-full">
-	<div bind:this={hostEl} class="h-full w-full bg-black"></div>
+	<div
+		bind:this={hostEl}
+		class="absolute inset-0 [&_.xterm-viewport]:scroll-smooth"
+	></div>
 	{#if !connected}
 		<div
 			class="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2 text-xs text-muted-foreground"
