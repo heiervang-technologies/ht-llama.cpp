@@ -146,10 +146,14 @@ pub async fn create_terminal(
         attach_stderr: Some(false),
         working_dir: Some("/workspace".to_string()),
         env: Some(env),
-        // Keep the container alive so docker-exec shells can attach
-        // on demand. Users interact through `docker exec -it bash`
-        // inside ws.rs; the actual entrypoint just sits idle.
-        entrypoint: Some(vec!["tail".to_string(), "-f".to_string(), "/dev/null".to_string()]),
+        // Keep the container alive via an idle command. We set
+        // `cmd` rather than `entrypoint` so the image's default
+        // `entrypoint.sh` runs first — under gVisor Docker's
+        // internal DNS resolver (127.0.0.11) doesn't work, and that
+        // script rewrites `/etc/resolv.conf` to public nameservers.
+        // Overriding `entrypoint` here would skip the DNS fix and
+        // container hostname lookups would silently fail.
+        cmd: Some(vec!["tail".to_string(), "-f".to_string(), "/dev/null".to_string()]),
         labels: Some(labels),
         host_config: Some(host_config),
         ..Default::default()
