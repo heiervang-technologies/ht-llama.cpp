@@ -55,6 +55,15 @@ struct Args {
     /// otherwise.
     #[arg(long, default_value = "runsc", env = "HT_TERMD_RUNTIME")]
     runtime: String,
+
+    /// Shared-secret bearer token. When set, clients must pass it as
+    /// `Authorization: Bearer <token>` on HTTP, or `?token=<token>`
+    /// on the WS upgrade. Leave unset for loopback-only deployments
+    /// where the network already authenticates. Binding non-loopback
+    /// without a token logs a loud warning but does not refuse to
+    /// start — your firewall may already restrict access.
+    #[arg(long, env = "HT_TERMD_TOKEN")]
+    token: Option<String>,
 }
 
 #[tokio::main]
@@ -73,11 +82,26 @@ async fn main() -> Result<()> {
     }
 
     let addr = SocketAddr::new(args.bind, args.port);
-    let state = state::AppState::new(args.image.clone(), args.network.clone()).await?;
+
+    // Binding non-loopback without a token is a foot-gun: any peer
+    // that can reach the socket gets a root shell in a sandbox. Log
+    // a loud warning so the operator notices even if they blew past
+    // the `--help` text.
+    if !args.bind.is_loopback() && args.token.is_none() {
+        tracing::warn!(
+            bind = %args.bind,
+            "ht-termd is binding to a non-loopback interface WITHOUT a --token; \
+             any reachable peer can spawn a shell. Set --token (or HT_TERMD_TOKEN) \
+             for Tailscale / LAN deployments."
+        );
+    }
+
+    let token_set = args.token.is_some();
+    let state = state::AppState::new(args.image.clone(), args.network.clone(), args.token).await?;
 
     let app = http::router(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, image = %args.image, network = %args.network, "ht-termd listening");
+    tracing::info!(%addr, image = %args.image, network = %args.network, auth = token_set, "ht-termd listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -78,6 +78,27 @@ export function resolveTermdUrl(): string | undefined {
 	return undefined;
 }
 
+/**
+ * Bearer token to present to the termd daemon, if any. Precedence
+ * mirrors `resolveTermdUrl`: Tauri injection > user config >
+ * bundle-time default. Empty string means "no auth" — the daemon
+ * will accept us as long as it was started without `--token`.
+ */
+export function resolveTermdToken(): string {
+	if (typeof window !== 'undefined') {
+		const injected = (window as unknown as { __HT_TERMD_TOKEN__?: string }).__HT_TERMD_TOKEN__;
+		if (typeof injected === 'string' && injected.trim()) return injected.trim();
+	}
+	const cfg = (config().terminalsToken as string | undefined)?.trim();
+	if (cfg) return cfg;
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_TERMINALS_TOKEN__?: string })
+			.__HT_DEFAULT_TERMINALS_TOKEN__;
+		if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
+	}
+	return '';
+}
+
 function baseOrThrow(): string {
 	const base = resolveTermdUrl();
 	if (!base) throw new TermdUnavailable();
@@ -85,7 +106,12 @@ function baseOrThrow(): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(`${baseOrThrow()}${path}`, init);
+	const token = resolveTermdToken();
+	const headers = new Headers(init?.headers ?? {});
+	if (token && !headers.has('Authorization')) {
+		headers.set('Authorization', `Bearer ${token}`);
+	}
+	const res = await fetch(`${baseOrThrow()}${path}`, { ...init, headers });
 	if (!res.ok) {
 		let detail = '';
 		try {
@@ -158,6 +184,12 @@ export const TermdService = {
 		const base = baseOrThrow();
 		const proto = base.startsWith('https://') ? 'wss' : 'ws';
 		const hostPath = base.replace(/^https?:\/\//, '');
-		return `${proto}://${hostPath}/v1/terminals/${encodeURIComponent(id)}/ws`;
+		// Browsers won't let us set `Authorization` on `new WebSocket()`
+		// so auth for the WS handshake goes via query string. The server
+		// accepts `?token=…` on the upgrade path only; everything else
+		// still requires the bearer header.
+		const token = resolveTermdToken();
+		const query = token ? `?token=${encodeURIComponent(token)}` : '';
+		return `${proto}://${hostPath}/v1/terminals/${encodeURIComponent(id)}/ws${query}`;
 	}
 };
