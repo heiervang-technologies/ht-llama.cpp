@@ -264,3 +264,122 @@ async fn bootstrap_log(State(state): State<AppState>, Path(id): Path<String>) ->
 fn err_response(code: StatusCode, message: &str) -> Response {
     (code, Json::<Value>(json!({"error": message}))).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    //! Pure-logic tests for the auth-adjacent helpers. The full
+    //! `auth_guard` middleware integrates axum + tower + tokio and
+    //! wants a live router to exercise; we cover it implicitly via
+    //! the http-level smoke tests in CI and keep this module focused
+    //! on the two pieces most likely to regress silently:
+    //!
+    //!   - `constant_time_eq` — comparison correctness (timing-
+    //!     invariance is an implementation property we don't assert
+    //!     directly).
+    //!   - `extract_token` — query-string parsing + percent decoding,
+    //!     which is hand-rolled to keep the `url` crate off our
+    //!     dependency list.
+    use super::{constant_time_eq, extract_token};
+
+    // --- constant_time_eq -------------------------------------------------
+
+    #[test]
+    fn constant_time_eq_identical_is_true() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(constant_time_eq(b"ht-termd-token-12345", b"ht-termd-token-12345"));
+    }
+
+    #[test]
+    fn constant_time_eq_different_length_is_false() {
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"abcd", b"abc"));
+        assert!(!constant_time_eq(b"", b"x"));
+    }
+
+    #[test]
+    fn constant_time_eq_same_length_different_bytes_is_false() {
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"aaa", b"aab"));
+        // First-byte and last-byte mismatches both need to fail —
+        // covers the worry that a broken short-circuit returned
+        // `true` when the prefix matched.
+        assert!(!constant_time_eq(b"xyzzz", b"yyzzz"));
+        assert!(!constant_time_eq(b"zzzzx", b"zzzzy"));
+    }
+
+    // --- extract_token ----------------------------------------------------
+
+    #[test]
+    fn extract_token_returns_plain_value() {
+        assert_eq!(extract_token("token=abc"), Some("abc".to_string()));
+        assert_eq!(
+            extract_token("other=1&token=xyz"),
+            Some("xyz".to_string())
+        );
+        assert_eq!(
+            extract_token("token=xyz&other=1"),
+            Some("xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_token_missing_returns_none() {
+        assert_eq!(extract_token(""), None);
+        assert_eq!(extract_token("other=1"), None);
+        assert_eq!(extract_token("tokenish=nope&foo=bar"), None);
+    }
+
+    #[test]
+    fn extract_token_empty_value_is_empty_string() {
+        // Semantically distinct from "missing token" — the caller
+        // will reject the empty string because it won't match any
+        // configured secret, but we preserve the distinction.
+        assert_eq!(extract_token("token="), Some(String::new()));
+        assert_eq!(extract_token("token=&other=1"), Some(String::new()));
+    }
+
+    #[test]
+    fn extract_token_percent_decodes_safe_range() {
+        // %20 → space, %3D → '='; common in base64-ish tokens.
+        assert_eq!(
+            extract_token("token=a%20b%3Dc"),
+            Some("a b=c".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_token_decodes_plus_as_space() {
+        // application/x-www-form-urlencoded convention: `+` means
+        // space. Browsers may emit this for WS query strings.
+        assert_eq!(extract_token("token=hello+world"), Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn extract_token_handles_malformed_percent_gracefully() {
+        // Trailing %; incomplete hex; non-hex letters. None of these
+        // should panic. The decoder returns the segments verbatim
+        // rather than failing, which is fine — a garbled token
+        // simply won't match.
+        assert!(extract_token("token=%").is_some());
+        assert!(extract_token("token=%Z").is_some());
+        assert!(extract_token("token=abc%GG").is_some());
+    }
+
+    #[test]
+    fn extract_token_takes_first_occurrence() {
+        // If someone passes `?token=a&token=b`, take the first. This
+        // matches most URL parsers' behaviour and avoids a subtle
+        // smuggling attack where a trailing duplicate overrides the
+        // first value the server might have logged.
+        assert_eq!(extract_token("token=a&token=b"), Some("a".to_string()));
+    }
+
+    #[test]
+    fn extract_token_ignores_pair_without_value() {
+        // `?token` alone (no `=`) isn't a real bearer token; return
+        // the empty string so the caller's constant_time_eq against
+        // a non-empty configured secret still rejects it.
+        assert_eq!(extract_token("token"), Some(String::new()));
+    }
+}
