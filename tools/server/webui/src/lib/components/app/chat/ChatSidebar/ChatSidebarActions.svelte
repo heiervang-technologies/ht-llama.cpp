@@ -7,6 +7,7 @@
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { docsStore } from '$lib/stores/docs.svelte';
+	import { terminalProposals } from '$lib/stores/terminal-proposals.svelte';
 
 	interface Props {
 		handleMobileSidebarItemClick: () => void;
@@ -34,6 +35,13 @@
 			searchInput?.focus();
 		}
 	});
+
+	// Live count of queued-for-approval keystrokes across every
+	// Review-mode terminal. Reactive because `totalPending()` reads
+	// from a SvelteMap; rendering the badge in a `$derived` keeps
+	// the sidebar in sync with the terminal detail view without an
+	// event bus.
+	let pendingTerminalProposals = $derived(terminalProposals.totalPending());
 </script>
 
 <div class="my-1 space-y-1">
@@ -99,7 +107,7 @@
 		</Button>
 
 		<Button
-			class="w-full justify-start backdrop-blur-none!"
+			class="w-full justify-between backdrop-blur-none!"
 			href="#/terminals"
 			onclick={handleMobileSidebarItemClick}
 			variant="ghost"
@@ -109,6 +117,17 @@
 
 				Terminals
 			</div>
+
+			{#if pendingTerminalProposals > 0}
+				<span
+					class="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-medium text-primary-foreground"
+					title="{pendingTerminalProposals} keystroke proposal{pendingTerminalProposals === 1
+						? ''
+						: 's'} awaiting your approval"
+				>
+					{pendingTerminalProposals}
+				</span>
+			{/if}
 		</Button>
 
 		<Button
