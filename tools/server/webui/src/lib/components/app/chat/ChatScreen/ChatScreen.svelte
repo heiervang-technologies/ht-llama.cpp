@@ -33,6 +33,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { tryHandleSlashCommand } from '$lib/services/chat-slash-commands';
 	import { extractMarkdownDataImageAttachments } from '$lib/utils/extract-markdown-images';
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
@@ -272,6 +273,19 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+		// Intercept composer slash commands before the normal chat
+		// pipeline. `/image <prompt>` dispatches the images proxy
+		// directly (no LLM round-trip); `/edit` and `/video` toast a
+		// coming-soon notice. Attached files are ignored for slash
+		// turns — the grammar is pure text today.
+		if (!files || files.length === 0) {
+			if (await tryHandleSlashCommand(message)) {
+				autoScroll.enable();
+				autoScroll.scrollToBottom();
+				return true;
+			}
+		}
+
 		const plainFiles = files ? $state.snapshot(files) : undefined;
 		const result = plainFiles
 			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
