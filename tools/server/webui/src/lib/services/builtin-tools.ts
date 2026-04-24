@@ -12,6 +12,10 @@
  *   - list_artifacts — browse the gallery
  *   - get_artifact   — read a specific revision
  *   - fork_artifact  — create an independent copy as a new gallery entry
+ *   - send_keys      — type into a sandbox terminal (mode-gated)
+ *   - generate_image — produce images via an OpenAI-compatible proxy
+ *                      (e.g. ComfyUI at images.ht.local); result lands
+ *                      in the gallery as an `image` artifact
  *
  * All tools read and write through the same DatabaseService / gallery
  * store the UI uses, so anything the model does shows up in the
@@ -20,6 +24,7 @@
 
 import { DatabaseService } from './database.service';
 import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
+import { config } from '$lib/stores/settings.svelte';
 import type { DatabaseArtifactKind } from '$lib/types/database';
 import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$lib/types/mcp';
 
@@ -411,6 +416,237 @@ register({
 			revisionNumber: forkedRev.revisionNumber,
 			sourceArtifactId: source.id,
 			sourceRevisionId: rev.id
+		});
+	}
+});
+
+// ----- generate_image --------------------------------------------------
+//
+// The images proxy is an OpenAI-compat `/v1/images/generations` endpoint
+// backed by ComfyUI. We always request `b64_json` so we don't depend on
+// the client being able to fetch a ComfyUI /view URL (the proxy host
+// might be LAN-only). Each returned image gets persisted as an
+// `image` artifact so it's visible in the gallery and the chat render
+// pipeline without extra plumbing — satisfies the "every image the
+// model sees must be visible in the UI" contract.
+
+/**
+ * Resolve the images proxy base URL with the same fallback semantics as
+ * the rest of the service layer: explicit config wins, then a Tauri
+ * bundle-time default (currently not wired — reserved for future APK
+ * builds that want to preconfigure the cluster proxy).
+ */
+function resolveImagesBaseUrl(): string {
+	const cfg = String(config().imagesBaseUrl ?? '').trim();
+	if (cfg) return cfg.replace(/\/+$/, '');
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_IMAGES_URL__?: string })
+			.__HT_DEFAULT_IMAGES_URL__;
+		if (typeof fallback === 'string' && fallback.trim()) {
+			return fallback.trim().replace(/\/+$/, '');
+		}
+	}
+	return '';
+}
+
+function resolveImagesApiKey(): string {
+	const cfg = String(config().imagesApiKey ?? '').trim();
+	if (cfg) return cfg;
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_IMAGES_KEY__?: string })
+			.__HT_DEFAULT_IMAGES_KEY__;
+		if (typeof fallback === 'string' && fallback.trim()) return fallback.trim();
+	}
+	return '';
+}
+
+/**
+ * Decode a base64 string into a Blob with the given MIME type. Splits
+ * into 1 MB chunks so very large payloads don't blow the JS engine's
+ * single-allocation limit — ComfyUI can return multi-megabyte PNGs.
+ */
+function base64ToBlob(base64: string, mimeType: string): Blob {
+	const byteChars = atob(base64);
+	const chunkSize = 1 << 20;
+	const byteArrays: Uint8Array[] = [];
+	for (let offset = 0; offset < byteChars.length; offset += chunkSize) {
+		const slice = byteChars.slice(offset, offset + chunkSize);
+		const bytes = new Uint8Array(slice.length);
+		for (let i = 0; i < slice.length; i++) bytes[i] = slice.charCodeAt(i);
+		byteArrays.push(bytes);
+	}
+	return new Blob(byteArrays, { type: mimeType });
+}
+
+register({
+	definition: {
+		type: 'function',
+		function: {
+			name: 'generate_image',
+			description:
+				"Generate images from a text prompt via the OpenAI-compatible images proxy (ComfyUI-backed). Each returned image is saved as an `image` artifact in the gallery automatically, so the user sees it inline. Use this when the user explicitly asks for an image, a mockup, a diagram mock, or a visual reference. Available models depend on the proxy; try `flux2-klein` (general), `qwen-image` (text-in-image), `z-image-turbo` (fast drafts), `newbie-image` (anime). Hitting a model the proxy doesn't expose returns an error with the live list.",
+			parameters: {
+				type: 'object',
+				properties: {
+					prompt: {
+						type: 'string',
+						description:
+							'The image description. Be specific — composition, subject, style, colours. The proxy passes this straight to the ComfyUI workflow.'
+					},
+					model: {
+						type: 'string',
+						description:
+							'Model id on the proxy. Defaults to `flux2-klein`. Others usually available: `qwen-image`, `z-image-turbo`, `newbie-image`.'
+					},
+					size: {
+						type: 'string',
+						description:
+							'OpenAI-style size string, e.g. `1024x1024`, `1024x1536`, `1536x1024`. Passed through; unsupported sizes may be coerced by the workflow.'
+					},
+					n: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 4,
+						description: 'Number of images to generate (default 1, max 4).'
+					}
+				},
+				required: ['prompt']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const prompt = String(args.prompt ?? '').trim();
+		if (!prompt) return err('prompt is required');
+		const model =
+			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'flux2-klein';
+		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : undefined;
+		const n = Math.min(4, Math.max(1, Number(args.n) || 1));
+
+		const base = resolveImagesBaseUrl();
+		if (!base) {
+			return err(
+				'Image generation is not configured. Ask the user to set Settings → Images → Base URL (e.g. http://images.ht.local).'
+			);
+		}
+
+		const apiKey = resolveImagesApiKey();
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		// The proxy discards this but OpenAI SDK defaults expect an
+		// Authorization header — sending a placeholder makes SDKs that
+		// share our browser fetch stack happy.
+		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
+
+		const body: Record<string, unknown> = {
+			prompt,
+			model,
+			n,
+			response_format: 'b64_json'
+		};
+		if (size) body.size = size;
+
+		let res: Response;
+		try {
+			res = await fetch(`${base}/v1/images/generations`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				signal
+			});
+		} catch (fetchErr) {
+			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+			return err(`Network error reaching ${base}: ${message}`);
+		}
+
+		if (!res.ok) {
+			let detail = '';
+			try {
+				detail = JSON.stringify(await res.json());
+			} catch {
+				try {
+					detail = await res.text();
+				} catch {
+					/* ignore */
+				}
+			}
+			return err(`Images proxy HTTP ${res.status}: ${detail || 'no body'}`);
+		}
+
+		type GenResp = {
+			created?: number;
+			data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+		};
+		const payload = (await res.json()) as GenResp;
+		const items = payload.data ?? [];
+		if (items.length === 0) {
+			return err('Images proxy returned no images.');
+		}
+
+		const saved: Array<{
+			artifactId: string;
+			revisionId: string;
+			title: string;
+			mimeType: string;
+		}> = [];
+
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			let blob: Blob | undefined;
+			const mimeType = 'image/png';
+
+			if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+				blob = base64ToBlob(item.b64_json, mimeType);
+			} else if (typeof item.url === 'string' && item.url.length > 0) {
+				// Fallback path — we requested b64_json but some proxies
+				// ignore that and return a URL. Fetch it server-side via
+				// the browser so it still lands in the gallery.
+				try {
+					const imgRes = await fetch(item.url, { signal });
+					if (imgRes.ok) blob = await imgRes.blob();
+				} catch {
+					/* ignore, logged below */
+				}
+			}
+
+			if (!blob) {
+				continue;
+			}
+
+			const title = `Generated · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
+				items.length > 1 ? ` (${i + 1}/${items.length})` : ''
+			}`;
+			const artifact = await artifactGalleryStore.saveManual({
+				kind: 'image' as DatabaseArtifactKind,
+				title,
+				mimeType,
+				blob,
+				tags: ['generated', model],
+				metadata: {
+					source: 'generate_image',
+					model,
+					prompt,
+					size: size ?? null,
+					revisedPrompt: item.revised_prompt ?? null,
+					generatedAt: new Date().toISOString()
+				}
+			});
+			saved.push({
+				artifactId: artifact.id,
+				revisionId: artifact.currentRevisionId,
+				title: artifact.title,
+				mimeType
+			});
+		}
+
+		if (saved.length === 0) {
+			return err('Images proxy returned rows but none had usable b64_json or a fetchable url.');
+		}
+
+		return ok({
+			model,
+			size: size ?? null,
+			prompt,
+			images: saved,
+			note: "Each image is in the user's gallery; reference by artifactId via get_artifact in follow-ups."
 		});
 	}
 });
