@@ -12,7 +12,9 @@
 		Users,
 		Lock,
 		ClipboardCheck,
-		ScrollText
+		ScrollText,
+		Check,
+		X
 	} from '@lucide/svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
 	import {
@@ -27,6 +29,7 @@
 		resolveTheme
 	} from '$lib/components/app/terminals/terminal-themes';
 	import { TermdService } from '$lib/services/termd.service';
+	import { terminalProposals, type TerminalProposal } from '$lib/stores/terminal-proposals.svelte';
 
 	let id = $derived(page.params.id);
 	let terminal = $derived(terminalsStore.terminals.find((t) => t.id === id) ?? null);
@@ -102,6 +105,56 @@
 	onDestroy(() => {
 		if (logTimer) clearInterval(logTimer);
 	});
+
+	// Review-mode proposal queue. Each entry is a keystroke the
+	// model asked to send; the user approves or rejects. Approve
+	// dispatches through `TermdService.sendInput` — the same
+	// path `send_keys` would take in Shared mode.
+	let pendingProposals = $derived<TerminalProposal[]>(id ? terminalProposals.pending(id) : []);
+
+	async function approveProposal(p: TerminalProposal) {
+		try {
+			await TermdService.sendInput(p.terminalId, {
+				text: p.text,
+				auto_enter: p.autoEnter
+			});
+			terminalProposals.remove(p.id);
+			toast.success('Keystrokes approved');
+		} catch (err) {
+			toast.error(`Approve failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	function rejectProposal(p: TerminalProposal) {
+		terminalProposals.remove(p.id);
+		toast.message('Proposal rejected');
+	}
+
+	function preview(text: string): string {
+		// Escape visible control chars so \r, Ctrl+C, ESC etc. don't
+		// vanish into the monospace block. Keeps the preview truthful
+		// about what the model actually wants to send. We avoid a regex
+		// literal with any raw 0x1b / 0x00-0x1f bytes — ESLint's
+		// `no-control-regex` rule forbids them — so the sweep runs as
+		// a char-by-char loop.
+		const esc = String.fromCharCode(0x1b);
+		let out = text
+			.split(esc)
+			.join('\\e')
+			.replace(/\r/g, '\\r')
+			.replace(/\n/g, '\\n')
+			.replace(/\t/g, '\\t');
+		let result = '';
+		for (const c of out) {
+			const code = c.charCodeAt(0);
+			if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+				result += `\\x${code.toString(16).padStart(2, '0')}`;
+			} else {
+				result += c;
+			}
+		}
+		return result;
+	}
 
 	async function handleDestroy() {
 		if (!terminal) return;
@@ -229,6 +282,69 @@
 			{/key}
 		{:else}
 			<p class="p-6 text-sm text-muted-foreground">Loading terminal…</p>
+		{/if}
+
+		{#if mode === 'review'}
+			<aside
+				class="flex w-80 flex-shrink-0 flex-col gap-2 overflow-hidden rounded-xl border bg-card p-3 shadow-sm"
+			>
+				<header class="flex items-center justify-between">
+					<h2 class="flex items-center gap-1.5 text-xs font-semibold">
+						<ClipboardCheck class="h-3.5 w-3.5 text-primary" />
+						Review queue
+						<span class="ml-1 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary">
+							{pendingProposals.length}
+						</span>
+					</h2>
+				</header>
+				<p class="text-[10px] text-muted-foreground">
+					Keystrokes the model has proposed. Approve lands them in the PTY; reject drops them.
+				</p>
+				{#if pendingProposals.length === 0}
+					<div class="flex flex-1 items-center justify-center text-[11px] text-muted-foreground/70">
+						No pending proposals.
+					</div>
+				{:else}
+					<ul class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto">
+						{#each pendingProposals as p (p.id)}
+							<li class="flex flex-col gap-1.5 rounded-md border border-border/60 bg-muted/20 p-2">
+								<div class="flex items-start justify-between gap-2">
+									<span class="font-mono text-[10px] text-muted-foreground">
+										{new Date(p.createdAt).toLocaleTimeString()}
+										{#if p.autoEnter}
+											<span class="ml-1 rounded bg-muted px-1 text-[9px]">+ enter</span>
+										{/if}
+									</span>
+									<div class="flex gap-1">
+										<Button
+											variant="ghost"
+											size="sm"
+											class="h-6 w-6 p-0 text-emerald-600 hover:text-emerald-600 dark:text-emerald-400"
+											title="Approve"
+											onclick={() => approveProposal(p)}
+										>
+											<Check class="h-3.5 w-3.5" />
+										</Button>
+										<Button
+											variant="ghost"
+											size="sm"
+											class="h-6 w-6 p-0 text-destructive hover:text-destructive"
+											title="Reject"
+											onclick={() => rejectProposal(p)}
+										>
+											<X class="h-3.5 w-3.5" />
+										</Button>
+									</div>
+								</div>
+								<pre
+									class="max-h-32 overflow-auto rounded bg-muted/50 p-1.5 font-mono text-[11px] leading-snug break-all whitespace-pre-wrap">{preview(
+										p.text
+									)}</pre>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</aside>
 		{/if}
 
 		{#if logOpen}

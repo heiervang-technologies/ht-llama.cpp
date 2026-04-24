@@ -282,18 +282,28 @@ register({
 
 		// Per-terminal mode gate. Default is `solo` so a freshly
 		// created terminal is opaque to the model until the user
-		// explicitly flips it to `shared`. Review mode is wired but
-		// currently behaves like solo — full queueing UI lands in a
-		// follow-up. Imported lazily to avoid pulling Svelte
-		// reactivity into the builtin-tools module graph.
+		// explicitly flips it to `shared` or `review`. Imported
+		// lazily to avoid pulling Svelte reactivity into the
+		// builtin-tools module graph.
 		const { terminalModes } = await import('$lib/stores/terminal-modes.svelte');
 		const mode = terminalModes.snapshot(terminalId);
-		if (mode !== 'shared') {
+		if (mode === 'solo') {
 			return err(
-				mode === 'review'
-					? `Terminal ${terminalId} is in "review" mode; send_keys must be approved by the user. Ask them to either approve the pending request or switch the terminal to "shared" mode.`
-					: `Terminal ${terminalId} is in "solo" mode; send_keys is blocked. Ask the user to switch it to "shared" mode if they want you to type into this terminal.`
+				`Terminal ${terminalId} is in "solo" mode; send_keys is blocked. Ask the user to switch it to "shared" (type live) or "review" (user approves each keystroke) mode first.`
 			);
+		}
+		if (mode === 'review') {
+			// Park the proposal for user approval. Return with a
+			// structured "queued" response the model can reason
+			// about without blocking — approval happens out-of-band.
+			const { terminalProposals } = await import('$lib/stores/terminal-proposals.svelte');
+			const proposal = terminalProposals.propose(terminalId, { text, autoEnter });
+			return ok({
+				queued: true,
+				proposalId: proposal.id,
+				mode,
+				note: 'User must approve this keystroke via the Review panel before it lands in the PTY. Proceed with other reasoning; a later tool call or follow-up can check status.'
+			});
 		}
 
 		// Reuse the termd service's URL resolution so `send_keys`
