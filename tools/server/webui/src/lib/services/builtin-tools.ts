@@ -484,7 +484,7 @@ register({
 		function: {
 			name: 'generate_image',
 			description:
-				'Generate images from a text prompt via the OpenAI-compatible images proxy (ComfyUI-backed). Each returned image is saved as an `image` artifact in the gallery automatically, so the user sees it inline. Use this when the user explicitly asks for an image, a mockup, a diagram mock, or a visual reference. Models: `z-image-turbo` is the only production-ready one (p50 ~52s, p95 ~68s, max ~90s); keep it as the default. `flux2-klein`, `qwen-image`, and `newbie-image` are experimental — their ComfyUI workflows currently crash or hang past 5 minutes; only use them if the user explicitly asks by name, and warn them generation may fail. Before calling, warn the user that generation takes ~60s.',
+				'Generate images from a text prompt via the OpenAI-compatible images proxy (ComfyUI-backed). Each returned image is saved as an `image` artifact in the gallery automatically, so the user sees it inline. Use this when the user explicitly asks for an image, a mockup, a diagram mock, or a visual reference. Two reliable models: `z-image-turbo` (general-purpose, p50 ~52s, p95 ~68s) is the default; `newbie-image` (anime / manga style, ~22s — the fastest option) is the right pick when the user asks for anime. Two experimental models: `qwen-image` works but takes ~10 minutes per image (VRAM-paging on a 24GB GPU) — only use when the user explicitly asks, and warn them about the wait; `flux2-klein` is currently broken (text encoder needs >24GB VRAM, OOMs during load). Before any call, warn the user about the expected wait: ~60s for z-image-turbo, ~25s for newbie-image, ~10 minutes for qwen-image.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -495,9 +495,9 @@ register({
 					},
 					model: {
 						type: 'string',
-						enum: ['z-image-turbo', 'flux2-klein', 'qwen-image', 'newbie-image'],
+						enum: ['z-image-turbo', 'newbie-image', 'qwen-image', 'flux2-klein'],
 						description:
-							'Model id on the proxy. Defaults to `z-image-turbo` — the only one currently reliable. `flux2-klein` crashes ComfyUI after ~145s, `qwen-image` and `newbie-image` hang past 5 minutes. Only override the default if the user asked for a specific model by name.'
+							'Model id on the proxy. Defaults to `z-image-turbo` (general-purpose, ~60s). `newbie-image` (~22s) is reliable for anime / manga style. `qwen-image` works but ~10 minutes per image. `flux2-klein` is currently broken (OOMs loading a 33GB text encoder on a 24GB GPU). Only override the default if the user asked for a specific model by name.'
 					},
 					size: {
 						type: 'string',
