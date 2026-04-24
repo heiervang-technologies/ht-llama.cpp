@@ -110,7 +110,16 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// termd daemon is launched with `--token`; ignored otherwise.
 	// Sent as `Authorization: Bearer <token>` on HTTP and `?token=<t>`
 	// on the WS upgrade (browsers can't set WS headers).
-	terminalsToken: ''
+	terminalsToken: '',
+	// Base URL of the OpenAI-compatible image-generation proxy (e.g.
+	// `http://images.ht.local`). Used by the `generate_image` built-in
+	// tool. Empty string = feature disabled; the tool returns a clean
+	// "not configured" error instead of trying a default URL.
+	imagesBaseUrl: '',
+	// Optional API key forwarded as `Authorization: Bearer <key>` to
+	// the images proxy. Typical deployments on a trusted LAN leave
+	// this empty.
+	imagesApiKey: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -245,7 +254,11 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	terminalsBaseUrl:
 		'Base URL of the <code>ht-termd</code> sidecar (e.g. <code>http://127.0.0.1:43127</code>). Leave empty in the Tauri app (the sidecar is auto-spawned). Only set this for web deployments pointing at a remote daemon.',
 	terminalsToken:
-		"Bearer token for the <code>ht-termd</code> sidecar. Only needed when the daemon was started with <code>--token</code>; required for Tailscale-reachable deployments so random peers can't spawn shells."
+		"Bearer token for the <code>ht-termd</code> sidecar. Only needed when the daemon was started with <code>--token</code>; required for Tailscale-reachable deployments so random peers can't spawn shells.",
+	imagesBaseUrl:
+		'OpenAI-compatible image-generation proxy URL (e.g. <code>http://images.ht.local</code> or <code>http://192.168.8.170:30385</code>). Enables the <code>generate_image</code> tool so the model can create images; each returned image lands in the artifact gallery automatically.',
+	imagesApiKey:
+		"Optional bearer token for the images proxy. Leave empty for trusted-LAN deployments that don't require auth."
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [
