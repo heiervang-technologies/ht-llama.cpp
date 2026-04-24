@@ -105,7 +105,12 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Override for the `ht-termd` sidecar URL. Empty = Tauri auto-spawn
 	// or llama-server `/props.terminals.url` take precedence. Set for
 	// web deployments that point at a remote termd instance (rare).
-	terminalsBaseUrl: ''
+	terminalsBaseUrl: '',
+	// Bearer token paired with `terminalsBaseUrl`. Required when the
+	// termd daemon is launched with `--token`; ignored otherwise.
+	// Sent as `Authorization: Bearer <token>` on HTTP and `?token=<t>`
+	// on the WS upgrade (browsers can't set WS headers).
+	terminalsToken: ''
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -238,7 +243,9 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showToolMessagesAsStandalone:
 		'Render each tool call + tool result as its own card in the chat log, before the next user message. Off by default (tool exchanges stay folded inside the assistant turn).',
 	terminalsBaseUrl:
-		'Base URL of the <code>ht-termd</code> sidecar (e.g. <code>http://127.0.0.1:43127</code>). Leave empty in the Tauri app (the sidecar is auto-spawned). Only set this for web deployments pointing at a remote daemon.'
+		'Base URL of the <code>ht-termd</code> sidecar (e.g. <code>http://127.0.0.1:43127</code>). Leave empty in the Tauri app (the sidecar is auto-spawned). Only set this for web deployments pointing at a remote daemon.',
+	terminalsToken:
+		"Bearer token for the <code>ht-termd</code> sidecar. Only needed when the daemon was started with <code>--token</code>; required for Tailscale-reachable deployments so random peers can't spawn shells."
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

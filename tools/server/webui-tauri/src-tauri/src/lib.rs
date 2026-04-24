@@ -55,10 +55,18 @@ pub fn run() {
 fn defaults_init_script() -> String {
 	let backend = option_env!("HT_DEFAULT_BACKEND_URL").unwrap_or("");
 	let terminals = option_env!("HT_DEFAULT_TERMINALS_URL").unwrap_or("");
+	// Paired with `HT_DEFAULT_TERMINALS_URL`. Required when the
+	// remote termd was launched with `--token` (tailnet / LAN
+	// deployments). Leave unset for loopback-only bundles.
+	let terminals_token = option_env!("HT_DEFAULT_TERMINALS_TOKEN").unwrap_or("");
 	format!(
-		"window.__HT_DEFAULT_BACKEND_URL__ = {backend_js}; window.__HT_DEFAULT_TERMINALS_URL__ = {terminals_js};",
+		"window.__HT_DEFAULT_BACKEND_URL__ = {backend_js}; \
+		 window.__HT_DEFAULT_TERMINALS_URL__ = {terminals_js}; \
+		 window.__HT_DEFAULT_TERMINALS_TOKEN__ = {terminals_token_js};",
 		backend_js = serde_json::to_string(backend).unwrap_or_else(|_| "\"\"".to_string()),
 		terminals_js = serde_json::to_string(terminals).unwrap_or_else(|_| "\"\"".to_string()),
+		terminals_token_js =
+			serde_json::to_string(terminals_token).unwrap_or_else(|_| "\"\"".to_string()),
 	)
 }
 

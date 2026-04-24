@@ -18,10 +18,16 @@ pub struct Inner {
     pub image: String,
     pub network: String,
     pub sessions: SessionRegistry,
+    /// Optional shared-secret token. When set, every HTTP and WS
+    /// request (except `/health`) must present it as a bearer token
+    /// or, for WS, as a `?token=` query param. Set to `None` for
+    /// loopback-only deployments where the network already gates
+    /// access.
+    pub auth_token: Option<String>,
 }
 
 impl AppState {
-    pub async fn new(image: String, network: String) -> Result<Self> {
+    pub async fn new(image: String, network: String, auth_token: Option<String>) -> Result<Self> {
         let docker = Docker::connect_with_local_defaults()
             .context("failed to connect to the local Docker daemon")?;
         // Quick reachability probe so misconfigured daemons fail at
@@ -36,6 +42,7 @@ impl AppState {
                 image,
                 network,
                 sessions: SessionRegistry::new(),
+                auth_token,
             }),
         })
     }
@@ -51,5 +58,8 @@ impl AppState {
     }
     pub fn sessions(&self) -> &SessionRegistry {
         &self.inner.sessions
+    }
+    pub fn auth_token(&self) -> Option<&str> {
+        self.inner.auth_token.as_deref()
     }
 }
