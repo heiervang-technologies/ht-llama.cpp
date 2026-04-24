@@ -16,6 +16,10 @@
  *   - generate_image — produce images via an OpenAI-compatible proxy
  *                      (e.g. ComfyUI at images.ht.local); result lands
  *                      in the gallery as an `image` artifact
+ *   - edit_image     — restyle / inpaint an existing image; creates a
+ *                      new artifact, never overwrites the source
+ *   - generate_video — text/image/sound-driven video clips via the
+ *                      same proxy; async with per-model poll budget
  *
  * All tools read and write through the same DatabaseService / gallery
  * store the UI uses, so anything the model does shows up in the
@@ -678,6 +682,209 @@ register({
 			prompt,
 			images: saved,
 			note: "Each image is in the user's gallery; reference by artifactId via get_artifact in follow-ups."
+		});
+	}
+});
+
+// ----- edit_image ------------------------------------------------------
+//
+// POST /v1/images/edits against the same OpenAI-compatible proxy.
+// Single reliable model on the backend right now (`qwen-image-edit`,
+// ~2.5 min at 1024x1024, qwen 20GB weights). Result lands in the
+// gallery as a new `image` artifact — we never overwrite the source;
+// an "edit" is a new asset with `sourceArtifactId` metadata so forks
+// are reproducible. Gated on the SAME `imageGenEnabled` toggle as
+// generate_image, since from the user's perspective both are
+// "produce an image via the cluster GPU" and a single switch is
+// easier to reason about than two.
+
+register({
+	gate: () => Boolean(config().imageGenEnabled),
+	gateLabel: 'Image generation',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'edit_image',
+			description:
+				"Edit an existing image according to a natural-language prompt (inpaint, restyle, change subject, etc.) via the OpenAI-compatible images proxy. The reference image is sent as base64 or a data URL; the returned image is saved as a NEW `image` artifact in the gallery — the source is never overwritten. One reliable model today: `qwen-image-edit` (~2.5 min at 1024x1024). Warn the user about the ~2-3 minute wait before calling. To edit an existing gallery artifact, call `get_artifact` first to fetch its data URL, then pass it here. The revised artifact's metadata includes `sourceArtifactId` so follow-up forks stay traceable.",
+			parameters: {
+				type: 'object',
+				properties: {
+					prompt: {
+						type: 'string',
+						description:
+							'The edit instruction. Be concrete — what to change, keep, or add. The proxy passes this verbatim to the ComfyUI workflow.'
+					},
+					image: {
+						type: 'string',
+						description:
+							'The source image. Either a raw base64 string OR a `data:image/...;base64,...` data URL. Required. Use `get_artifact` to fetch an existing gallery artifact as a data URL.'
+					},
+					model: {
+						type: 'string',
+						enum: ['qwen-image-edit'],
+						description:
+							'Edit model id on the proxy. Currently only `qwen-image-edit` is wired; the enum is kept for future expansion.'
+					},
+					size: {
+						type: 'string',
+						description:
+							'Output size, `WIDTHxHEIGHT` (e.g. `1024x1024`). Default `1024x1024`. Sent through to the workflow; unsupported sizes may be coerced.'
+					},
+					n: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 4,
+						description:
+							'Number of edited variants (default 1, max 4). Each variant becomes its own artifact.'
+					},
+					sourceArtifactId: {
+						type: 'string',
+						description:
+							'Optional: the gallery artifact id the source image came from. When supplied, the new artifact metadata records it so the edit chain stays traceable; purely informational.'
+					}
+				},
+				required: ['prompt', 'image']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const prompt = String(args.prompt ?? '').trim();
+		if (!prompt) return err('prompt is required');
+		const rawImage = String(args.image ?? '').trim();
+		if (!rawImage) return err('image is required (base64 string or data URL)');
+
+		const model =
+			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'qwen-image-edit';
+		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : '1024x1024';
+		const n = Math.min(4, Math.max(1, Number(args.n) || 1));
+		const sourceArtifactId =
+			typeof args.sourceArtifactId === 'string' && args.sourceArtifactId.trim()
+				? args.sourceArtifactId.trim()
+				: null;
+
+		const base = resolveImagesBaseUrl();
+		if (!base) {
+			return err(
+				'Image editing is not configured. Ask the user to set Settings → Images → Base URL (e.g. http://images.ht.local).'
+			);
+		}
+
+		const apiKey = resolveImagesApiKey();
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
+
+		const body: Record<string, unknown> = {
+			prompt,
+			model,
+			n,
+			size,
+			image: rawImage,
+			response_format: 'b64_json'
+		};
+
+		let res: Response;
+		try {
+			res = await fetch(`${base}/v1/images/edits`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				signal
+			});
+		} catch (fetchErr) {
+			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+			return err(`Network error reaching ${base}: ${message}`);
+		}
+
+		if (!res.ok) {
+			let detail = '';
+			try {
+				detail = JSON.stringify(await res.json());
+			} catch {
+				try {
+					detail = await res.text();
+				} catch {
+					/* ignore */
+				}
+			}
+			return err(`Images-edit proxy HTTP ${res.status}: ${detail || 'no body'}`);
+		}
+
+		type EditResp = {
+			created?: number;
+			data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+		};
+		const payload = (await res.json()) as EditResp;
+		const items = payload.data ?? [];
+		if (items.length === 0) {
+			return err('Images-edit proxy returned no images.');
+		}
+
+		const saved: Array<{
+			artifactId: string;
+			revisionId: string;
+			title: string;
+			mimeType: string;
+		}> = [];
+
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i];
+			let blob: Blob | undefined;
+			const mimeType = 'image/png';
+
+			if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+				blob = base64ToBlob(item.b64_json, mimeType);
+			} else if (typeof item.url === 'string' && item.url.length > 0) {
+				try {
+					const imgRes = await fetch(item.url, { signal });
+					if (imgRes.ok) blob = await imgRes.blob();
+				} catch {
+					/* ignore */
+				}
+			}
+
+			if (!blob) continue;
+
+			const title = `Edited · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
+				items.length > 1 ? ` (${i + 1}/${items.length})` : ''
+			}`;
+			const artifact = await artifactGalleryStore.saveManual({
+				kind: 'image' as DatabaseArtifactKind,
+				title,
+				mimeType,
+				blob,
+				tags: ['generated', 'edited', model],
+				metadata: {
+					source: 'edit_image',
+					model,
+					prompt,
+					size,
+					sourceArtifactId,
+					revisedPrompt: item.revised_prompt ?? null,
+					generatedAt: new Date().toISOString()
+				}
+			});
+			saved.push({
+				artifactId: artifact.id,
+				revisionId: artifact.currentRevisionId,
+				title: artifact.title,
+				mimeType
+			});
+		}
+
+		if (saved.length === 0) {
+			return err(
+				'Images-edit proxy returned rows but none had usable b64_json or a fetchable url.'
+			);
+		}
+
+		return ok({
+			model,
+			size,
+			prompt,
+			sourceArtifactId,
+			images: saved,
+			note: 'Each edited image is a NEW artifact in the gallery; the original is untouched. Reference edits by artifactId in follow-ups.'
 		});
 	}
 });
