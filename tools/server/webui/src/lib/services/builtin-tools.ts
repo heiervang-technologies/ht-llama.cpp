@@ -40,6 +40,18 @@ import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$li
 export interface BuiltinTool {
 	definition: OpenAIToolDefinition;
 	execute(args: Record<string, unknown>, signal?: AbortSignal): Promise<ToolExecutionResult>;
+	/**
+	 * Optional gate — when present and returns false the tool is
+	 * hidden from `getBuiltinToolDefinitions()` (so the model never
+	 * sees it in its tool list) AND its executor rejects if somehow
+	 * invoked (stale tool_call in conversation history after the
+	 * user toggled it off, replay of an old request, etc.). Gates
+	 * are evaluated fresh on every call so config changes take
+	 * effect immediately.
+	 */
+	gate?: () => boolean;
+	/** Human-readable name used when reporting a gated refusal. */
+	gateLabel?: string;
 }
 
 const registry = new Map<string, BuiltinTool>();
@@ -48,12 +60,17 @@ function register(tool: BuiltinTool): void {
 	registry.set(tool.definition.function.name, tool);
 }
 
+function isEnabled(tool: BuiltinTool): boolean {
+	return tool.gate ? tool.gate() : true;
+}
+
 export function getBuiltinToolDefinitions(): OpenAIToolDefinition[] {
-	return [...registry.values()].map((t) => t.definition);
+	return [...registry.values()].filter(isEnabled).map((t) => t.definition);
 }
 
 export function hasBuiltinTool(name: string): boolean {
-	return registry.has(name);
+	const t = registry.get(name);
+	return Boolean(t && isEnabled(t));
 }
 
 /**
@@ -68,6 +85,13 @@ export async function dispatchBuiltin(
 	const tool = registry.get(call.function.name);
 	if (!tool) {
 		return { content: `Error: unknown built-in tool ${call.function.name}`, isError: true };
+	}
+	if (!isEnabled(tool)) {
+		const label = tool.gateLabel ?? call.function.name;
+		return {
+			content: `Error: ${label} is currently disabled in Settings → Tools. Ask the user to enable it before calling again.`,
+			isError: true
+		};
 	}
 	const args = parseArgs(call.function.arguments);
 	try {
@@ -479,6 +503,12 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
 }
 
 register({
+	// Gated behind a user toggle so the model only sees / invokes
+	// generate_image when the user has explicitly opted in. Same
+	// mental model as ChatGPT's "Create image" button: media
+	// generation is a capability the user turns on, not a default.
+	gate: () => Boolean(config().imageGenEnabled),
+	gateLabel: 'Image generation',
 	definition: {
 		type: 'function',
 		function: {
