@@ -2,6 +2,7 @@ include(CheckCXXCompilerFlag)
 include("../cmake/common.cmake")
 
 add_compile_definitions(GGML_SCHED_MAX_COPIES=${GGML_SCHED_MAX_COPIES})
+add_compile_definitions(GGML_SCHED_MAX_SPLIT_INPUTS=${GGML_SCHED_MAX_SPLIT_INPUTS})
 
 # enable libstdc++ assertions for debug builds
 if (CMAKE_SYSTEM_NAME MATCHES "Linux")
