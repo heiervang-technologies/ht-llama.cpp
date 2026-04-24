@@ -681,3 +681,229 @@ register({
 		});
 	}
 });
+
+// ----- generate_video --------------------------------------------------
+//
+// Async: POST /v1/videos returns 202 + {id, status:"queued"}; we poll
+// GET /v1/videos/{id} until status == "completed" (or "failed"), then
+// GET /v1/videos/{id}/content for the mp4 bytes. The typical wait is
+// ~60 s for a 17-frame short and ~3 min for 81 frames at 832x480, so
+// the agentic loop has to tolerate a multi-minute tool call. We cap
+// the poll loop at POLL_BUDGET_MS below — if the job isn't done by
+// then we return a partial result with the job id so the model can
+// tell the user where to check. Video lands in the gallery as a
+// `video` artifact the same way images do.
+
+const VIDEO_POLL_INTERVAL_MS = 2000;
+const VIDEO_POLL_BUDGET_MS = 6 * 60 * 1000; // 6 minutes — covers 81-frame wan22-i2v with headroom
+
+type VideoJobStatus = {
+	id: string;
+	model?: string;
+	status: 'queued' | 'in_progress' | 'completed' | 'failed' | string;
+	error?: string;
+	content_url?: string;
+	created?: number;
+};
+
+async function pollVideoJob(
+	base: string,
+	id: string,
+	headers: Record<string, string>,
+	signal?: AbortSignal
+): Promise<VideoJobStatus> {
+	const deadline = Date.now() + VIDEO_POLL_BUDGET_MS;
+	while (Date.now() < deadline) {
+		if (signal?.aborted) throw new Error('aborted');
+		const res = await fetch(`${base}/v1/videos/${encodeURIComponent(id)}`, {
+			method: 'GET',
+			headers,
+			signal
+		});
+		if (!res.ok) {
+			let detail = '';
+			try {
+				detail = await res.text();
+			} catch {
+				/* ignore */
+			}
+			throw new Error(`poll HTTP ${res.status}: ${detail || 'no body'}`);
+		}
+		const status = (await res.json()) as VideoJobStatus;
+		if (status.status === 'completed' || status.status === 'failed') return status;
+		await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MS));
+	}
+	throw new Error(
+		`video job ${id} still ${'in progress'} after ${VIDEO_POLL_BUDGET_MS / 1000}s — check the gallery later`
+	);
+}
+
+register({
+	// Same toggle pattern as generate_image. Video is slower (~60 s
+	// minimum, ~3 min for longer clips) so the user really should opt
+	// in explicitly.
+	gate: () => Boolean(config().videoGenEnabled),
+	gateLabel: 'Video generation',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'generate_video',
+			description:
+				'Generate a short video clip from a text prompt (and optional reference image for image-to-video) via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion (typical 60s for a 17-frame short, ~3 minutes for 81 frames at 832x480), then saves the mp4 as a `video` artifact in the gallery. Use this only when the user explicitly asks for a video / animation — a single generation blocks the chat turn for at least a minute. Reliable model: `wan22-i2v` (image-to-video, requires an `image` data URL). Before any call, warn the user about the expected wait time so they know the chat will be tied up.',
+			parameters: {
+				type: 'object',
+				properties: {
+					prompt: {
+						type: 'string',
+						description:
+							'Motion / scene description. For i2v models the prompt tells the workflow how the still should animate.'
+					},
+					model: {
+						type: 'string',
+						enum: ['wan22-i2v'],
+						description: 'Model id on the proxy. Currently only `wan22-i2v` is reliable.'
+					},
+					image: {
+						type: 'string',
+						description:
+							'Optional reference image as a `data:image/...;base64,...` URL. Required for image-to-video models. Use `get_artifact` to fetch an existing artifact if the user wants to animate one from the gallery.'
+					},
+					size: {
+						type: 'string',
+						description:
+							'Frame dimensions in `WIDTHxHEIGHT` form. Default `832x480`. Higher resolutions roughly cube the runtime.'
+					},
+					frames: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 121,
+						description:
+							'Number of output frames. 17 ≈ 1 s at 16 fps (~60 s runtime). 49 is a good balance (~3 min). 81 is long-form (~5 min). Larger values risk hitting the poll budget.'
+					}
+				},
+				required: ['prompt']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const prompt = String(args.prompt ?? '').trim();
+		if (!prompt) return err('prompt is required');
+		const model =
+			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'wan22-i2v';
+		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : '832x480';
+		const frames = Math.min(121, Math.max(1, Number(args.frames) || 17));
+		const image =
+			typeof args.image === 'string' && args.image.trim() ? args.image.trim() : undefined;
+
+		if (model === 'wan22-i2v' && !image) {
+			return err(
+				'wan22-i2v is image-to-video; pass an `image` data URL. If the user wants to animate an existing artifact, call get_artifact first to get the data URL.'
+			);
+		}
+
+		const base = resolveImagesBaseUrl();
+		if (!base) {
+			return err(
+				'Video generation is not configured. Ask the user to set Settings → Images → Base URL (shared with image generation).'
+			);
+		}
+
+		const apiKey = resolveImagesApiKey();
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
+
+		const body: Record<string, unknown> = { prompt, model, size, frames };
+		if (image) body.image = image;
+
+		// Submit the job. Accept 200 or 202 — some proxies normalise to
+		// 200 even though the spec says 202.
+		let submitRes: Response;
+		try {
+			submitRes = await fetch(`${base}/v1/videos`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				signal
+			});
+		} catch (fetchErr) {
+			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+			return err(`Network error reaching ${base}: ${message}`);
+		}
+		if (!submitRes.ok) {
+			let detail = '';
+			try {
+				detail = JSON.stringify(await submitRes.json());
+			} catch {
+				try {
+					detail = await submitRes.text();
+				} catch {
+					/* ignore */
+				}
+			}
+			return err(`Videos proxy HTTP ${submitRes.status}: ${detail || 'no body'}`);
+		}
+
+		const job = (await submitRes.json()) as VideoJobStatus;
+		if (!job.id) return err('Videos proxy returned no job id.');
+
+		// Poll until terminal status or budget exhausted.
+		let final: VideoJobStatus;
+		try {
+			final = await pollVideoJob(base, job.id, headers, signal);
+		} catch (pollErr) {
+			const message = pollErr instanceof Error ? pollErr.message : String(pollErr);
+			return err(`Job ${job.id}: ${message}`);
+		}
+		if (final.status === 'failed') {
+			return err(`Video job ${job.id} failed: ${final.error ?? 'no error detail provided'}`);
+		}
+
+		// Fetch the mp4 bytes. The proxy returns raw video/mp4; stream
+		// into a Blob for saveManual.
+		const contentRes = await fetch(`${base}/v1/videos/${encodeURIComponent(job.id)}/content`, {
+			method: 'GET',
+			headers: { Authorization: headers['Authorization'] },
+			signal
+		});
+		if (!contentRes.ok) {
+			return err(
+				`Content fetch HTTP ${contentRes.status} for job ${job.id} (completed but no bytes).`
+			);
+		}
+		const blob = await contentRes.blob();
+		const mimeType = blob.type || 'video/mp4';
+
+		const title = `Generated video · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`;
+		const artifact = await artifactGalleryStore.saveManual({
+			kind: 'video' as DatabaseArtifactKind,
+			title,
+			mimeType,
+			blob,
+			tags: ['generated', model],
+			metadata: {
+				source: 'generate_video',
+				model,
+				prompt,
+				size,
+				frames,
+				jobId: job.id,
+				generatedAt: new Date().toISOString()
+			}
+		});
+
+		return ok({
+			model,
+			size,
+			frames,
+			prompt,
+			video: {
+				artifactId: artifact.id,
+				revisionId: artifact.currentRevisionId,
+				title: artifact.title,
+				mimeType,
+				bytes: blob.size
+			},
+			note: "Video is in the user's gallery; reference by artifactId in follow-ups."
+		});
+	}
+});
