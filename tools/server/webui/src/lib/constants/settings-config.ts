@@ -119,7 +119,16 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Optional API key forwarded as `Authorization: Bearer <key>` to
 	// the images proxy. Typical deployments on a trusted LAN leave
 	// this empty.
-	imagesApiKey: ''
+	imagesApiKey: '',
+	// Media generation toggles — default OFF so the model never picks
+	// a ~60 s image-gen tool unless the user explicitly opts in. When
+	// true, the corresponding builtin tool (`generate_image` /
+	// `generate_video`) is advertised in the model's tool list and
+	// dispatchable; when false it is hidden and a stale tool_call in
+	// conversation history returns a "disabled in Settings" error to
+	// the model. See `builtin-tools.ts`.
+	imageGenEnabled: false,
+	videoGenEnabled: false
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
@@ -258,7 +267,11 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	imagesBaseUrl:
 		'OpenAI-compatible image-generation proxy URL (e.g. <code>http://images.ht.local</code> or <code>http://192.168.8.170:30385</code>). Enables the <code>generate_image</code> tool so the model can create images; each returned image lands in the artifact gallery automatically.',
 	imagesApiKey:
-		"Optional bearer token for the images proxy. Leave empty for trusted-LAN deployments that don't require auth."
+		"Optional bearer token for the images proxy. Leave empty for trusted-LAN deployments that don't require auth.",
+	imageGenEnabled:
+		'Let the model invoke the <code>generate_image</code> tool when replying. Requires <em>Images base URL</em> to be set. Off by default — enable when you want a turn to be able to produce an image. Expected wait: ~60 s with <code>z-image-turbo</code>.',
+	videoGenEnabled:
+		'Let the model invoke the <code>generate_video</code> tool when replying. Backend is async (202 + poll) and currently experimental (wan22-i2v latent-channel fixes still landing). Off by default.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [
