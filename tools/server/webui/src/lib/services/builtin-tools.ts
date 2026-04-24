@@ -506,6 +506,161 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
 	return new Blob(byteArrays, { type: mimeType });
 }
 
+/**
+ * Core image-generation call, shared by the `generate_image` built-in
+ * tool (LLM-driven) and the `/image` slash command (user-driven). Each
+ * caller passes its own `source` tag so the resulting artifact records
+ * *who* triggered it, and the gallery can split LLM-generated from
+ * direct-invoke output downstream.
+ *
+ * Keeping this one function is the point — both paths POST the same
+ * body to the same endpoint, persist into the same gallery, and need
+ * the same failure modes. Divergence here would bite us the first time
+ * we change the proxy contract.
+ */
+export interface RunImageGenerationOptions {
+	source: 'generate_image' | 'direct';
+	prompt: string;
+	model?: string;
+	size?: string;
+	n?: number;
+	signal?: AbortSignal;
+}
+
+export interface RunImageGenerationResult {
+	model: string;
+	size: string | null;
+	prompt: string;
+	images: Array<{
+		artifactId: string;
+		revisionId: string;
+		title: string;
+		mimeType: string;
+	}>;
+}
+
+export async function runImageGeneration(
+	opts: RunImageGenerationOptions
+): Promise<RunImageGenerationResult> {
+	const prompt = opts.prompt.trim();
+	if (!prompt) throw new Error('prompt is required');
+	if (!config().imageGenEnabled) {
+		throw new Error('Image generation is currently disabled in Settings → Tools.');
+	}
+
+	const model = opts.model?.trim() || 'z-image-turbo';
+	const size = opts.size?.trim() || undefined;
+	const n = Math.min(4, Math.max(1, opts.n ?? 1));
+
+	const base = resolveImagesBaseUrl();
+	if (!base) {
+		throw new Error(
+			'Image generation is not configured. Set Settings → Images → Base URL (e.g. http://images.ht.local).'
+		);
+	}
+
+	const apiKey = resolveImagesApiKey();
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${apiKey || 'no-auth'}`
+	};
+
+	const body: Record<string, unknown> = {
+		prompt,
+		model,
+		n,
+		response_format: 'b64_json'
+	};
+	if (size) body.size = size;
+
+	let res: Response;
+	try {
+		res = await fetch(`${base}/v1/images/generations`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			signal: opts.signal
+		});
+	} catch (fetchErr) {
+		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		throw new Error(`Network error reaching ${base}: ${message}`);
+	}
+
+	if (!res.ok) {
+		let detail = '';
+		try {
+			detail = JSON.stringify(await res.json());
+		} catch {
+			try {
+				detail = await res.text();
+			} catch {
+				/* ignore */
+			}
+		}
+		throw new Error(`Images proxy HTTP ${res.status}: ${detail || 'no body'}`);
+	}
+
+	type GenResp = {
+		created?: number;
+		data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+	};
+	const payload = (await res.json()) as GenResp;
+	const items = payload.data ?? [];
+	if (items.length === 0) {
+		throw new Error('Images proxy returned no images.');
+	}
+
+	const saved: RunImageGenerationResult['images'] = [];
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i];
+		let blob: Blob | undefined;
+		const mimeType = 'image/png';
+
+		if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+			blob = base64ToBlob(item.b64_json, mimeType);
+		} else if (typeof item.url === 'string' && item.url.length > 0) {
+			try {
+				const imgRes = await fetch(item.url, { signal: opts.signal });
+				if (imgRes.ok) blob = await imgRes.blob();
+			} catch {
+				/* ignore */
+			}
+		}
+		if (!blob) continue;
+
+		const title = `Generated · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
+			items.length > 1 ? ` (${i + 1}/${items.length})` : ''
+		}`;
+		const artifact = await artifactGalleryStore.saveManual({
+			kind: 'image' as DatabaseArtifactKind,
+			title,
+			mimeType,
+			blob,
+			tags: ['generated', model, ...(opts.source === 'direct' ? ['direct'] : [])],
+			metadata: {
+				source: opts.source,
+				model,
+				prompt,
+				size: size ?? null,
+				revisedPrompt: item.revised_prompt ?? null,
+				generatedAt: new Date().toISOString()
+			}
+		});
+		saved.push({
+			artifactId: artifact.id,
+			revisionId: artifact.currentRevisionId,
+			title: artifact.title,
+			mimeType
+		});
+	}
+
+	if (saved.length === 0) {
+		throw new Error('Images proxy returned rows but none had usable b64_json or a fetchable url.');
+	}
+
+	return { model, size: size ?? null, prompt, images: saved };
+}
+
 register({
 	// Gated behind a user toggle so the model only sees / invokes
 	// generate_image when the user has explicitly opted in. Same
@@ -550,139 +705,22 @@ register({
 		}
 	},
 	async execute(args, signal) {
-		const prompt = String(args.prompt ?? '').trim();
-		if (!prompt) return err('prompt is required');
-		const model =
-			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'z-image-turbo';
-		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : undefined;
-		const n = Math.min(4, Math.max(1, Number(args.n) || 1));
-
-		const base = resolveImagesBaseUrl();
-		if (!base) {
-			return err(
-				'Image generation is not configured. Ask the user to set Settings → Images → Base URL (e.g. http://images.ht.local).'
-			);
-		}
-
-		const apiKey = resolveImagesApiKey();
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		// The proxy discards this but OpenAI SDK defaults expect an
-		// Authorization header — sending a placeholder makes SDKs that
-		// share our browser fetch stack happy.
-		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
-
-		const body: Record<string, unknown> = {
-			prompt,
-			model,
-			n,
-			response_format: 'b64_json'
-		};
-		if (size) body.size = size;
-
-		let res: Response;
 		try {
-			res = await fetch(`${base}/v1/images/generations`, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify(body),
+			const result = await runImageGeneration({
+				source: 'generate_image',
+				prompt: String(args.prompt ?? ''),
+				model: typeof args.model === 'string' ? args.model : undefined,
+				size: typeof args.size === 'string' ? args.size : undefined,
+				n: Number(args.n) || undefined,
 				signal
 			});
-		} catch (fetchErr) {
-			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-			return err(`Network error reaching ${base}: ${message}`);
-		}
-
-		if (!res.ok) {
-			let detail = '';
-			try {
-				detail = JSON.stringify(await res.json());
-			} catch {
-				try {
-					detail = await res.text();
-				} catch {
-					/* ignore */
-				}
-			}
-			return err(`Images proxy HTTP ${res.status}: ${detail || 'no body'}`);
-		}
-
-		type GenResp = {
-			created?: number;
-			data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
-		};
-		const payload = (await res.json()) as GenResp;
-		const items = payload.data ?? [];
-		if (items.length === 0) {
-			return err('Images proxy returned no images.');
-		}
-
-		const saved: Array<{
-			artifactId: string;
-			revisionId: string;
-			title: string;
-			mimeType: string;
-		}> = [];
-
-		for (let i = 0; i < items.length; i++) {
-			const item = items[i];
-			let blob: Blob | undefined;
-			const mimeType = 'image/png';
-
-			if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
-				blob = base64ToBlob(item.b64_json, mimeType);
-			} else if (typeof item.url === 'string' && item.url.length > 0) {
-				// Fallback path — we requested b64_json but some proxies
-				// ignore that and return a URL. Fetch it server-side via
-				// the browser so it still lands in the gallery.
-				try {
-					const imgRes = await fetch(item.url, { signal });
-					if (imgRes.ok) blob = await imgRes.blob();
-				} catch {
-					/* ignore, logged below */
-				}
-			}
-
-			if (!blob) {
-				continue;
-			}
-
-			const title = `Generated · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
-				items.length > 1 ? ` (${i + 1}/${items.length})` : ''
-			}`;
-			const artifact = await artifactGalleryStore.saveManual({
-				kind: 'image' as DatabaseArtifactKind,
-				title,
-				mimeType,
-				blob,
-				tags: ['generated', model],
-				metadata: {
-					source: 'generate_image',
-					model,
-					prompt,
-					size: size ?? null,
-					revisedPrompt: item.revised_prompt ?? null,
-					generatedAt: new Date().toISOString()
-				}
+			return ok({
+				...result,
+				note: "Each image is in the user's gallery; reference by artifactId via get_artifact in follow-ups."
 			});
-			saved.push({
-				artifactId: artifact.id,
-				revisionId: artifact.currentRevisionId,
-				title: artifact.title,
-				mimeType
-			});
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
 		}
-
-		if (saved.length === 0) {
-			return err('Images proxy returned rows but none had usable b64_json or a fetchable url.');
-		}
-
-		return ok({
-			model,
-			size: size ?? null,
-			prompt,
-			images: saved,
-			note: "Each image is in the user's gallery; reference by artifactId via get_artifact in follow-ups."
-		});
 	}
 });
 

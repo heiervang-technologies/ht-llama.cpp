@@ -175,6 +175,14 @@
 		if (!text) return;
 		artifactsStore.register(message.id, text);
 
+		// Slash commands like `/image` already persist their artifact via
+		// `saveManual` before writing the assistant message, and embed a
+		// sentinel so we know the gallery entry exists. Auto-capture would
+		// otherwise fire on the inline data URL and create a twin. Short-
+		// circuit here — the sentinel is the contract between the slash
+		// handler and this effect.
+		if (text.includes('<!--ht-slash-artifact:')) return;
+
 		// Also persist qualifying artifacts to the gallery. The slot id keys on
 		// the message's parent, so regenerating the same turn (new assistant
 		// sibling under the same user prompt) lands as a new revision of the
