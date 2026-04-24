@@ -695,7 +695,24 @@ register({
 // `video` artifact the same way images do.
 
 const VIDEO_POLL_INTERVAL_MS = 2000;
-const VIDEO_POLL_BUDGET_MS = 6 * 60 * 1000; // 6 minutes — covers 81-frame wan22-i2v with headroom
+
+/**
+ * Poll budgets are per-model since runtimes vary widely. Upper-bound
+ * with headroom so a user at the long end of the distribution still
+ * completes instead of the tool timing out prematurely.
+ *
+ *   wan22-i2v:       ~60 s (17f) → ~3 min (81f)  → cap 6 min
+ *   wan22-i2v-hq:    ~5× slower than wan22-i2v    → cap 15 min
+ *   ltx-2.3:         ~4 min (49f 960x544)         → cap 10 min
+ *   wan22-s2v:       ~3.5 min (49f 512x288)       → cap 8 min
+ */
+const VIDEO_POLL_BUDGET_MS: Record<string, number> = {
+	'wan22-i2v': 6 * 60 * 1000,
+	'wan22-i2v-hq': 15 * 60 * 1000,
+	'ltx-2.3': 10 * 60 * 1000,
+	'wan22-s2v': 8 * 60 * 1000
+};
+const DEFAULT_VIDEO_POLL_BUDGET_MS = 10 * 60 * 1000;
 
 type VideoJobStatus = {
 	id: string;
@@ -710,9 +727,10 @@ async function pollVideoJob(
 	base: string,
 	id: string,
 	headers: Record<string, string>,
+	budgetMs: number,
 	signal?: AbortSignal
 ): Promise<VideoJobStatus> {
-	const deadline = Date.now() + VIDEO_POLL_BUDGET_MS;
+	const deadline = Date.now() + budgetMs;
 	while (Date.now() < deadline) {
 		if (signal?.aborted) throw new Error('aborted');
 		const res = await fetch(`${base}/v1/videos/${encodeURIComponent(id)}`, {
@@ -734,7 +752,7 @@ async function pollVideoJob(
 		await new Promise((r) => setTimeout(r, VIDEO_POLL_INTERVAL_MS));
 	}
 	throw new Error(
-		`video job ${id} still ${'in progress'} after ${VIDEO_POLL_BUDGET_MS / 1000}s — check the gallery later`
+		`video job ${id} still in progress after ${budgetMs / 1000}s — check the gallery later`
 	);
 }
 
@@ -749,36 +767,42 @@ register({
 		function: {
 			name: 'generate_video',
 			description:
-				'Generate a short video clip from a text prompt (and optional reference image for image-to-video) via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion (typical 60s for a 17-frame short, ~3 minutes for 81 frames at 832x480), then saves the mp4 as a `video` artifact in the gallery. Use this only when the user explicitly asks for a video / animation — a single generation blocks the chat turn for at least a minute. Reliable model: `wan22-i2v` (image-to-video, requires an `image` data URL). Before any call, warn the user about the expected wait time so they know the chat will be tied up.',
+				'Generate a short video clip via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion, then saves the mp4 as a `video` artifact in the gallery. Every generation ties up the chat turn for minutes — warn the user about wait time before calling.\n\nModel matrix:\n  • `wan22-i2v` — image-to-video with 4-step lightning LoRAs. Fast (~60s for a 17-frame short, ~3min for 81 frames). Default.\n  • `wan22-i2v-hq` — same i2v pipeline without LoRAs, 20 steps. ~5× slower than wan22-i2v but noticeably sharper. Use when the user asks for quality over speed.\n  • `ltx-2.3` — LTX 2.3 distilled (i2v). ~4 min for 49 frames at 960x544. Good for slightly longer cinematic clips.\n  • `wan22-s2v` — sound-driven i2v (lip-sync / motion from audio). Needs BOTH `image` and `audio`. ~3.5 min for a 49-frame 512x288 clip.\n\nAll four models are image-to-video and require `image`. Call `get_artifact` first if the user wants to animate an existing gallery artifact.',
 			parameters: {
 				type: 'object',
 				properties: {
 					prompt: {
 						type: 'string',
 						description:
-							'Motion / scene description. For i2v models the prompt tells the workflow how the still should animate.'
+							'Motion / scene description. For i2v and s2v models the prompt tells the workflow how the still should animate.'
 					},
 					model: {
 						type: 'string',
-						enum: ['wan22-i2v'],
-						description: 'Model id on the proxy. Currently only `wan22-i2v` is reliable.'
+						enum: ['wan22-i2v', 'wan22-i2v-hq', 'ltx-2.3', 'wan22-s2v'],
+						description:
+							'Model id on the proxy. See the main description for the per-model speed/quality trade. Default `wan22-i2v`.'
 					},
 					image: {
 						type: 'string',
 						description:
-							'Optional reference image as a `data:image/...;base64,...` URL. Required for image-to-video models. Use `get_artifact` to fetch an existing artifact if the user wants to animate one from the gallery.'
+							'Reference image as a `data:image/...;base64,...` URL. Required for every model (all current models are image-to-video or sound-to-video). Use `get_artifact` to fetch an existing artifact.'
+					},
+					audio: {
+						type: 'string',
+						description:
+							'Reference audio as a `data:audio/...;base64,...` URL (wav / mp3 / ogg / flac). Required for `wan22-s2v`, ignored by the others. The model uses this to drive lip-sync / motion.'
 					},
 					size: {
 						type: 'string',
 						description:
-							'Frame dimensions in `WIDTHxHEIGHT` form. Default `832x480`. Higher resolutions roughly cube the runtime.'
+							'Frame dimensions in `WIDTHxHEIGHT` form. Default `832x480` for wan22-i2v*, `960x544` for ltx-2.3, `512x288` for wan22-s2v. Higher resolutions roughly cube the runtime.'
 					},
 					frames: {
 						type: 'integer',
 						minimum: 1,
 						maximum: 121,
 						description:
-							'Number of output frames. 17 ≈ 1 s at 16 fps (~60 s runtime). 49 is a good balance (~3 min). 81 is long-form (~5 min). Larger values risk hitting the poll budget.'
+							'Number of output frames. 17 ≈ 1 s at 16 fps. 49 is a good balance. 81 is long-form. Larger values risk hitting the per-model poll budget (see the tool description for expected runtimes).'
 					}
 				},
 				required: ['prompt']
@@ -790,14 +814,30 @@ register({
 		if (!prompt) return err('prompt is required');
 		const model =
 			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'wan22-i2v';
-		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : '832x480';
+		// Default size is per-model since each pipeline has a native
+		// resolution it was trained / distilled at. Overriding too far
+		// from the native value wastes time or crashes the pipeline.
+		const defaultSize =
+			model === 'ltx-2.3' ? '960x544' : model === 'wan22-s2v' ? '512x288' : '832x480';
+		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : defaultSize;
 		const frames = Math.min(121, Math.max(1, Number(args.frames) || 17));
 		const image =
 			typeof args.image === 'string' && args.image.trim() ? args.image.trim() : undefined;
+		const audio =
+			typeof args.audio === 'string' && args.audio.trim() ? args.audio.trim() : undefined;
 
-		if (model === 'wan22-i2v' && !image) {
+		// Every current model is image-to-video (or sound-to-video,
+		// which also consumes an image). Missing `image` is a user
+		// intent mismatch worth surfacing as a tool-level error so the
+		// model self-corrects instead of the proxy 400-ing.
+		if (!image) {
 			return err(
-				'wan22-i2v is image-to-video; pass an `image` data URL. If the user wants to animate an existing artifact, call get_artifact first to get the data URL.'
+				`${model} requires a reference \`image\` data URL (all current video models are i2v / s2v). Call get_artifact first if the user wants to animate an existing gallery artifact.`
+			);
+		}
+		if (model === 'wan22-s2v' && !audio) {
+			return err(
+				'wan22-s2v is sound-to-video; pass an `audio` data URL (wav/mp3/ogg/flac). Without audio the pipeline has nothing to drive lip-sync / motion from.'
 			);
 		}
 
@@ -814,6 +854,7 @@ register({
 
 		const body: Record<string, unknown> = { prompt, model, size, frames };
 		if (image) body.image = image;
+		if (audio) body.audio = audio;
 
 		// Submit the job. Accept 200 or 202 — some proxies normalise to
 		// 200 even though the spec says 202.
@@ -846,10 +887,11 @@ register({
 		const job = (await submitRes.json()) as VideoJobStatus;
 		if (!job.id) return err('Videos proxy returned no job id.');
 
-		// Poll until terminal status or budget exhausted.
+		// Poll until terminal status or per-model budget exhausted.
+		const budget = VIDEO_POLL_BUDGET_MS[model] ?? DEFAULT_VIDEO_POLL_BUDGET_MS;
 		let final: VideoJobStatus;
 		try {
-			final = await pollVideoJob(base, job.id, headers, signal);
+			final = await pollVideoJob(base, job.id, headers, budget, signal);
 		} catch (pollErr) {
 			const message = pollErr instanceof Error ? pollErr.message : String(pollErr);
 			return err(`Job ${job.id}: ${message}`);
@@ -886,6 +928,11 @@ register({
 				prompt,
 				size,
 				frames,
+				// Flag sound-driven runs so the gallery detail view can
+				// show "audio-driven" next to the video. We don't store
+				// the audio bytes themselves — they can be megabytes and
+				// the source is whatever the user uploaded.
+				audioDriven: Boolean(audio),
 				jobId: job.id,
 				generatedAt: new Date().toISOString()
 			}
