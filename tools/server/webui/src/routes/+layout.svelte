@@ -3,7 +3,7 @@
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
 		ChatSidebar,
 		DialogConversationTitleUpdate,
@@ -27,6 +27,23 @@
 	import { setChatSettingsDialogContext } from '$lib/contexts';
 
 	let { children } = $props();
+
+	// Tag the boot splash (defined inline in app.html) with `.hide` once
+	// the root layout is mounted and interactive. The CSS transition
+	// fades it out over 250 ms, then we remove it from the DOM so it
+	// can't intercept clicks. This closes the "green-black blank
+	// screen" window cold-boot used to spend on bundle parse.
+	onMount(() => {
+		if (typeof document === 'undefined') return;
+		const splash = document.getElementById('boot-splash');
+		if (!splash) return;
+		splash.classList.add('hide');
+		splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+		// Safety net in case `transitionend` never fires (e.g. user has
+		// `prefers-reduced-motion`; some browsers skip transitions in
+		// that case so the event is suppressed).
+		setTimeout(() => splash.remove(), 600);
+	});
 
 	let isChatRoute = $derived(page.route.id === '/chat/[id]');
 	let isDocRoute = $derived(page.route.id === '/doc/[id]');
