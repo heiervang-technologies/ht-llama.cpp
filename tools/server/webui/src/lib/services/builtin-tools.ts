@@ -484,7 +484,7 @@ register({
 		function: {
 			name: 'generate_image',
 			description:
-				"Generate images from a text prompt via the OpenAI-compatible images proxy (ComfyUI-backed). Each returned image is saved as an `image` artifact in the gallery automatically, so the user sees it inline. Use this when the user explicitly asks for an image, a mockup, a diagram mock, or a visual reference. Available models depend on the proxy; try `flux2-klein` (general), `qwen-image` (text-in-image), `z-image-turbo` (fast drafts), `newbie-image` (anime). Hitting a model the proxy doesn't expose returns an error with the live list.",
+				'Generate images from a text prompt via the OpenAI-compatible images proxy (ComfyUI-backed). Each returned image is saved as an `image` artifact in the gallery automatically, so the user sees it inline. Use this when the user explicitly asks for an image, a mockup, a diagram mock, or a visual reference. Models: `z-image-turbo` is the only production-ready one (p50 ~52s, p95 ~68s, max ~90s); keep it as the default. `flux2-klein`, `qwen-image`, and `newbie-image` are experimental — their ComfyUI workflows currently crash or hang past 5 minutes; only use them if the user explicitly asks by name, and warn them generation may fail. Before calling, warn the user that generation takes ~60s.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -495,8 +495,9 @@ register({
 					},
 					model: {
 						type: 'string',
+						enum: ['z-image-turbo', 'flux2-klein', 'qwen-image', 'newbie-image'],
 						description:
-							'Model id on the proxy. Defaults to `flux2-klein`. Others usually available: `qwen-image`, `z-image-turbo`, `newbie-image`.'
+							'Model id on the proxy. Defaults to `z-image-turbo` — the only one currently reliable. `flux2-klein` crashes ComfyUI after ~145s, `qwen-image` and `newbie-image` hang past 5 minutes. Only override the default if the user asked for a specific model by name.'
 					},
 					size: {
 						type: 'string',
@@ -518,7 +519,7 @@ register({
 		const prompt = String(args.prompt ?? '').trim();
 		if (!prompt) return err('prompt is required');
 		const model =
-			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'flux2-klein';
+			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'z-image-turbo';
 		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : undefined;
 		const n = Math.min(4, Math.max(1, Number(args.n) || 1));
 
