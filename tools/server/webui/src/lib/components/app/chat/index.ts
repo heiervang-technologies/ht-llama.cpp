@@ -185,6 +185,15 @@ export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormAc
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 
 /**
+ * Composer chip that flips the imageGenEnabled flag in one click.
+ * Mirrors the reasoning toggle pattern — one-shot affordance for
+ * something otherwise buried in Settings → Tools. When on, the
+ * model sees generate_image / edit_image and the /image slash
+ * command works; when off all three are gated.
+ */
+export { default as ChatFormActionImageGen } from './ChatForm/ChatFormActions/ChatFormActionImageGen.svelte';
+
+/**
  * Container for chat form action buttons. Arranges file attachment, audio record,
  * and submit/stop buttons in a horizontal layout. Handles conditional visibility
  * based on model capabilities and loading state.

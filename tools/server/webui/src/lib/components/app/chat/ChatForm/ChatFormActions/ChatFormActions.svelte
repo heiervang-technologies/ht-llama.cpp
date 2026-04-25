@@ -4,6 +4,7 @@
 	import {
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionAttachmentsSheet,
+		ChatFormActionImageGen,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
 		McpServersSelector
@@ -228,6 +229,8 @@
 			{disabled}
 			onSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 		/>
+
+		<ChatFormActionImageGen {disabled} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
