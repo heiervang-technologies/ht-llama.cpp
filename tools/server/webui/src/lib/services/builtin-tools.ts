@@ -519,7 +519,7 @@ function base64ToBlob(base64: string, mimeType: string): Blob {
  * we change the proxy contract.
  */
 export interface RunImageGenerationOptions {
-	source: 'generate_image' | 'direct';
+	source: 'generate_image' | 'direct' | 'playground';
 	prompt: string;
 	model?: string;
 	size?: string;
@@ -636,7 +636,15 @@ export async function runImageGeneration(
 			title,
 			mimeType,
 			blob,
-			tags: ['generated', model, ...(opts.source === 'direct' ? ['direct'] : [])],
+			tags: [
+				'generated',
+				model,
+				...(opts.source === 'direct'
+					? ['direct']
+					: opts.source === 'playground'
+						? ['playground']
+						: [])
+			],
 			metadata: {
 				source: opts.source,
 				model,
@@ -787,145 +795,189 @@ register({
 		}
 	},
 	async execute(args, signal) {
-		const prompt = String(args.prompt ?? '').trim();
-		if (!prompt) return err('prompt is required');
-		const rawImage = String(args.image ?? '').trim();
-		if (!rawImage) return err('image is required (base64 string or data URL)');
-
-		const model =
-			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'qwen-image-edit';
-		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : '1024x1024';
-		const n = Math.min(4, Math.max(1, Number(args.n) || 1));
-		const sourceArtifactId =
-			typeof args.sourceArtifactId === 'string' && args.sourceArtifactId.trim()
-				? args.sourceArtifactId.trim()
-				: null;
-
-		const base = resolveImagesBaseUrl();
-		if (!base) {
-			return err(
-				'Image editing is not configured. Ask the user to set Settings → Images → Base URL (e.g. http://images.ht.local).'
-			);
-		}
-
-		const apiKey = resolveImagesApiKey();
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
-
-		const body: Record<string, unknown> = {
-			prompt,
-			model,
-			n,
-			size,
-			image: rawImage,
-			response_format: 'b64_json'
-		};
-
-		let res: Response;
 		try {
-			res = await fetch(`${base}/v1/images/edits`, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify(body),
+			const result = await runImageEdit({
+				source: 'edit_image',
+				prompt: String(args.prompt ?? ''),
+				image: String(args.image ?? ''),
+				model: typeof args.model === 'string' ? args.model : undefined,
+				size: typeof args.size === 'string' ? args.size : undefined,
+				n: Number(args.n) || undefined,
+				sourceArtifactId:
+					typeof args.sourceArtifactId === 'string' ? args.sourceArtifactId : undefined,
 				signal
 			});
-		} catch (fetchErr) {
-			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-			return err(`Network error reaching ${base}: ${message}`);
-		}
-
-		if (!res.ok) {
-			let detail = '';
-			try {
-				detail = JSON.stringify(await res.json());
-			} catch {
-				try {
-					detail = await res.text();
-				} catch {
-					/* ignore */
-				}
-			}
-			return err(`Images-edit proxy HTTP ${res.status}: ${detail || 'no body'}`);
-		}
-
-		type EditResp = {
-			created?: number;
-			data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
-		};
-		const payload = (await res.json()) as EditResp;
-		const items = payload.data ?? [];
-		if (items.length === 0) {
-			return err('Images-edit proxy returned no images.');
-		}
-
-		const saved: Array<{
-			artifactId: string;
-			revisionId: string;
-			title: string;
-			mimeType: string;
-		}> = [];
-
-		for (let i = 0; i < items.length; i++) {
-			const item = items[i];
-			let blob: Blob | undefined;
-			const mimeType = 'image/png';
-
-			if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
-				blob = base64ToBlob(item.b64_json, mimeType);
-			} else if (typeof item.url === 'string' && item.url.length > 0) {
-				try {
-					const imgRes = await fetch(item.url, { signal });
-					if (imgRes.ok) blob = await imgRes.blob();
-				} catch {
-					/* ignore */
-				}
-			}
-
-			if (!blob) continue;
-
-			const title = `Edited · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
-				items.length > 1 ? ` (${i + 1}/${items.length})` : ''
-			}`;
-			const artifact = await artifactGalleryStore.saveManual({
-				kind: 'image' as DatabaseArtifactKind,
-				title,
-				mimeType,
-				blob,
-				tags: ['generated', 'edited', model],
-				metadata: {
-					source: 'edit_image',
-					model,
-					prompt,
-					size,
-					sourceArtifactId,
-					revisedPrompt: item.revised_prompt ?? null,
-					generatedAt: new Date().toISOString()
-				}
+			return ok({
+				...result,
+				note: 'Each edited image is a NEW artifact in the gallery; the original is untouched. Reference edits by artifactId in follow-ups.'
 			});
-			saved.push({
-				artifactId: artifact.id,
-				revisionId: artifact.currentRevisionId,
-				title: artifact.title,
-				mimeType
-			});
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
 		}
-
-		if (saved.length === 0) {
-			return err(
-				'Images-edit proxy returned rows but none had usable b64_json or a fetchable url.'
-			);
-		}
-
-		return ok({
-			model,
-			size,
-			prompt,
-			sourceArtifactId,
-			images: saved,
-			note: 'Each edited image is a NEW artifact in the gallery; the original is untouched. Reference edits by artifactId in follow-ups.'
-		});
 	}
 });
+
+/**
+ * Symmetric to runImageGeneration, for the /v1/images/edits proxy.
+ * Both the `edit_image` tool and the playground page call this.
+ */
+export interface RunImageEditOptions {
+	source: 'edit_image' | 'direct' | 'playground';
+	prompt: string;
+	/** base64 string OR `data:image/...;base64,...` data URL */
+	image: string;
+	model?: string;
+	size?: string;
+	n?: number;
+	sourceArtifactId?: string | null;
+	signal?: AbortSignal;
+}
+
+export interface RunImageEditResult {
+	model: string;
+	size: string;
+	prompt: string;
+	sourceArtifactId: string | null;
+	images: Array<{
+		artifactId: string;
+		revisionId: string;
+		title: string;
+		mimeType: string;
+	}>;
+}
+
+export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageEditResult> {
+	const prompt = opts.prompt.trim();
+	if (!prompt) throw new Error('prompt is required');
+	const rawImage = opts.image.trim();
+	if (!rawImage) throw new Error('image is required (base64 string or data URL)');
+	if (!config().imageGenEnabled) {
+		throw new Error('Image generation is currently disabled in Settings → Tools.');
+	}
+
+	const model = opts.model?.trim() || 'qwen-image-edit';
+	const size = opts.size?.trim() || '1024x1024';
+	const n = Math.min(4, Math.max(1, opts.n ?? 1));
+	const sourceArtifactId = opts.sourceArtifactId?.trim() || null;
+
+	const base = resolveImagesBaseUrl();
+	if (!base) {
+		throw new Error(
+			'Image editing is not configured. Set Settings → Images → Base URL (e.g. http://images.ht.local).'
+		);
+	}
+
+	const apiKey = resolveImagesApiKey();
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${apiKey || 'no-auth'}`
+	};
+	const body: Record<string, unknown> = {
+		prompt,
+		model,
+		n,
+		size,
+		image: rawImage,
+		response_format: 'b64_json'
+	};
+
+	let res: Response;
+	try {
+		res = await fetch(`${base}/v1/images/edits`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			signal: opts.signal
+		});
+	} catch (fetchErr) {
+		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		throw new Error(`Network error reaching ${base}: ${message}`);
+	}
+
+	if (!res.ok) {
+		let detail = '';
+		try {
+			detail = JSON.stringify(await res.json());
+		} catch {
+			try {
+				detail = await res.text();
+			} catch {
+				/* ignore */
+			}
+		}
+		throw new Error(`Images-edit proxy HTTP ${res.status}: ${detail || 'no body'}`);
+	}
+
+	type EditResp = {
+		created?: number;
+		data?: Array<{ b64_json?: string; url?: string; revised_prompt?: string }>;
+	};
+	const payload = (await res.json()) as EditResp;
+	const items = payload.data ?? [];
+	if (items.length === 0) throw new Error('Images-edit proxy returned no images.');
+
+	const saved: RunImageEditResult['images'] = [];
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i];
+		let blob: Blob | undefined;
+		const mimeType = 'image/png';
+
+		if (typeof item.b64_json === 'string' && item.b64_json.length > 0) {
+			blob = base64ToBlob(item.b64_json, mimeType);
+		} else if (typeof item.url === 'string' && item.url.length > 0) {
+			try {
+				const imgRes = await fetch(item.url, { signal: opts.signal });
+				if (imgRes.ok) blob = await imgRes.blob();
+			} catch {
+				/* ignore */
+			}
+		}
+		if (!blob) continue;
+
+		const title = `Edited · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}${
+			items.length > 1 ? ` (${i + 1}/${items.length})` : ''
+		}`;
+		const artifact = await artifactGalleryStore.saveManual({
+			kind: 'image' as DatabaseArtifactKind,
+			title,
+			mimeType,
+			blob,
+			tags: [
+				'generated',
+				'edited',
+				model,
+				...(opts.source === 'playground'
+					? ['playground']
+					: opts.source === 'direct'
+						? ['direct']
+						: [])
+			],
+			metadata: {
+				source: opts.source,
+				model,
+				prompt,
+				size,
+				sourceArtifactId,
+				revisedPrompt: item.revised_prompt ?? null,
+				generatedAt: new Date().toISOString()
+			}
+		});
+		saved.push({
+			artifactId: artifact.id,
+			revisionId: artifact.currentRevisionId,
+			title: artifact.title,
+			mimeType
+		});
+	}
+
+	if (saved.length === 0) {
+		throw new Error(
+			'Images-edit proxy returned rows but none had usable b64_json or a fetchable url.'
+		);
+	}
+
+	return { model, size, prompt, sourceArtifactId, images: saved };
+}
 
 // ----- generate_video --------------------------------------------------
 //

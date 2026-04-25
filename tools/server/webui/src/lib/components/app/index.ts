@@ -6,6 +6,7 @@ export * from './content';
 export * from './dialogs';
 export * from './doc';
 export * from './forms';
+export * from './images';
 export * from './lora';
 export * from './mcp';
 export * from './misc';
