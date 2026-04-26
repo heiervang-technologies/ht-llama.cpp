@@ -489,6 +489,26 @@ function resolveImagesApiKey(): string {
 }
 
 /**
+ * Accept either a raw base64 string or a `data:image/...;base64,...`
+ * data URL and return a Blob plus a sane filename. Used by the
+ * multipart/form-data path of `runImageEdit`. The mime type is
+ * sniffed from the data URL prefix when present, otherwise we fall
+ * back to image/png — qwen-image-edit on the proxy side accepts
+ * common formats.
+ */
+function dataUrlOrBase64ToFile(input: string): { blob: Blob; filename: string } {
+	const dataUrlMatch = /^data:([a-z0-9.+/-]+);base64,(.+)$/i.exec(input);
+	if (dataUrlMatch) {
+		const mime = dataUrlMatch[1];
+		const b64 = dataUrlMatch[2];
+		const ext = mime === 'image/jpeg' ? 'jpg' : mime.split('/')[1] || 'png';
+		return { blob: base64ToBlob(b64, mime), filename: `source.${ext}` };
+	}
+	// Plain base64 — assume PNG.
+	return { blob: base64ToBlob(input, 'image/png'), filename: 'source.png' };
+}
+
+/**
  * Decode a base64 string into a Blob with the given MIME type. Splits
  * into 1 MB chunks so very large payloads don't blow the JS engine's
  * single-allocation limit — ComfyUI can return multi-megabyte PNGs.
@@ -868,25 +888,31 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	}
 
 	const apiKey = resolveImagesApiKey();
+	// OpenAI's canonical /v1/images/edits contract is multipart/form-data
+	// with `image` as a binary file part — NOT a base64 string in JSON.
+	// Sending JSON used to make the proxy save bytes that PIL couldn't
+	// parse (the data:URL prefix or naive b64 decode round-trip
+	// corrupted the file), so ComfyUI's LoadImage node would throw
+	// PIL.UnidentifiedImageError. Use FormData to match the spec
+	// exactly; the proxy passes the binary through untouched.
 	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
 	};
-	const body: Record<string, unknown> = {
-		prompt,
-		model,
-		n,
-		size,
-		image: rawImage,
-		response_format: 'b64_json'
-	};
+	const { blob: imageBlob, filename } = dataUrlOrBase64ToFile(rawImage);
+	const form = new FormData();
+	form.set('prompt', prompt);
+	form.set('model', model);
+	form.set('n', String(n));
+	form.set('size', size);
+	form.set('response_format', 'b64_json');
+	form.set('image', imageBlob, filename);
 
 	let res: Response;
 	try {
 		res = await fetch(`${base}/v1/images/edits`, {
 			method: 'POST',
 			headers,
-			body: JSON.stringify(body),
+			body: form,
 			signal: opts.signal
 		});
 	} catch (fetchErr) {
