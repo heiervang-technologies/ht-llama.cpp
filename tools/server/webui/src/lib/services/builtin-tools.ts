@@ -93,7 +93,7 @@ export async function dispatchBuiltin(
 	if (!isEnabled(tool)) {
 		const label = tool.gateLabel ?? call.function.name;
 		return {
-			content: `Error: ${label} is currently disabled in Settings → Tools. Ask the user to enable it before calling again.`,
+			content: `Error: ${label} is currently disabled in Settings. Ask the user to enable it before calling again.`,
 			isError: true
 		};
 	}
@@ -545,7 +545,7 @@ export async function runImageGeneration(
 	const prompt = opts.prompt.trim();
 	if (!prompt) throw new Error('prompt is required');
 	if (!config().imageGenEnabled) {
-		throw new Error('Image generation is currently disabled in Settings → Tools.');
+		throw new Error('Image generation is currently disabled in Settings → Images.');
 	}
 
 	const model = opts.model?.trim() || 'z-image-turbo';
@@ -852,7 +852,7 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	const rawImage = opts.image.trim();
 	if (!rawImage) throw new Error('image is required (base64 string or data URL)');
 	if (!config().imageGenEnabled) {
-		throw new Error('Image generation is currently disabled in Settings → Tools.');
+		throw new Error('Image generation is currently disabled in Settings → Images.');
 	}
 
 	const model = opts.model?.trim() || 'qwen-image-edit';

@@ -82,7 +82,7 @@ async function handleImageSlash(rawMessage: string, prompt: string): Promise<voi
 		return;
 	}
 	if (!config().imageGenEnabled) {
-		toast.error('Image generation is disabled. Enable it in Settings → Tools.');
+		toast.error('Image generation is disabled. Enable it in Settings → Images.');
 		return;
 	}
 

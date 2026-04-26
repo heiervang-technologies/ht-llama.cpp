@@ -187,7 +187,7 @@ export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/Chat
 /**
  * Composer chip that flips the imageGenEnabled flag in one click.
  * Mirrors the reasoning toggle pattern — one-shot affordance for
- * something otherwise buried in Settings → Tools. When on, the
+ * something otherwise buried in Settings → Images. When on, the
  * model sees generate_image / edit_image and the /image slash
  * command works; when off all three are gated.
  */

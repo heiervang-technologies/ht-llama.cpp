@@ -50,7 +50,7 @@
 			</p>
 		{:else}
 			<p>
-				Image generation disabled — click to enable. Same flag as Settings → Tools → Image
+				Image generation disabled — click to enable. Same flag as Settings → Images → Enable image
 				generation.
 			</p>
 		{/if}
