@@ -8,6 +8,7 @@
 		ChevronLeft,
 		ChevronRight,
 		Database,
+		Image as ImageIcon,
 		Volume2,
 		Wand2
 	} from '@lucide/svelte';
@@ -252,6 +253,33 @@
 					key: SETTINGS_KEYS.STT_LANGUAGE,
 					label: 'STT Language (ISO 639-1)',
 					type: SettingsFieldType.INPUT
+				}
+			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.IMAGES,
+			icon: ImageIcon,
+			fields: [
+				{
+					key: SETTINGS_KEYS.IMAGE_GEN_ENABLED,
+					label: 'Enable image generation',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.IMAGES_BASE_URL,
+					label: 'Images Base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.IMAGES_API_KEY,
+					label: 'Images API Key',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.VIDEO_GEN_ENABLED,
+					label: 'Enable video generation (experimental)',
+					type: SettingsFieldType.CHECKBOX,
+					isExperimental: true
 				}
 			]
 		},

@@ -47,6 +47,7 @@
 	import { DatabaseService } from '$lib/services/database.service';
 	import { config } from '$lib/stores/settings.svelte';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import type { DatabaseArtifact } from '$lib/types/database';
 
 	type Mode = 'generate' | 'edit';
@@ -119,11 +120,7 @@
 	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	function openImagesSettings() {
-		// No dedicated IMAGES section yet — Settings → General is where
-		// the imagesBaseUrl / imagesApiKey / imageGenEnabled fields live
-		// today. Opening with no initial section drops the user on the
-		// dialog's default landing where they can search.
-		chatSettingsDialog.open();
+		chatSettingsDialog.open(SETTINGS_SECTION_TITLES.IMAGES);
 	}
 
 	async function loadThumbnail(revisionId: string): Promise<string | null> {
@@ -214,7 +211,8 @@
 			return;
 		}
 		if (!imageGenEnabled) {
-			toast.error('Image generation is disabled. Enable it in Settings → Tools.');
+			toast.error('Image generation is disabled. Enable it in Settings → Images.');
+			openImagesSettings();
 			return;
 		}
 		if (!imagesBaseUrl) {

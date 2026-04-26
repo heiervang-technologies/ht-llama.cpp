@@ -76,6 +76,11 @@ export const SETTINGS_KEYS = {
 	DRY_BASE: 'dry_base',
 	DRY_ALLOWED_LENGTH: 'dry_allowed_length',
 	DRY_PENALTY_LAST_N: 'dry_penalty_last_n',
+	// Images / video
+	IMAGES_BASE_URL: 'imagesBaseUrl',
+	IMAGES_API_KEY: 'imagesApiKey',
+	IMAGE_GEN_ENABLED: 'imageGenEnabled',
+	VIDEO_GEN_ENABLED: 'videoGenEnabled',
 	// MCP
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
