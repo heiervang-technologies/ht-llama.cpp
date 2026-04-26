@@ -90,20 +90,49 @@
 		{#each refs as ref (ref.artifactId)}
 			{#await loadRef(ref.revisionId) then dataUrl}
 				{#if dataUrl}
-					<a
-						href="#/artifacts/{ref.artifactId}"
-						class="block overflow-hidden rounded-md border bg-background transition-shadow hover:shadow-sm"
-						title={ref.title ?? ref.artifactId}
-					>
-						{#if ref.mimeType?.startsWith('video/')}
+					<!--
+						NOTE: media (video / audio with controls) cannot be wrapped
+						in an <a> per the HTML spec — that nests interactive content
+						inside an anchor and triggers browser console warnings. We
+						use an <a> for the static <img> case and a plain container
+						with a separate "Open" link for media.
+					-->
+					{#if ref.mimeType?.startsWith('video/')}
+						<div
+							class="overflow-hidden rounded-md border bg-background"
+							title={ref.title ?? ref.artifactId}
+						>
 							<!-- svelte-ignore a11y_media_has_caption -->
 							<video src={dataUrl} controls class="h-auto w-full"></video>
-						{:else if ref.mimeType?.startsWith('audio/')}
+							<a
+								href="#/artifacts/{ref.artifactId}"
+								class="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+							>
+								Open in gallery →
+							</a>
+						</div>
+					{:else if ref.mimeType?.startsWith('audio/')}
+						<div
+							class="overflow-hidden rounded-md border bg-background p-2"
+							title={ref.title ?? ref.artifactId}
+						>
 							<audio src={dataUrl} controls class="w-full"></audio>
-						{:else}
+							<a
+								href="#/artifacts/{ref.artifactId}"
+								class="mt-1 block text-xs text-muted-foreground hover:text-foreground"
+							>
+								Open in gallery →
+							</a>
+						</div>
+					{:else}
+						<a
+							href="#/artifacts/{ref.artifactId}"
+							class="block overflow-hidden rounded-md border bg-background transition-shadow hover:shadow-sm"
+							title={ref.title ?? ref.artifactId}
+						>
 							<img src={dataUrl} alt={ref.title ?? 'Generated artifact'} class="h-auto w-full" />
-						{/if}
-					</a>
+						</a>
+					{/if}
 				{/if}
 			{/await}
 		{/each}
