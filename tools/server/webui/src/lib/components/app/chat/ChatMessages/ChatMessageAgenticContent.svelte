@@ -5,6 +5,7 @@
 		MarkdownContent,
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
+	import ToolResultArtifactPreviews from './ToolResultArtifactPreviews.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
@@ -215,6 +216,13 @@
 							{/if}
 						{/each}
 					</div>
+
+					<!-- Render gallery artifacts referenced in the result JSON
+					     (generate_image / edit_image / generate_video) so the
+					     user sees the actual asset right under the tool call,
+					     not just its id. The blob is fetched from the local
+					     gallery — no extra round-trip to the proxy. -->
+					<ToolResultArtifactPreviews toolResult={section.toolResult} />
 				{:else if isPending}
 					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
 						Waiting for result...
