@@ -86,6 +86,12 @@ export const SETTINGS_KEYS = {
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
 	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	// Connections — Nextcloud (WebDAV)
+	NEXTCLOUD_URL: 'nextcloudUrl',
+	NEXTCLOUD_USERNAME: 'nextcloudUsername',
+	NEXTCLOUD_REMOTE_ROOT: 'nextcloudRemoteRoot',
+	NEXTCLOUD_AUTO_UPLOAD: 'nextcloudAutoUpload',
+	NEXTCLOUD_MIRROR_DELETES: 'nextcloudMirrorDeletes',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	// Developer

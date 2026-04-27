@@ -3,6 +3,7 @@
 		Settings,
 		Funnel,
 		AlertTriangle,
+		Cloud,
 		Code,
 		Monitor,
 		ChevronLeft,
@@ -22,6 +23,7 @@
 	import ThemeHuePicker from './ThemeHuePicker.svelte';
 	import TtsRefAudioPicker from './TtsRefAudioPicker.svelte';
 	import AiCommandsEditor from './AiCommandsEditor.svelte';
+	import NextcloudConnectionPanel from './NextcloudConnectionPanel.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -432,6 +434,11 @@
 			]
 		},
 		{
+			title: SETTINGS_SECTION_TITLES.CONNECTIONS,
+			icon: Cloud,
+			fields: []
+		},
+		{
 			title: SETTINGS_SECTION_TITLES.DEVELOPER,
 			icon: Code,
 			fields: [
@@ -710,6 +717,10 @@
 						<div class="border-t border-border/30 pt-6">
 							<McpServersSettings />
 						</div>
+					</div>
+				{:else if currentSection.title === SETTINGS_SECTION_TITLES.CONNECTIONS}
+					<div class="space-y-6">
+						<NextcloudConnectionPanel {localConfig} onConfigChange={handleConfigChange} />
 					</div>
 				{:else}
 					<div class="space-y-6">

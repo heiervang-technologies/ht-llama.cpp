@@ -14,6 +14,7 @@ export const SETTINGS_SECTION_TITLES = {
 	PENALTIES: 'Penalties',
 	IMPORT_EXPORT: 'Import/Export',
 	MCP: 'MCP',
+	CONNECTIONS: 'Connections',
 	DEVELOPER: 'Developer'
 } as const;
 
