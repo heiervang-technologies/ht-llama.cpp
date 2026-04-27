@@ -7,6 +7,9 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { visualizer } from 'rollup-plugin-visualizer';
+
+const ANALYZE_BUNDLE = process.env.ANALYZE === '1';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -48,7 +51,24 @@ export default defineConfig({
 		}
 	},
 
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		devtoolsJson(),
+		llamaCppBuildPlugin(),
+		// Bundle analyzer — opt-in via `ANALYZE=1 npm run build`. Writes
+		// dist/stats.html with a treemap of every module's contribution
+		// to the final bundle. Lets us answer "what is in those 8 MB"
+		// without guessing.
+		ANALYZE_BUNDLE &&
+			visualizer({
+				filename: 'dist/stats.html',
+				template: 'treemap',
+				gzipSize: true,
+				brotliSize: true,
+				open: false
+			})
+	].filter(Boolean),
 
 	test: {
 		projects: [

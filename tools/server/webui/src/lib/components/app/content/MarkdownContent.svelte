@@ -4,7 +4,12 @@
 	import remarkGfm from 'remark-gfm';
 	import remarkMath from 'remark-math';
 	import rehypeHighlight from 'rehype-highlight';
-	import { all as lowlightAll } from 'lowlight';
+	// `common` ships ~36 hand-picked languages instead of the full ~190.
+	// Saves ~1.5 MB unminified / ~400 KB gzipped from the client bundle.
+	// SyntaxHighlightedCode uses the same `lib/common` subset, so behavior
+	// stays consistent across the app — anything outside the common set
+	// falls back to highlight-as-text rather than crashing.
+	import { common as lowlightCommon } from 'lowlight';
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
@@ -101,7 +106,7 @@
 
 		return proc
 			.use(rehypeHighlight, {
-				languages: lowlightAll,
+				languages: lowlightCommon,
 				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] }
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables

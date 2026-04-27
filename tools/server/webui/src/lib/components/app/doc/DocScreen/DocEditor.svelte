@@ -28,7 +28,98 @@
 	import { EditorView, keymap, lineNumbers, highlightActiveLine } from '@codemirror/view';
 	import { EditorState, Compartment } from '@codemirror/state';
 	import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
-	import { languages } from '@codemirror/language-data';
+	import { LanguageDescription } from '@codemirror/language';
+	// Hand-picked language descriptors for embedded code-block highlighting
+	// in the markdown editor. The previous import — `@codemirror/language-data`
+	// — pulls in ~190 language parsers including 800 KB of legacy modes
+	// (CoffeeScript, Verilog, every SQL dialect) that nobody writes in
+	// markdown fences. Vite inlines every `import()` it sees inside
+	// language-data into the single bundle, so a runtime filter doesn't
+	// help — only narrowing the import surface does.
+	//
+	// Each `load()` is a dynamic import of the parser; under single-bundle
+	// they're still shipped but parsed-only at boot, not executed until
+	// the relevant fence is encountered.
+	const languages = [
+		LanguageDescription.of({
+			name: 'javascript',
+			alias: ['js', 'jsx', 'ts', 'tsx', 'typescript', 'node'],
+			extensions: ['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx'],
+			load: () => import('@codemirror/lang-javascript').then((m) => m.javascript())
+		}),
+		LanguageDescription.of({
+			name: 'python',
+			alias: ['py'],
+			extensions: ['py'],
+			load: () => import('@codemirror/lang-python').then((m) => m.python())
+		}),
+		LanguageDescription.of({
+			name: 'rust',
+			alias: ['rs'],
+			extensions: ['rs'],
+			load: () => import('@codemirror/lang-rust').then((m) => m.rust())
+		}),
+		LanguageDescription.of({
+			name: 'cpp',
+			alias: ['c++', 'c', 'h', 'hpp'],
+			extensions: ['c', 'cc', 'cpp', 'cxx', 'h', 'hpp'],
+			load: () => import('@codemirror/lang-cpp').then((m) => m.cpp())
+		}),
+		LanguageDescription.of({
+			name: 'go',
+			extensions: ['go'],
+			load: () => import('@codemirror/lang-go').then((m) => m.go())
+		}),
+		LanguageDescription.of({
+			name: 'java',
+			extensions: ['java'],
+			load: () => import('@codemirror/lang-java').then((m) => m.java())
+		}),
+		LanguageDescription.of({
+			name: 'php',
+			extensions: ['php'],
+			load: () => import('@codemirror/lang-php').then((m) => m.php())
+		}),
+		LanguageDescription.of({
+			name: 'json',
+			extensions: ['json'],
+			load: () => import('@codemirror/lang-json').then((m) => m.json())
+		}),
+		LanguageDescription.of({
+			name: 'html',
+			alias: ['xml', 'svelte', 'vue'],
+			extensions: ['html', 'htm', 'svelte', 'vue', 'xml'],
+			load: () => import('@codemirror/lang-html').then((m) => m.html())
+		}),
+		LanguageDescription.of({
+			name: 'css',
+			extensions: ['css'],
+			load: () => import('@codemirror/lang-css').then((m) => m.css())
+		}),
+		LanguageDescription.of({
+			name: 'sass',
+			alias: ['scss', 'less'],
+			extensions: ['sass', 'scss', 'less'],
+			load: () => import('@codemirror/lang-sass').then((m) => m.sass())
+		}),
+		LanguageDescription.of({
+			name: 'sql',
+			extensions: ['sql'],
+			load: () => import('@codemirror/lang-sql').then((m) => m.sql())
+		}),
+		LanguageDescription.of({
+			name: 'yaml',
+			alias: ['yml'],
+			extensions: ['yaml', 'yml'],
+			load: () => import('@codemirror/lang-yaml').then((m) => m.yaml())
+		}),
+		LanguageDescription.of({
+			name: 'markdown',
+			alias: ['md'],
+			extensions: ['md', 'markdown'],
+			load: () => import('@codemirror/lang-markdown').then((m) => m.markdown())
+		})
+	];
 	import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 	import {
 		syntaxHighlighting,
