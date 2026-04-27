@@ -24,6 +24,7 @@
 	import TtsRefAudioPicker from './TtsRefAudioPicker.svelte';
 	import AiCommandsEditor from './AiCommandsEditor.svelte';
 	import NextcloudConnectionPanel from './NextcloudConnectionPanel.svelte';
+	import { toast } from 'svelte-sonner';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import {
@@ -542,7 +543,7 @@
 			try {
 				JSON.parse(localConfig.custom);
 			} catch (error) {
-				alert('Invalid JSON in custom parameters. Please check the format and try again.');
+				toast.error('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);
 				return;
 			}
@@ -561,7 +562,7 @@
 						processedConfig[field] = numValue;
 					}
 				} else {
-					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+					toast.error(`Invalid numeric value for ${field}. Please enter a valid number.`);
 					return;
 				}
 			}

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { toast } from 'svelte-sonner';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
@@ -90,9 +91,16 @@
 		}
 	}
 
-	async function handleDelete() {
+	let showDeleteConfirm = $state(false);
+
+	function handleDelete() {
 		if (!artifact) return;
-		if (!confirm(`Delete "${artifact.title}" and all ${revisions.length} revisions?`)) return;
+		showDeleteConfirm = true;
+	}
+
+	async function confirmDelete() {
+		showDeleteConfirm = false;
+		if (!artifact) return;
 		await artifactGalleryStore.remove(artifactId);
 		goto('#/artifacts');
 	}
@@ -327,3 +335,25 @@
 		</aside>
 	</section>
 </div>
+
+<AlertDialog.Root bind:open={showDeleteConfirm}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete artifact?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This removes <span class="font-mono">"{artifact?.title ?? ''}"</span> and all
+				{revisions.length}
+				{revisions.length === 1 ? 'revision' : 'revisions'} from the gallery. The action cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={confirmDelete}
+			>
+				Delete
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
