@@ -893,8 +893,15 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 		'Content-Type': 'application/json',
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
 	};
+	// Hedge: include the prompt under a few common aliases. Saw a case
+	// where the source image arrived intact but the proxy ignored
+	// `prompt` and qwen-image-edit returned the source unchanged. The
+	// canonical OpenAI key is `prompt`; the others cost a few bytes
+	// and let the proxy pick whichever its workflow adapter expects.
 	const body: Record<string, unknown> = {
 		prompt,
+		instruction: prompt,
+		text: prompt,
 		model,
 		n,
 		size,
