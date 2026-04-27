@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { TerminalSquare, Trash2, Clock } from '@lucide/svelte';
 	import type { TerminalHandle } from '$lib/services/termd.service';
 
@@ -12,6 +13,17 @@
 	}
 
 	let { terminal, onDestroy }: Props = $props();
+
+	// Themed confirmation instead of `window.confirm()` — the native
+	// dialog steals OS-level focus, looks system-y in the Tauri shell,
+	// and ignores the app's color scheme. AlertDialog matches the
+	// rest of the UI and stays inside the webview.
+	let showDestroyConfirm = $state(false);
+
+	function confirmDestroy() {
+		showDestroyConfirm = false;
+		onDestroy(terminal.id);
+	}
 
 	// Reactive clock: bumps once a minute so "just now" → "1m ago" → "2m ago"
 	// updates without needing a route change. Kept coarse (60s) since the
@@ -90,9 +102,7 @@
 			class="h-7 px-2 text-destructive hover:text-destructive"
 			onclick={(e) => {
 				e.stopPropagation();
-				if (confirm(`Destroy terminal "${terminal.name}" and wipe its workspace?`)) {
-					onDestroy(terminal.id);
-				}
+				showDestroyConfirm = true;
 			}}
 			title="Destroy + wipe workspace"
 		>
@@ -100,3 +110,24 @@
 		</Button>
 	</div>
 </Card>
+
+<AlertDialog.Root bind:open={showDestroyConfirm}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Destroy terminal?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This will stop and remove <span class="font-mono">"{terminal.name}"</span> and wipe its workspace.
+				Anything you didn't push or copy out will be gone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={confirmDestroy}
+			>
+				Destroy
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

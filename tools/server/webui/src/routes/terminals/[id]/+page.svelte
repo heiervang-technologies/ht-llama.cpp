@@ -5,6 +5,7 @@
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
 		ArrowLeft,
 		Trash2,
@@ -156,14 +157,24 @@
 		return result;
 	}
 
-	async function handleDestroy() {
+	// In-app confirmation rather than `window.confirm`. Native modals
+	// in webkit2gtk steal focus from the terminal pty and look out of
+	// place against the themed UI.
+	let showDestroyConfirm = $state(false);
+
+	async function handleDestroyConfirmed() {
 		if (!terminal) return;
-		if (!confirm(`Destroy terminal "${terminal.name}" and wipe its workspace?`)) return;
+		showDestroyConfirm = false;
 		const ok = await terminalsStore.destroy(terminal.id);
 		if (ok) {
 			toast.success('Terminal destroyed');
 			goto('#/terminals');
 		}
+	}
+
+	function handleDestroy() {
+		if (!terminal) return;
+		showDestroyConfirm = true;
 	}
 
 	function handleDisconnect(clean: boolean) {
@@ -369,3 +380,25 @@
 		{/if}
 	</main>
 </div>
+
+<AlertDialog.Root bind:open={showDestroyConfirm}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Destroy terminal?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This will stop and remove
+				<span class="font-mono">"{terminal?.name ?? ''}"</span> and wipe its workspace. Anything you
+				didn't push or copy out will be gone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={handleDestroyConfirmed}
+			>
+				Destroy
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
