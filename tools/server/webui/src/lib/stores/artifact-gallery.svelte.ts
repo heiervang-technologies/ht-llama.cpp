@@ -194,7 +194,8 @@ class ArtifactGalleryStore {
 				tags: payload.tags ?? [],
 				sourceConversationId: source.conversationId,
 				sourceMessageSlot: source.slot,
-				summary: payload.summary
+				summary: payload.summary,
+				metadata: payload.metadata
 			},
 			{
 				contentHash,
@@ -207,6 +208,9 @@ class ArtifactGalleryStore {
 			}
 		);
 		await this.load();
+		// Fire-and-forget Nextcloud auto-upload — same gate as saveManual.
+		const { maybeAutoUpload } = await import('$lib/services/nextcloud-upload.service');
+		void maybeAutoUpload(artifact);
 		return artifact;
 	}
 
@@ -221,7 +225,8 @@ class ArtifactGalleryStore {
 				title: payload.title,
 				kind: payload.kind,
 				tags: payload.tags ?? [],
-				summary: payload.summary
+				summary: payload.summary,
+				metadata: payload.metadata
 			},
 			{
 				contentHash,
@@ -233,6 +238,12 @@ class ArtifactGalleryStore {
 			}
 		);
 		await this.load();
+		// Fire-and-forget Nextcloud auto-upload. The function short-circuits
+		// when the connection isn't configured, when auto-upload is off,
+		// or when the artifact came *from* Nextcloud — so it's safe to
+		// always call.
+		const { maybeAutoUpload } = await import('$lib/services/nextcloud-upload.service');
+		void maybeAutoUpload(artifact);
 		return artifact;
 	}
 
@@ -357,8 +368,15 @@ class ArtifactGalleryStore {
 	}
 
 	async remove(artifactId: string): Promise<void> {
+		// Fetch BEFORE delete so the mirror-delete path has the
+		// `nextcloudSync.remotePath` it needs to find the remote file.
+		const artifact = await DatabaseService.getArtifact(artifactId);
 		await DatabaseService.deleteArtifact(artifactId);
 		await this.load();
+		if (artifact) {
+			const { maybeMirrorDelete } = await import('$lib/services/nextcloud-upload.service');
+			void maybeMirrorDelete(artifact);
+		}
 	}
 
 	/**
@@ -367,10 +385,18 @@ class ArtifactGalleryStore {
 	 */
 	async removeMany(artifactIds: string[]): Promise<void> {
 		if (artifactIds.length === 0) return;
+		// Pre-fetch every artifact so the mirror-delete pass below has
+		// the remote-path metadata. The local delete clears it from
+		// IndexedDB so we have to snapshot first.
+		const snapshots = await Promise.all(artifactIds.map((id) => DatabaseService.getArtifact(id)));
 		for (const id of artifactIds) {
 			await DatabaseService.deleteArtifact(id);
 		}
 		await this.load();
+		const { maybeMirrorDelete } = await import('$lib/services/nextcloud-upload.service');
+		for (const artifact of snapshots) {
+			if (artifact) void maybeMirrorDelete(artifact);
+		}
 	}
 
 	/**
