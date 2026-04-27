@@ -32,28 +32,47 @@
 		try {
 			const parsed = JSON.parse(toolResult);
 			if (!parsed || typeof parsed !== 'object') return [];
+			// Recursive scan for any `{ artifactId, revisionId }` shape
+			// anywhere in the tree. The agentic path's `generate_image`
+			// returns `{ images: [...] }` at the top level, but
+			// edit_image, generate_video, future tool wrappers, and
+			// MCP servers that re-wrap our result might nest the refs
+			// differently (e.g. `{ result: { images: [...] } }` or a
+			// raw array). Walking the tree once means we don't have to
+			// keep this list in sync with every producer.
 			const out: Ref[] = [];
-			for (const key of ['images', 'videos', 'audio']) {
-				const arr = (parsed as Record<string, unknown>)[key];
-				if (Array.isArray(arr)) {
-					for (const item of arr) {
-						if (
-							item &&
-							typeof item === 'object' &&
-							typeof (item as Record<string, unknown>).artifactId === 'string' &&
-							typeof (item as Record<string, unknown>).revisionId === 'string'
-						) {
-							const r = item as Record<string, unknown>;
-							out.push({
-								artifactId: String(r.artifactId),
-								revisionId: String(r.revisionId),
-								mimeType: typeof r.mimeType === 'string' ? r.mimeType : undefined,
-								title: typeof r.title === 'string' ? r.title : undefined
-							});
-						}
-					}
+			// Plain dedup set — not a Svelte reactivity surface, just a
+			// scratch array-of-keys swap to avoid the prefer-svelte-
+			// reactivity lint flagging an inert Set used inside a
+			// $derived computation.
+			const seenKeys: string[] = [];
+			const has = (k: string) => seenKeys.includes(k);
+			const visit = (node: unknown, depth = 0) => {
+				if (depth > 8) return; // cycle / runaway guard
+				if (!node || typeof node !== 'object') return;
+				if (Array.isArray(node)) {
+					for (const child of node) visit(child, depth + 1);
+					return;
 				}
-			}
+				const obj = node as Record<string, unknown>;
+				if (typeof obj.artifactId === 'string' && typeof obj.revisionId === 'string') {
+					const key = `${obj.artifactId}::${obj.revisionId}`;
+					if (!has(key)) {
+						seenKeys.push(key);
+						out.push({
+							artifactId: String(obj.artifactId),
+							revisionId: String(obj.revisionId),
+							mimeType: typeof obj.mimeType === 'string' ? obj.mimeType : undefined,
+							title: typeof obj.title === 'string' ? obj.title : undefined
+						});
+					}
+					// Don't recurse into a matched ref — its own fields
+					// are flat strings, walking them is just overhead.
+					return;
+				}
+				for (const value of Object.values(obj)) visit(value, depth + 1);
+			};
+			visit(parsed);
 			return out;
 		} catch {
 			return [];
