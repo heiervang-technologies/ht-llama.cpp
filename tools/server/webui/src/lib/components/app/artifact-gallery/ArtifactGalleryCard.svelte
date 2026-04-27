@@ -13,8 +13,19 @@
 		FileVideo,
 		FileBadge,
 		Trash2,
-		Check
+		Check,
+		Cloud,
+		CloudOff,
+		Loader2,
+		AlertTriangle
 	} from '@lucide/svelte';
+	import {
+		getNextcloudSync,
+		nextcloudSyncRuntime,
+		isNextcloudConfigured,
+		uploadArtifact
+	} from '$lib/services/nextcloud-upload.service';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		artifact: DatabaseArtifact;
@@ -74,6 +85,24 @@
 	} as const;
 
 	let Icon = $derived(KIND_ICON[artifact.kind]);
+
+	// Sync state — derived directly from the artifact metadata + the
+	// in-flight runtime store. Connection-not-configured suppresses the
+	// badge entirely (no point yelling about "not synced" when the user
+	// hasn't opted into the integration).
+	let syncShown = $derived(isNextcloudConfigured());
+	let isUploading = $derived(nextcloudSyncRuntime.isUploading(artifact.id));
+	let sync = $derived(getNextcloudSync(artifact));
+	let cameFromNextcloud = $derived(
+		(artifact.metadata as Record<string, unknown> | undefined)?.source === 'nextcloud'
+	);
+
+	async function retryUpload(ev: Event) {
+		ev.stopPropagation();
+		const result = await uploadArtifact(artifact);
+		if (result?.status === 'synced') toast.success('Re-synced to Nextcloud');
+		else if (result?.status === 'failed') toast.error(`Re-sync failed — ${result.error ?? ''}`);
+	}
 </script>
 
 <div
@@ -140,6 +169,73 @@
 			</div>
 		</div>
 	</button>
+
+	{#if syncShown}
+		{#if isUploading}
+			<div
+				class="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-muted-foreground/30 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
+				title="Uploading to Nextcloud"
+			>
+				<Loader2 class="h-3 w-3 animate-spin" />
+				syncing
+			</div>
+		{:else if cameFromNextcloud}
+			<div
+				class="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-muted-foreground/30 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
+				title="Imported from Nextcloud"
+			>
+				<Cloud class="h-3 w-3" />
+				cloud
+			</div>
+		{:else if sync?.status === 'synced'}
+			{#if sync.remoteUrl}
+				<a
+					href={sync.remoteUrl}
+					target="_blank"
+					rel="noopener noreferrer"
+					onclick={(ev) => ev.stopPropagation()}
+					class="absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-600 transition hover:bg-emerald-500/20 dark:text-emerald-400"
+					title={sync.lastSyncedAt
+						? `Synced to Nextcloud at ${new Date(sync.lastSyncedAt).toLocaleString()} — open remote file`
+						: 'Synced to Nextcloud — open remote file'}
+				>
+					<Cloud class="h-3 w-3" />
+					synced
+				</a>
+			{:else}
+				<div
+					class="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-600 dark:text-emerald-400"
+					title={sync.lastSyncedAt
+						? `Synced to Nextcloud at ${new Date(sync.lastSyncedAt).toLocaleString()}`
+						: 'Synced to Nextcloud'}
+				>
+					<Cloud class="h-3 w-3" />
+					synced
+				</div>
+			{/if}
+		{:else if sync?.status === 'failed'}
+			<button
+				type="button"
+				class="absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10px] text-destructive transition hover:bg-destructive/20"
+				onclick={retryUpload}
+				title={sync.error
+					? `Sync failed — ${sync.error}. Click to retry.`
+					: 'Sync failed — click to retry'}
+				aria-label="Retry Nextcloud sync"
+			>
+				<AlertTriangle class="h-3 w-3" />
+				retry
+			</button>
+		{:else}
+			<div
+				class="pointer-events-none absolute bottom-2 left-2 flex items-center gap-1 rounded-full border border-muted-foreground/20 bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground/70"
+				title="Not synced to Nextcloud yet"
+			>
+				<CloudOff class="h-3 w-3" />
+				local
+			</div>
+		{/if}
+	{/if}
 
 	{#if selectable}
 		<div

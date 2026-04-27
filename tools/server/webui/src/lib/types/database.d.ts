@@ -170,6 +170,15 @@ export interface DatabaseArtifact {
 	sourceConversationId?: string;
 	sourceMessageSlot?: string;
 	summary?: string;
+	/**
+	 * Cross-cutting state that lives at the artifact level rather than the
+	 * revision level — e.g. sync state with external services. Keyed by a
+	 * convention so multiple integrations can coexist:
+	 *   - `nextcloudSync` → see NextcloudSyncState in nextcloud-upload.service
+	 * No schema change needed — Dexie persists unknown top-level fields
+	 * verbatim. Older artifacts default to `undefined`.
+	 */
+	metadata?: Record<string, unknown>;
 }
 
 export interface DatabaseArtifactRevision {

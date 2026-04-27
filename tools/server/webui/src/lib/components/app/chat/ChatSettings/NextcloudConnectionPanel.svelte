@@ -244,7 +244,7 @@
 			<p class="text-[11px] leading-snug text-muted-foreground">
 				Friendly path under your account. We resolve it to <code
 					class="rounded bg-muted px-1 py-0.5"
-					>/remote.php/dav/files/&lt;user&gt;/{remoteRoot || '/AI/'}</code
+					>{`/remote.php/dav/files/<user>/${(remoteRoot || '/AI/').replace(/^\/+/, '').replace(/\/+$/, '')}/`}</code
 				> at request time, so you don't need to learn DAV paths.
 			</p>
 		</div>
