@@ -17,8 +17,11 @@
 		ExternalLink,
 		AlertTriangle
 	} from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
 	import { config } from '$lib/stores/settings.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
+	import { artifactGalleryStore, type CapturePayload } from '$lib/stores/artifact-gallery.svelte';
+	import type { DatabaseArtifactKind } from '$lib/types/database';
 	import {
 		WebDavClient,
 		WebDavError,
@@ -41,6 +44,7 @@
 	let segments = $state<string[]>([]);
 	let entries = $state<WebDavResource[]>([]);
 	let isLoading = $state(false);
+	let isAdding = $state(false);
 	let error = $state<{
 		kind: 'config' | 'auth' | 'net' | 'http' | 'parse';
 		message: string;
@@ -224,6 +228,88 @@
 	function close(): void {
 		onOpenChange(false);
 	}
+
+	/**
+	 * Map a remote file's content-type / filename to one of the
+	 * gallery's `DatabaseArtifactKind`s. Mirrors the `kindFor()` rules
+	 * in ArtifactGallery.svelte so a file dragged in from Nextcloud
+	 * lands in the same kind bucket as the same file uploaded directly.
+	 */
+	function kindFromResource(entry: WebDavResource): DatabaseArtifactKind {
+		const mime = (entry.contentType ?? '').toLowerCase();
+		const name = entry.name.toLowerCase();
+		if (mime === 'image/svg+xml' || name.endsWith('.svg')) return 'svg';
+		if (mime.startsWith('image/')) return 'image';
+		if (mime.startsWith('audio/')) return 'audio';
+		if (mime.startsWith('video/')) return 'video';
+		if (mime === 'application/pdf' || name.endsWith('.pdf')) return 'pdf';
+		if (mime === 'text/html' || name.endsWith('.html') || name.endsWith('.htm')) return 'html';
+		if (
+			mime === 'text/markdown' ||
+			mime === 'text/x-markdown' ||
+			name.endsWith('.md') ||
+			name.endsWith('.markdown')
+		) {
+			return 'markdown';
+		}
+		return 'code';
+	}
+
+	function isTextKind(kind: DatabaseArtifactKind): boolean {
+		return kind === 'html' || kind === 'svg' || kind === 'markdown' || kind === 'code';
+	}
+
+	async function addToGallery(entry: WebDavResource): Promise<void> {
+		if (entry.isCollection) return;
+		if (!cfgSnapshot.url || !cfgSnapshot.username) return;
+		const password = await DatabaseService.getSecret(PASSWORD_KEY);
+		if (!password) {
+			toast.error('No app password saved. Re-enter it in Settings → Connections → Nextcloud.');
+			return;
+		}
+		isAdding = true;
+		try {
+			const client = new WebDavClient({
+				baseUrl: cfgSnapshot.url,
+				username: cfgSnapshot.username,
+				password,
+				remoteRoot: cfgSnapshot.remoteRoot || '/'
+			});
+			// `entry.name` is just the basename — combine with the current
+			// path to get the full friendly path for the GET. We always
+			// build it as `${currentPath}/${entry.name}` (segments-based
+			// nav guarantees no trailing slash on currentPath).
+			const fullPath = `${currentPath}/${entry.name}`;
+			const blob = await client.get(fullPath);
+			const kind = kindFromResource(entry);
+			const mimeType = blob.type || entry.contentType || 'application/octet-stream';
+			const payload: CapturePayload = {
+				kind,
+				title: entry.name,
+				mimeType,
+				metadata: {
+					source: 'nextcloud',
+					remotePath: fullPath,
+					remoteHref: entry.href,
+					remoteUrl: remoteUrl(entry),
+					etag: entry.etag,
+					addedAt: Date.now()
+				}
+			};
+			if (isTextKind(kind)) {
+				payload.text = await blob.text();
+			} else {
+				payload.blob = blob;
+			}
+			await artifactGalleryStore.saveManual(payload);
+			toast.success(`Added "${entry.name}" to the gallery`);
+		} catch (err) {
+			const translated = translateError(err);
+			toast.error(`Add to gallery failed — ${translated.message}`);
+		} finally {
+			isAdding = false;
+		}
+	}
 </script>
 
 <Sheet.Root {open} {onOpenChange}>
@@ -346,12 +432,19 @@
 					{/if}
 				</dl>
 				<div class="mt-2 flex gap-2">
-					<!-- Add-to-gallery is wired in step (c). Disabled stub
-					     keeps the button visible so users see the planned
-					     surface; tooltip explains. -->
-					<Button size="sm" variant="default" disabled title="Wired up in the next commit">
-						<Cloud class="h-3.5 w-3.5" />
-						Add to gallery
+					<Button
+						size="sm"
+						variant="default"
+						disabled={isAdding}
+						onclick={() => selected && void addToGallery(selected)}
+					>
+						{#if isAdding}
+							<Loader2 class="h-3.5 w-3.5 animate-spin" />
+							Adding…
+						{:else}
+							<Cloud class="h-3.5 w-3.5" />
+							Add to gallery
+						{/if}
 					</Button>
 					<a
 						href={remoteUrl(selected)}
