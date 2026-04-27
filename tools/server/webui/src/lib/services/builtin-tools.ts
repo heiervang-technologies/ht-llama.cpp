@@ -534,6 +534,10 @@ export interface RunImageGenerationOptions {
 	model?: string;
 	size?: string;
 	n?: number;
+	/** Negative prompt — proxies that don't support it ignore the key. */
+	negativePrompt?: string;
+	/** Seed for reproducible runs. Omit (or -1) for random. */
+	seed?: number;
 	signal?: AbortSignal;
 }
 
@@ -582,6 +586,16 @@ export async function runImageGeneration(
 		response_format: 'b64_json'
 	};
 	if (size) body.size = size;
+	const trimmedNeg = opts.negativePrompt?.trim();
+	if (trimmedNeg) {
+		// Same alias hedge as the prompt — the proxy adapter may key on
+		// any of these names depending on the workflow.
+		body.negative_prompt = trimmedNeg;
+		body.negativePrompt = trimmedNeg;
+	}
+	if (typeof opts.seed === 'number' && opts.seed >= 0) {
+		body.seed = opts.seed;
+	}
 
 	let res: Response;
 	try {
@@ -839,6 +853,8 @@ export interface RunImageEditOptions {
 	model?: string;
 	size?: string;
 	n?: number;
+	negativePrompt?: string;
+	seed?: number;
 	sourceArtifactId?: string | null;
 	signal?: AbortSignal;
 }
@@ -908,6 +924,14 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 		image: cleanImage,
 		response_format: 'b64_json'
 	};
+	const trimmedNeg = opts.negativePrompt?.trim();
+	if (trimmedNeg) {
+		body.negative_prompt = trimmedNeg;
+		body.negativePrompt = trimmedNeg;
+	}
+	if (typeof opts.seed === 'number' && opts.seed >= 0) {
+		body.seed = opts.seed;
+	}
 
 	let res: Response;
 	try {
