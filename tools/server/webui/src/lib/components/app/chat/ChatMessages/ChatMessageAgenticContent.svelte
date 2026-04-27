@@ -216,13 +216,6 @@
 							{/if}
 						{/each}
 					</div>
-
-					<!-- Render gallery artifacts referenced in the result JSON
-					     (generate_image / edit_image / generate_video) so the
-					     user sees the actual asset right under the tool call,
-					     not just its id. The blob is fetched from the local
-					     gallery — no extra round-trip to the proxy. -->
-					<ToolResultArtifactPreviews toolResult={section.toolResult} />
 				{:else if isPending}
 					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
 						Waiting for result...
@@ -230,6 +223,17 @@
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
+
+		<!-- Gallery artifacts referenced in the tool result rendered
+		     OUTSIDE the collapsible card so the user sees the actual
+		     image / video / audio even when the tool-call is collapsed
+		     (which is the default for completed calls). Without this,
+		     a `generate_image` reply just looks like an empty
+		     "Wrench: generate_image" pill until you click to expand,
+		     which misses the image-render contract. -->
+		{#if section.toolResult}
+			<ToolResultArtifactPreviews toolResult={section.toolResult} />
+		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
