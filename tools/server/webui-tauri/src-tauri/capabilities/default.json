@@ -1,11 +1,16 @@
 {
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
-  "permissions": [
-    "core:default"
-  ]
+	"$schema": "../gen/schemas/desktop-schema.json",
+	"identifier": "default",
+	"description": "Default permissions plus the webview-window creation surface the chat-side terminal drawer needs to pop a single terminal into its own native window. The term-* glob covers every spawned terminal window without needing per-id capability entries.",
+	"windows": [
+		"main",
+		"term-*"
+	],
+	"permissions": [
+		"core:default",
+		"core:webview:allow-create-webview-window",
+		"core:webview:allow-webview-close",
+		"core:window:allow-set-focus",
+		"core:window:allow-set-title"
+	]
 }
