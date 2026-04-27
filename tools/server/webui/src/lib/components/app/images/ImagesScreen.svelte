@@ -37,13 +37,9 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 
-	import {
-		runImageGeneration,
-		runImageEdit,
-		type RunImageGenerationResult,
-		type RunImageEditResult
-	} from '$lib/services/builtin-tools';
+	import { runImageGeneration, runImageEdit } from '$lib/services/builtin-tools';
 	import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
+	import { imagePlaygroundStore } from '$lib/stores/image-playground.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { config } from '$lib/stores/settings.svelte';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
@@ -77,13 +73,37 @@
 	let editSourceArtifactId = $state<string | null>(null);
 	let editFileInputRef: HTMLInputElement | null = $state(null);
 
-	let isRunning = $state(false);
-	let abortController: AbortController | null = $state(null);
-	let lastResult = $state<
-		| ({ kind: 'generate'; result: RunImageGenerationResult } & { dataUrls: string[] })
-		| ({ kind: 'edit'; result: RunImageEditResult } & { dataUrls: string[] })
-		| null
-	>(null);
+	// Run state lives in the imagePlaygroundStore (module-level), not
+	// here, so a generation in flight survives navigating away from
+	// /images and back. Local derived booleans below for ergonomics.
+	let activeRun = $derived(imagePlaygroundStore.active);
+	let isRunning = $derived(activeRun !== null);
+	let lastResult = $derived(imagePlaygroundStore.lastFinished);
+
+	// Elapsed-time ticker for the running banner. 1 Hz is fine; the
+	// run is GPU-bound (20 s — 10 min) so sub-second precision is
+	// noise. Interval is set up + torn down only while a run is
+	// active so we don't burn cycles in the idle case.
+	let elapsedMs = $state(0);
+	$effect(() => {
+		if (!activeRun) {
+			elapsedMs = 0;
+			return;
+		}
+		const startedAt = activeRun.startedAt;
+		elapsedMs = Date.now() - startedAt;
+		const id = setInterval(() => {
+			elapsedMs = Date.now() - startedAt;
+		}, 1000);
+		return () => clearInterval(id);
+	});
+
+	function formatElapsed(ms: number): string {
+		const total = Math.max(0, Math.floor(ms / 1000));
+		const m = Math.floor(total / 60);
+		const s = total % 60;
+		return m > 0 ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+	}
 
 	let imageGenEnabled = $derived(Boolean(config().imageGenEnabled));
 	let imagesBaseUrl = $derived(String(config().imagesBaseUrl ?? '').trim());
@@ -178,9 +198,14 @@
 			editSourceDataUrl = dataUrl;
 			editSourceArtifactId = artifact.id;
 		}
-		// Show in the canvas as a "viewing existing" preview.
-		lastResult = {
-			kind: 'generate',
+		// Don't trample an in-flight run's spinner state. The user can
+		// still pick a source for the *next* edit while a run is going
+		// — the canvas just keeps showing the running indicator.
+		if (imagePlaygroundStore.active) return;
+		// Show in the canvas as a "viewing existing" preview by writing
+		// to the playground store, same surface a real run uses.
+		imagePlaygroundStore.finishRun({
+			mode: 'generate',
 			result: {
 				model: String(artifact.tags.find((t) => t !== 'generated' && t !== 'playground') ?? '—'),
 				size: null,
@@ -194,8 +219,9 @@
 					}
 				]
 			},
-			dataUrls: [dataUrl]
-		};
+			dataUrls: [dataUrl],
+			finishedAt: Date.now()
+		});
 	}
 
 	function clearEditSource() {
@@ -225,17 +251,26 @@
 			return;
 		}
 
-		isRunning = true;
-		abortController = new AbortController();
+		const controller = new AbortController();
+		const startedMode: Mode = mode;
+		const startedModel = model;
+		imagePlaygroundStore.beginRun({
+			mode: startedMode,
+			prompt: trimmedPrompt,
+			model: startedModel,
+			startedAt: Date.now(),
+			abort: () => controller.abort()
+		});
+
 		try {
-			if (mode === 'generate') {
+			if (startedMode === 'generate') {
 				const result = await runImageGeneration({
 					source: 'playground',
 					prompt: trimmedPrompt,
-					model,
+					model: startedModel,
 					size,
 					n: nVariants,
-					signal: abortController.signal
+					signal: controller.signal
 				});
 				const dataUrls = await Promise.all(
 					result.images.map(async (img) => {
@@ -243,17 +278,22 @@
 						return rev?.blob ? blobToDataUrl(rev.blob) : Promise.resolve('');
 					})
 				);
-				lastResult = { kind: 'generate', result, dataUrls };
+				imagePlaygroundStore.finishRun({
+					mode: 'generate',
+					result,
+					dataUrls,
+					finishedAt: Date.now()
+				});
 			} else {
 				const result = await runImageEdit({
 					source: 'playground',
 					prompt: trimmedPrompt,
 					image: editSourceDataUrl as string,
-					model,
+					model: startedModel,
 					size,
 					n: nVariants,
 					sourceArtifactId: editSourceArtifactId,
-					signal: abortController.signal
+					signal: controller.signal
 				});
 				const dataUrls = await Promise.all(
 					result.images.map(async (img) => {
@@ -261,23 +301,26 @@
 						return rev?.blob ? blobToDataUrl(rev.blob) : Promise.resolve('');
 					})
 				);
-				lastResult = { kind: 'edit', result, dataUrls };
+				imagePlaygroundStore.finishRun({
+					mode: 'edit',
+					result,
+					dataUrls,
+					finishedAt: Date.now()
+				});
 			}
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
-			if (abortController?.signal.aborted) {
+			imagePlaygroundStore.failRun();
+			if (controller.signal.aborted) {
 				toast.info('Cancelled.');
 			} else {
 				toast.error(message);
 			}
-		} finally {
-			isRunning = false;
-			abortController = null;
 		}
 	}
 
 	function cancelRun() {
-		abortController?.abort();
+		imagePlaygroundStore.cancel();
 	}
 </script>
 
@@ -444,24 +487,37 @@
 
 		<!-- CENTER canvas -->
 		<main class="flex min-h-0 flex-col overflow-y-auto p-4">
-			{#if !lastResult}
+			{#if activeRun}
+				<!-- Running banner takes priority over a stale lastResult so
+				     the user sees real-time state on re-entry to /images.
+				     Survives navigation: state lives in the playground store. -->
 				<div
 					class="flex h-full min-h-64 flex-col items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"
 				>
-					{#if isRunning}
-						<Loader2 class="mb-2 h-6 w-6 animate-spin" />
-						<p>Running…</p>
-					{:else}
-						<ImageIcon class="mb-2 h-8 w-8 opacity-40" />
-						<p>
-							{mode === 'generate'
-								? 'Type a prompt and hit Generate.'
-								: 'Drop a source image, type an instruction, hit Edit.'}
-						</p>
-						<p class="mt-1 text-xs opacity-70">
-							Output also lands in the gallery; tagged <code>playground</code>.
-						</p>
-					{/if}
+					<Loader2 class="mb-2 h-6 w-6 animate-spin" />
+					<p class="text-foreground">
+						{activeRun.mode === 'generate' ? 'Generating' : 'Editing'} · {activeRun.model}
+					</p>
+					<p class="mt-1 max-w-md text-center text-xs opacity-70">
+						{activeRun.prompt}
+					</p>
+					<p class="mt-2 font-mono text-xs opacity-60">
+						{formatElapsed(elapsedMs)}
+					</p>
+				</div>
+			{:else if !lastResult}
+				<div
+					class="flex h-full min-h-64 flex-col items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"
+				>
+					<ImageIcon class="mb-2 h-8 w-8 opacity-40" />
+					<p>
+						{mode === 'generate'
+							? 'Type a prompt and hit Generate.'
+							: 'Drop a source image, type an instruction, hit Edit.'}
+					</p>
+					<p class="mt-1 text-xs opacity-70">
+						Output also lands in the gallery; tagged <code>playground</code>.
+					</p>
 				</div>
 			{:else}
 				<div class="flex flex-col gap-4">
@@ -480,7 +536,7 @@
 					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">
 						<p class="text-foreground"><strong>{lastResult.result.prompt}</strong></p>
 						<p class="text-muted-foreground">
-							{lastResult.kind === 'edit' ? 'Edited' : 'Generated'} · {lastResult.result.model}
+							{lastResult.mode === 'edit' ? 'Edited' : 'Generated'} · {lastResult.result.model}
 							{lastResult.result.size ? `· ${lastResult.result.size}` : ''}
 							· {lastResult.result.images.length} image{lastResult.result.images.length === 1
 								? ''
