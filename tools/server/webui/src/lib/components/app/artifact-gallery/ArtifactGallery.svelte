@@ -9,8 +9,11 @@
 	import type { DatabaseArtifactKind } from '$lib/types/database';
 	import type { CapturePayload } from '$lib/stores/artifact-gallery.svelte';
 	import ArtifactGalleryCard from './ArtifactGalleryCard.svelte';
+	import NextcloudBrowseDrawer from './NextcloudBrowseDrawer.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import {
 		Images as GalleryIcon,
+		Cloud,
 		FilterX,
 		Upload,
 		Trash2,
@@ -35,6 +38,15 @@
 	let selectMode = $state(false);
 	let selected = new SvelteSet<string>();
 	let fileInput: HTMLInputElement | undefined = $state();
+	let cloudDrawerOpen = $state(false);
+
+	// "Browse Nextcloud" button only appears once a connection is
+	// configured (URL + username minimum). Avoids dangling a button
+	// that just throws "not configured" toasts when clicked.
+	let nextcloudConfigured = $derived(
+		Boolean(String(config().nextcloudUrl ?? '').trim()) &&
+			Boolean(String(config().nextcloudUsername ?? '').trim())
+	);
 
 	onMount(() => {
 		artifactGalleryStore.load();
@@ -205,6 +217,18 @@
 				{filtered.length} of {items.length}
 			</span>
 			<div class="ml-auto flex items-center gap-1">
+				{#if nextcloudConfigured}
+					<Button
+						type="button"
+						size="sm"
+						variant="outline"
+						onclick={() => (cloudDrawerOpen = true)}
+						title="Browse Nextcloud"
+					>
+						<Cloud class="h-4 w-4" />
+						<span class="hidden sm:inline">Cloud</span>
+					</Button>
+				{/if}
 				<Button type="button" size="sm" variant="outline" onclick={pickFiles}>
 					<Upload class="h-4 w-4" />
 					<span class="hidden sm:inline">Upload</span>
@@ -330,3 +354,5 @@
 		{/if}
 	</section>
 </div>
+
+<NextcloudBrowseDrawer open={cloudDrawerOpen} onOpenChange={(next) => (cloudDrawerOpen = next)} />
