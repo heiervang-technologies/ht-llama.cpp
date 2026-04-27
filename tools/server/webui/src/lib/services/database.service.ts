@@ -7,12 +7,28 @@ import type {
 	McpServerOverride
 } from '$lib/types/database';
 
+/**
+ * Single-row secrets table — used for credentials that we don't want
+ * sitting in localStorage alongside ordinary preferences. Each row is
+ * `{ key, value }` keyed by `key`. Stored in IndexedDB without
+ * encryption — this is a "treat as sensitive" signal, not a security
+ * boundary. The threat model on a trusted desktop / Tauri install is
+ * "an XSS could read either store anyway", but keeping passwords out
+ * of the prefs blob makes export/import flows and accidental console
+ * dumps safer.
+ */
+export interface DatabaseSecret {
+	key: string;
+	value: string;
+}
+
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
 	messages!: EntityTable<DatabaseMessage, string>;
 	docs!: EntityTable<DatabaseDoc, 'id'>;
 	artifacts!: EntityTable<DatabaseArtifact, 'id'>;
 	artifactRevisions!: EntityTable<DatabaseArtifactRevision, 'id'>;
+	secrets!: EntityTable<DatabaseSecret, 'key'>;
 
 	constructor() {
 		super('LlamacppWebui');
@@ -37,6 +53,18 @@ class LlamacppDatabase extends Dexie {
 			docs: 'id, lastModified, createdAt, name',
 			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
 			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash'
+		});
+
+		// v4: secrets table for sensitive prefs (Nextcloud app password,
+		// future API tokens). Keyed by `key` so we can put/get/delete
+		// by name without listing.
+		this.version(4).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name',
+			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
+			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash',
+			secrets: 'key'
 		});
 	}
 }
@@ -707,5 +735,30 @@ export class DatabaseService {
 			await db.artifactRevisions.where('artifactId').equals(id).delete();
 			await db.artifacts.delete(id);
 		});
+	}
+
+	/**
+	 *
+	 *
+	 * Secrets — opaque key/value strings kept out of localStorage.
+	 *
+	 * Use for credentials (app passwords, API tokens) that we want
+	 * separate from the ordinary settings blob. NOT encrypted —
+	 * IndexedDB is plaintext-on-disk, same as localStorage.
+	 *
+	 *
+	 */
+
+	static async getSecret(key: string): Promise<string | null> {
+		const row = await db.secrets.get(key);
+		return row?.value ?? null;
+	}
+
+	static async setSecret(key: string, value: string): Promise<void> {
+		await db.secrets.put({ key, value });
+	}
+
+	static async clearSecret(key: string): Promise<void> {
+		await db.secrets.delete(key);
 	}
 }

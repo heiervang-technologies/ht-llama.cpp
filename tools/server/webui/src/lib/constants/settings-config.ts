@@ -128,7 +128,32 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// conversation history returns a "disabled in Settings" error to
 	// the model. See `builtin-tools.ts`.
 	imageGenEnabled: false,
-	videoGenEnabled: false
+	videoGenEnabled: false,
+	// Nextcloud / WebDAV connection. The user fills these in via
+	// Settings → Connections → Nextcloud. Empty `nextcloudUrl` means
+	// the connection is unconfigured — the gallery hides the sync UI
+	// and the upload hook is a no-op.
+	//
+	// Auth note: the URL + username live here in localStorage; the app
+	// password lives in IndexedDB (see DatabaseService.getSecret /
+	// setSecret with key `nextcloud-app-password`). Same threat model
+	// as plain localStorage on a trusted device, but signals "treat
+	// this differently" to anyone reading the code or auditing
+	// storage.
+	nextcloudUrl: '',
+	nextcloudUsername: '',
+	// Friendly base path; we resolve to /remote.php/dav/files/<user>/<this>/
+	// at request time so users only need to think in normal folder
+	// terms. Trailing slash optional — the WebDAV client normalises.
+	nextcloudRemoteRoot: '/AI/',
+	// Default true so once a user finishes the Test Connection flow
+	// they don't have to flip a second toggle. The auto-upload hook
+	// short-circuits when `nextcloudUrl` is empty so this preference
+	// is harmless until configured.
+	nextcloudAutoUpload: true,
+	// Default false. Mirroring deletes is destructive on the remote;
+	// users opt in deliberately.
+	nextcloudMirrorDeletes: false
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
