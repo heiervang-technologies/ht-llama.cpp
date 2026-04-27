@@ -691,7 +691,7 @@
 				<div
 					class="flex h-full min-h-64 flex-col items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"
 				>
-					<Loader2 class="mb-2 h-6 w-6 animate-spin" />
+					<Loader2 class="mb-2 h-6 w-6 animate-spin text-primary" />
 					<p class="text-foreground">
 						{activeRun.mode === 'generate' ? 'Generating' : 'Editing'} · {activeRun.model}
 					</p>

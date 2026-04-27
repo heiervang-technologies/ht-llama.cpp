@@ -42,6 +42,72 @@
 	function swatch(hue: number, lightness = 0.55): string {
 		return `oklch(${lightness} 0.18 ${hue})`;
 	}
+
+	/**
+	 * Convert an `#rrggbb` hex string to its HSL hue in degrees [0, 360).
+	 * The theme system only stores the hue channel — saturation and
+	 * lightness are derived per-context via OKLCH ramps in app.css — so
+	 * we deliberately discard everything except H. Picking a colour with
+	 * S=0 (pure grey) is degenerate (hue is undefined); fall back to
+	 * keeping the current value in that case so the slider doesn't jump.
+	 */
+	function hexToHue(hex: string, fallback: number): number {
+		const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+		if (!m) return fallback;
+		const n = parseInt(m[1], 16);
+		const r = ((n >> 16) & 0xff) / 255;
+		const g = ((n >> 8) & 0xff) / 255;
+		const b = (n & 0xff) / 255;
+		const max = Math.max(r, g, b);
+		const min = Math.min(r, g, b);
+		const d = max - min;
+		if (d === 0) return fallback; // achromatic — keep current hue
+		let h: number;
+		if (max === r) h = ((g - b) / d) % 6;
+		else if (max === g) h = (b - r) / d + 2;
+		else h = (r - g) / d + 4;
+		return clampHue(h * 60);
+	}
+
+	/**
+	 * Hue → `#rrggbb` round-trip so the colour input opens with the
+	 * current pick selected. Uses HSL with S=70%, L=55% — visually
+	 * matches the swatch chips for a consistent reference colour.
+	 */
+	function hueToHex(hue: number): string {
+		const s = 0.7;
+		const l = 0.55;
+		const c = (1 - Math.abs(2 * l - 1)) * s;
+		const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+		const m = l - c / 2;
+		let r = 0,
+			g = 0,
+			b = 0;
+		if (hue < 60) {
+			r = c;
+			g = x;
+		} else if (hue < 120) {
+			r = x;
+			g = c;
+		} else if (hue < 180) {
+			g = c;
+			b = x;
+		} else if (hue < 240) {
+			g = x;
+			b = c;
+		} else if (hue < 300) {
+			r = x;
+			b = c;
+		} else {
+			r = c;
+			b = x;
+		}
+		const toHex = (v: number) =>
+			Math.round((v + m) * 255)
+				.toString(16)
+				.padStart(2, '0');
+		return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+	}
 </script>
 
 <div class="space-y-3 rounded-md border border-border/60 bg-muted/30 p-4">
@@ -75,11 +141,24 @@
 
 	<div class="space-y-2">
 		<div class="flex items-center gap-3">
-			<span
-				class="h-5 w-5 shrink-0 rounded-full border border-border/60"
+			<!-- Native color input. Click the swatch and the OS opens its
+			     full HSL/HSV picker — no extra dependency, accessible by
+			     default. We only keep the hue channel since the theme
+			     system derives S/L per-context via OKLCH ramps. -->
+			<label
+				class="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border/60"
 				style:background-color={swatch(primary, 0.5)}
-				aria-hidden="true"
-			></span>
+				title="Click for full color picker"
+			>
+				<input
+					type="color"
+					value={hueToHex(primary)}
+					oninput={(e) =>
+						onChange('themePrimaryHue', hexToHue((e.target as HTMLInputElement).value, primary))}
+					class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+					aria-label="Primary color picker"
+				/>
+			</label>
 			<Label for="theme-primary-hue" class="min-w-24 text-xs text-muted-foreground">
 				Primary ({primary}°)
 			</Label>
@@ -97,11 +176,23 @@
 			/>
 		</div>
 		<div class="flex items-center gap-3">
-			<span
-				class="h-5 w-5 shrink-0 rounded-full border border-border/60"
+			<label
+				class="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border/60"
 				style:background-color={swatch(secondary, 0.75)}
-				aria-hidden="true"
-			></span>
+				title="Click for full color picker"
+			>
+				<input
+					type="color"
+					value={hueToHex(secondary)}
+					oninput={(e) =>
+						onChange(
+							'themeSecondaryHue',
+							hexToHue((e.target as HTMLInputElement).value, secondary)
+						)}
+					class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+					aria-label="Secondary color picker"
+				/>
+			</label>
 			<Label for="theme-secondary-hue" class="min-w-24 text-xs text-muted-foreground">
 				Secondary ({secondary}°)
 			</Label>
@@ -121,7 +212,8 @@
 	</div>
 
 	<p class="text-xs text-muted-foreground">
-		Primary drives text and accents; secondary drives neutral surfaces. Changes apply live.
+		Click a swatch for a full color picker, or drag the slider for hue only. Saturation and
+		lightness are derived per-context — only the hue channel is stored.
 	</p>
 </div>
 
