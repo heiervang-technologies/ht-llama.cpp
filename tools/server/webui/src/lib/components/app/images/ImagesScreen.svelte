@@ -28,6 +28,8 @@
 		Loader2,
 		Settings as SettingsIcon,
 		History,
+		Link as LinkIcon,
+		Unlink as UnlinkIcon,
 		X
 	} from '@lucide/svelte';
 
@@ -57,16 +59,29 @@
 
 	const EDIT_MODELS = [{ id: 'qwen-image-edit', label: 'qwen-image-edit · ~2.5 min @ 1024' }];
 
-	const SIZE_OPTIONS = [
-		{ id: '1024x1024', label: '1024 × 1024 · square' },
-		{ id: '1024x1536', label: '1024 × 1536 · portrait' },
-		{ id: '1536x1024', label: '1536 × 1024 · landscape' }
+	const ASPECT_PRESETS: Array<{ id: string; label: string; w: number; h: number }> = [
+		{ id: '1:1', label: '1 : 1 · square', w: 1024, h: 1024 },
+		{ id: '4:3', label: '4 : 3', w: 1152, h: 864 },
+		{ id: '3:2', label: '3 : 2', w: 1216, h: 832 },
+		{ id: '16:9', label: '16 : 9 · widescreen', w: 1344, h: 768 },
+		{ id: '2:3', label: '2 : 3', w: 832, h: 1216 },
+		{ id: '3:4', label: '3 : 4 · portrait', w: 864, h: 1152 },
+		{ id: '9:16', label: '9 : 16 · vertical', w: 768, h: 1344 }
 	];
+
+	const SIZE_STEP = 64; // ComfyUI VAEs prefer multiples of 64
 
 	let mode = $state<Mode>('generate');
 	let prompt = $state('');
 	let model = $state(GENERATE_MODELS[0].id);
-	let size = $state(SIZE_OPTIONS[0].id);
+	let width = $state(1024);
+	let height = $state(1024);
+	// When the chain is locked, edits to width/height preserve the
+	// aspect ratio captured at the moment the lock was clicked. We
+	// hold the ratio as a frozen number rather than recomputing on
+	// every edit so a tiny rounding drift can't slowly distort it.
+	let ratioLocked = $state(false);
+	let lockedRatio = $state(1);
 	let nVariants = $state(1);
 
 	let editSourceDataUrl = $state<string | null>(null);
@@ -141,6 +156,45 @@
 
 	function openImagesSettings() {
 		chatSettingsDialog.open(SETTINGS_SECTION_TITLES.IMAGES);
+	}
+
+	function snapToStep(value: number): number {
+		// VAE alignment — round to nearest multiple of SIZE_STEP and clamp
+		// into a sane range. Below 256 nothing trains well; above 2048 the
+		// proxy starts OOMing on 24 GB.
+		const stepped = Math.round(value / SIZE_STEP) * SIZE_STEP;
+		return Math.max(256, Math.min(2048, stepped));
+	}
+
+	function applyPreset(w: number, h: number) {
+		ratioLocked = false; // preset overrides any locked ratio
+		width = w;
+		height = h;
+	}
+
+	function toggleLock() {
+		if (ratioLocked) {
+			ratioLocked = false;
+		} else {
+			lockedRatio = width / height;
+			ratioLocked = true;
+		}
+	}
+
+	function handleWidthChange(value: number) {
+		const next = snapToStep(value);
+		width = next;
+		if (ratioLocked) {
+			height = snapToStep(next / lockedRatio);
+		}
+	}
+
+	function handleHeightChange(value: number) {
+		const next = snapToStep(value);
+		height = next;
+		if (ratioLocked) {
+			width = snapToStep(next * lockedRatio);
+		}
 	}
 
 	async function loadThumbnail(revisionId: string): Promise<string | null> {
@@ -262,6 +316,7 @@
 			abort: () => controller.abort()
 		});
 
+		const size = `${width}x${height}`;
 		try {
 			if (startedMode === 'generate') {
 				const result = await runImageGeneration({
@@ -437,32 +492,90 @@
 					</Select.Root>
 				</div>
 
-				<div class="grid grid-cols-2 gap-3">
-					<div class="flex flex-col gap-1.5">
-						<Label for="img-size" class="text-xs text-muted-foreground uppercase">Size</Label>
-						<Select.Root type="single" bind:value={size} disabled={isRunning}>
-							<Select.Trigger id="img-size" class="w-full">
-								{SIZE_OPTIONS.find((s) => s.id === size)?.label ?? size}
-							</Select.Trigger>
-							<Select.Content>
-								{#each SIZE_OPTIONS as opt (opt.id)}
-									<Select.Item value={opt.id} label={opt.label}>{opt.label}</Select.Item>
-								{/each}
-							</Select.Content>
-						</Select.Root>
-					</div>
+				<div class="flex flex-col gap-1.5">
+					<Label class="text-xs text-muted-foreground uppercase">Size</Label>
 
-					<div class="flex flex-col gap-1.5">
-						<Label for="img-n" class="text-xs text-muted-foreground uppercase">Variants</Label>
+					<!-- Width / lock / Height — same shape as Photoshop, Figma,
+					     A1111. The lock toggle freezes the current ratio so
+					     either input nudges the other proportionally. Snap to
+					     SIZE_STEP (64) on every change to keep the VAEs happy. -->
+					<div class="flex items-center gap-1.5">
 						<Input
-							id="img-n"
+							id="img-width"
 							type="number"
-							min="1"
-							max="4"
-							bind:value={nVariants}
+							min={256}
+							max={2048}
+							step={SIZE_STEP}
+							value={width}
+							oninput={(e) => handleWidthChange(Number((e.target as HTMLInputElement).value))}
 							disabled={isRunning}
+							class="w-full"
+							aria-label="Width in pixels"
+						/>
+						<button
+							type="button"
+							onclick={toggleLock}
+							disabled={isRunning}
+							class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40 {ratioLocked
+								? 'border-primary text-primary'
+								: ''}"
+							title={ratioLocked
+								? `Aspect ratio locked at ${lockedRatio.toFixed(2)} : 1`
+								: 'Click to lock aspect ratio'}
+							aria-pressed={ratioLocked}
+							aria-label="Lock aspect ratio"
+						>
+							{#if ratioLocked}
+								<LinkIcon class="h-4 w-4" />
+							{:else}
+								<UnlinkIcon class="h-4 w-4" />
+							{/if}
+						</button>
+						<Input
+							id="img-height"
+							type="number"
+							min={256}
+							max={2048}
+							step={SIZE_STEP}
+							value={height}
+							oninput={(e) => handleHeightChange(Number((e.target as HTMLInputElement).value))}
+							disabled={isRunning}
+							class="w-full"
+							aria-label="Height in pixels"
 						/>
 					</div>
+
+					<!-- Quick presets — clicking applies w / h and unlocks the
+					     ratio so the next manual edit isn't constrained. -->
+					<div class="mt-1 flex flex-wrap gap-1">
+						{#each ASPECT_PRESETS as preset (preset.id)}
+							<button
+								type="button"
+								onclick={() => applyPreset(preset.w, preset.h)}
+								disabled={isRunning}
+								class="rounded-full border px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 {width ===
+									preset.w && height === preset.h
+									? 'border-primary text-primary'
+									: ''}"
+								title={preset.label}
+							>
+								{preset.id}
+							</button>
+						{/each}
+					</div>
+				</div>
+
+				<div class="flex flex-col gap-1.5">
+					<Label for="img-n" class="text-xs text-muted-foreground uppercase">Variants</Label>
+					<Input
+						id="img-n"
+						type="number"
+						min="1"
+						max="4"
+						bind:value={nVariants}
+						disabled={isRunning}
+						class="w-full"
+					/>
 				</div>
 
 				<div class="flex flex-col gap-2">
