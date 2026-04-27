@@ -30,6 +30,8 @@
 		History,
 		Link as LinkIcon,
 		Unlink as UnlinkIcon,
+		Film,
+		Music,
 		X
 	} from '@lucide/svelte';
 
@@ -40,7 +42,14 @@
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 
-	import { runImageGeneration, runImageEdit } from '$lib/services/builtin-tools';
+	import {
+		runImageGeneration,
+		runImageEdit,
+		runVideoGeneration,
+		type RunImageGenerationResult,
+		type RunImageEditResult,
+		type RunVideoGenerationResult
+	} from '$lib/services/builtin-tools';
 	import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
 	import { imagePlaygroundStore } from '$lib/stores/image-playground.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
@@ -49,7 +58,7 @@
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import type { DatabaseArtifact } from '$lib/types/database';
 
-	type Mode = 'generate' | 'edit';
+	type Mode = 'generate' | 'edit' | 'video';
 
 	const GENERATE_MODELS = [
 		{ id: 'z-image-turbo', label: 'z-image-turbo · ~52s · default' },
@@ -59,6 +68,23 @@
 	];
 
 	const EDIT_MODELS = [{ id: 'qwen-image-edit', label: 'qwen-image-edit · ~2.5 min @ 1024' }];
+
+	const VIDEO_MODELS = [
+		{ id: 'wan22-i2v', label: 'wan22-i2v · ~60s — 3min · default · i2v', requiresAudio: false },
+		{ id: 'wan22-i2v-hq', label: 'wan22-i2v-hq · ~5× slower · sharper', requiresAudio: false },
+		{ id: 'ltx-2.3', label: 'ltx-2.3 · ~4 min · cinematic', requiresAudio: false },
+		{ id: 'wan22-s2v', label: 'wan22-s2v · ~3.5 min · sound-driven', requiresAudio: true }
+	];
+
+	// Per-model native size — overriding crashes pipelines, so we
+	// hint the user toward the trained resolution and let them go off
+	// only via Advanced.
+	const VIDEO_DEFAULT_SIZE: Record<string, string> = {
+		'wan22-i2v': '832x480',
+		'wan22-i2v-hq': '832x480',
+		'ltx-2.3': '960x544',
+		'wan22-s2v': '512x288'
+	};
 
 	const ASPECT_PRESETS: Array<{ id: string; label: string; w: number; h: number }> = [
 		{ id: '1:1', label: '1 : 1 · square', w: 1024, h: 1024 },
@@ -96,6 +122,12 @@
 	let editSourceArtifactId = $state<string | null>(null);
 	let editFileInputRef: HTMLInputElement | null = $state(null);
 
+	// Video-specific knobs. The audio source is only used by wan22-s2v;
+	// the file-input is rendered conditionally on the active model.
+	let videoFrames = $state(17);
+	let videoAudioDataUrl = $state<string | null>(null);
+	let videoAudioFileInputRef: HTMLInputElement | null = $state(null);
+
 	// Run state lives in the imagePlaygroundStore (module-level), not
 	// here, so a generation in flight survives navigating away from
 	// /images and back. Local derived booleans below for ergonomics.
@@ -129,16 +161,31 @@
 	}
 
 	let imageGenEnabled = $derived(Boolean(config().imageGenEnabled));
+	let videoGenEnabled = $derived(Boolean(config().videoGenEnabled));
 	let imagesBaseUrl = $derived(String(config().imagesBaseUrl ?? '').trim());
+
+	// Per-mode capability check used by the Run button. Image gen
+	// flows share `imageGenEnabled` (Generate + Edit are the same
+	// proxy); Video has its own toggle since it's an order of magnitude
+	// slower and the user should opt in explicitly.
+	let modeEnabled = $derived(mode === 'video' ? videoGenEnabled : imageGenEnabled);
+
+	// Currently selected video model, derived for cleaner UI conditionals.
+	let videoModelDescriptor = $derived(VIDEO_MODELS.find((m) => m.id === model));
+	let videoNeedsAudio = $derived(Boolean(videoModelDescriptor?.requiresAudio));
 
 	// Reactive history: every image artifact in the gallery, newest first.
 	// Includes output from all four entry points; metadata.source is what
 	// distinguishes them, but for browsing we want everything in one rail.
-	let history = $derived.by<DatabaseArtifact[]>(() =>
-		[...artifactGalleryStore.artifacts]
-			.filter((a) => a.kind === 'image')
-			.sort((a, b) => b.updatedAt - a.updatedAt)
-	);
+	let history = $derived.by<DatabaseArtifact[]>(() => {
+		// Include images by default; widen to video when the user is in
+		// Video mode so they can drag an old generation back into the
+		// canvas without flipping tabs.
+		const wanted = mode === 'video' ? ['image', 'video'] : ['image'];
+		return [...artifactGalleryStore.artifacts]
+			.filter((a) => wanted.includes(a.kind))
+			.sort((a, b) => b.updatedAt - a.updatedAt);
+	});
 
 	// Resolved data-URL cache keyed by revisionId, for the history rail
 	// thumbnails. Loaded lazily as artifacts come into view.
@@ -154,9 +201,22 @@
 		// Switching modes resets the model selection so we never end up
 		// with a Generate-only model id selected in Edit mode (or vice
 		// versa). The size knob is shared.
-		const allowed = mode === 'generate' ? GENERATE_MODELS : EDIT_MODELS;
+		const allowed =
+			mode === 'generate' ? GENERATE_MODELS : mode === 'edit' ? EDIT_MODELS : VIDEO_MODELS;
 		if (!allowed.some((m) => m.id === model)) {
 			model = allowed[0].id;
+		}
+		// Snap size to the selected video model's native resolution so
+		// the user doesn't waste 5 minutes finding out 1024x1024 OOMs.
+		if (mode === 'video') {
+			const native = VIDEO_DEFAULT_SIZE[model];
+			if (native) {
+				const [w, h] = native.split('x').map(Number);
+				if (Number.isFinite(w) && Number.isFinite(h)) {
+					width = w;
+					height = h;
+				}
+			}
 		}
 	});
 
@@ -291,6 +351,23 @@
 		editSourceArtifactId = null;
 	}
 
+	async function handleVideoAudioFileChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		try {
+			videoAudioDataUrl = await blobToDataUrl(file);
+		} catch (e) {
+			toast.error(`Failed to read audio: ${e instanceof Error ? e.message : String(e)}`);
+		} finally {
+			input.value = '';
+		}
+	}
+
+	function clearVideoAudio() {
+		videoAudioDataUrl = null;
+	}
+
 	async function run() {
 		if (isRunning) return;
 		const trimmedPrompt = prompt.trim();
@@ -298,7 +375,12 @@
 			toast.info('Enter a prompt first.');
 			return;
 		}
-		if (!imageGenEnabled) {
+		if (mode === 'video' && !videoGenEnabled) {
+			toast.error('Video generation is disabled. Enable it in Settings → Images.');
+			openImagesSettings();
+			return;
+		}
+		if (mode !== 'video' && !imageGenEnabled) {
 			toast.error('Image generation is disabled. Enable it in Settings → Images.');
 			openImagesSettings();
 			return;
@@ -310,6 +392,14 @@
 		}
 		if (mode === 'edit' && !editSourceDataUrl) {
 			toast.info('Drop a source image first, or click a history card to reuse one.');
+			return;
+		}
+		if (mode === 'video' && !editSourceDataUrl) {
+			toast.info('All video models are image-to-video — drop a source image first.');
+			return;
+		}
+		if (mode === 'video' && videoNeedsAudio && !videoAudioDataUrl) {
+			toast.info(`${model} is sound-driven — attach an audio clip below the source image.`);
 			return;
 		}
 
@@ -352,7 +442,7 @@
 					dataUrls,
 					finishedAt: Date.now()
 				});
-			} else {
+			} else if (startedMode === 'edit') {
 				const result = await runImageEdit({
 					source: 'playground',
 					prompt: trimmedPrompt,
@@ -374,6 +464,25 @@
 					mode: 'edit',
 					result,
 					dataUrls,
+					finishedAt: Date.now()
+				});
+			} else {
+				const result = await runVideoGeneration({
+					source: 'playground',
+					prompt: trimmedPrompt,
+					model: startedModel,
+					image: editSourceDataUrl as string,
+					audio: videoAudioDataUrl ?? undefined,
+					size,
+					frames: videoFrames,
+					signal: controller.signal
+				});
+				const rev = await DatabaseService.getArtifactRevision(result.video.revisionId);
+				const dataUrl = rev?.blob ? await blobToDataUrl(rev.blob) : '';
+				imagePlaygroundStore.finishRun({
+					mode: 'video',
+					result,
+					dataUrls: [dataUrl],
 					finishedAt: Date.now()
 				});
 			}
@@ -421,9 +530,22 @@
 				<Pencil class="h-3.5 w-3.5" />
 				Edit
 			</button>
+			<button
+				type="button"
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {mode ===
+				'video'
+					? 'bg-primary text-primary-foreground'
+					: 'text-muted-foreground hover:text-foreground'}"
+				onclick={() => (mode = 'video')}
+			>
+				<Film class="h-3.5 w-3.5" />
+				Video
+			</button>
 		</div>
 
-		{#if !imageGenEnabled}
+		{#if mode === 'video' && !videoGenEnabled}
+			<span class="ml-2 text-xs text-amber-600">Video generation is disabled.</span>
+		{:else if mode !== 'video' && !imageGenEnabled}
 			<span class="ml-2 text-xs text-amber-600">Image generation is disabled.</span>
 		{/if}
 
@@ -456,9 +578,11 @@
 					/>
 				</div>
 
-				{#if mode === 'edit'}
+				{#if mode === 'edit' || mode === 'video'}
 					<div class="flex flex-col gap-1.5">
-						<Label class="text-xs text-muted-foreground uppercase">Source image</Label>
+						<Label class="text-xs text-muted-foreground uppercase">
+							{mode === 'video' ? 'Source image (i2v)' : 'Source image'}
+						</Label>
 						{#if editSourceDataUrl}
 							<div class="relative overflow-hidden rounded-md border bg-background">
 								<img src={editSourceDataUrl} alt="Source" class="h-40 w-full object-cover" />
@@ -491,15 +615,55 @@
 					</div>
 				{/if}
 
+				{#if mode === 'video' && videoNeedsAudio}
+					<div class="flex flex-col gap-1.5">
+						<Label class="text-xs text-muted-foreground uppercase">Source audio (s2v)</Label>
+						{#if videoAudioDataUrl}
+							<div class="relative flex items-center gap-2 rounded-md border bg-background p-2">
+								<Music class="h-4 w-4 text-muted-foreground" />
+								<audio src={videoAudioDataUrl} controls class="min-w-0 flex-1"></audio>
+								<button
+									type="button"
+									onclick={clearVideoAudio}
+									class="rounded-full bg-background/80 p-1 hover:bg-background"
+									aria-label="Clear audio"
+								>
+									<X class="h-3 w-3" />
+								</button>
+							</div>
+						{:else}
+							<button
+								type="button"
+								onclick={() => videoAudioFileInputRef?.click()}
+								class="flex h-20 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+							>
+								<Music class="mb-1 h-4 w-4 opacity-60" />
+								wav · mp3 · ogg · flac
+							</button>
+						{/if}
+						<input
+							type="file"
+							accept="audio/*"
+							class="hidden"
+							bind:this={videoAudioFileInputRef}
+							onchange={handleVideoAudioFileChange}
+						/>
+					</div>
+				{/if}
+
 				<div class="flex flex-col gap-1.5">
 					<Label for="img-model" class="text-xs text-muted-foreground uppercase">Model</Label>
 					<Select.Root type="single" bind:value={model} disabled={isRunning}>
 						<Select.Trigger id="img-model" class="w-full">
-							{(mode === 'generate' ? GENERATE_MODELS : EDIT_MODELS).find((m) => m.id === model)
-								?.label ?? model}
+							{(mode === 'generate'
+								? GENERATE_MODELS
+								: mode === 'edit'
+									? EDIT_MODELS
+									: VIDEO_MODELS
+							).find((m) => m.id === model)?.label ?? model}
 						</Select.Trigger>
 						<Select.Content>
-							{#each mode === 'generate' ? GENERATE_MODELS : EDIT_MODELS as opt (opt.id)}
+							{#each mode === 'generate' ? GENERATE_MODELS : mode === 'edit' ? EDIT_MODELS : VIDEO_MODELS as opt (opt.id)}
 								<Select.Item value={opt.id} label={opt.label}>{opt.label}</Select.Item>
 							{/each}
 						</Select.Content>
@@ -579,18 +743,36 @@
 					</div>
 				</div>
 
-				<div class="flex flex-col gap-1.5">
-					<Label for="img-n" class="text-xs text-muted-foreground uppercase">Variants</Label>
-					<Input
-						id="img-n"
-						type="number"
-						min="1"
-						max="4"
-						bind:value={nVariants}
-						disabled={isRunning}
-						class="w-full"
-					/>
-				</div>
+				{#if mode === 'video'}
+					<div class="flex flex-col gap-1.5">
+						<Label for="img-frames" class="text-xs text-muted-foreground uppercase">Frames</Label>
+						<Input
+							id="img-frames"
+							type="number"
+							min="1"
+							max="121"
+							bind:value={videoFrames}
+							disabled={isRunning}
+							class="w-full"
+						/>
+						<p class="text-[10px] text-muted-foreground">
+							17 ≈ 1 s · 49 = balanced · 81 = long-form · runtime grows with frames.
+						</p>
+					</div>
+				{:else}
+					<div class="flex flex-col gap-1.5">
+						<Label for="img-n" class="text-xs text-muted-foreground uppercase">Variants</Label>
+						<Input
+							id="img-n"
+							type="number"
+							min="1"
+							max="4"
+							bind:value={nVariants}
+							disabled={isRunning}
+							class="w-full"
+						/>
+					</div>
+				{/if}
 
 				<!-- Advanced settings toggle. Hides power-user knobs (negative
 				     prompt, seed) behind a switch so first-time users see a
@@ -669,13 +851,16 @@
 							Cancel
 						</Button>
 						<p class="text-center text-xs text-muted-foreground">
-							{mode === 'generate' ? 'Generating…' : 'Editing…'} this can take 20 seconds to a few minutes
-							depending on the model.
+							{mode === 'generate'
+								? 'Generating…'
+								: mode === 'edit'
+									? 'Editing…'
+									: 'Rendering video…'} can take 20 seconds to a few minutes depending on the model.
 						</p>
 					{:else}
-						<Button onclick={run} class="w-full gap-2" disabled={!imageGenEnabled}>
+						<Button onclick={run} class="w-full gap-2" disabled={!modeEnabled}>
 							<PlayCircle class="h-4 w-4" />
-							{mode === 'generate' ? 'Generate' : 'Edit'}
+							{mode === 'generate' ? 'Generate' : mode === 'edit' ? 'Edit' : 'Render video'}
 						</Button>
 					{/if}
 				</div>
@@ -693,7 +878,11 @@
 				>
 					<Loader2 class="mb-2 h-6 w-6 animate-spin text-primary" />
 					<p class="text-foreground">
-						{activeRun.mode === 'generate' ? 'Generating' : 'Editing'} · {activeRun.model}
+						{activeRun.mode === 'generate'
+							? 'Generating'
+							: activeRun.mode === 'edit'
+								? 'Editing'
+								: 'Rendering video'} · {activeRun.model}
 					</p>
 					<p class="mt-1 max-w-md text-center text-xs opacity-70">
 						{activeRun.prompt}
@@ -710,34 +899,55 @@
 					<p>
 						{mode === 'generate'
 							? 'Type a prompt and hit Generate.'
-							: 'Drop a source image, type an instruction, hit Edit.'}
+							: mode === 'edit'
+								? 'Drop a source image, type an instruction, hit Edit.'
+								: 'Drop a source image and a motion prompt to animate it.'}
 					</p>
 					<p class="mt-1 text-xs opacity-70">
 						Output also lands in the gallery; tagged <code>playground</code>.
 					</p>
 				</div>
+			{:else if lastResult.mode === 'video'}
+				{@const videoResult = lastResult.result as RunVideoGenerationResult}
+				<div class="flex flex-col gap-4">
+					<a
+						href="#/artifacts/{videoResult.video.artifactId}"
+						class="block overflow-hidden rounded-md border bg-background shadow-sm transition-shadow hover:shadow-md"
+						aria-label="Open video in gallery"
+					>
+						<video src={lastResult.dataUrls[0]} controls autoplay loop muted class="h-auto w-full"
+						></video>
+					</a>
+					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">
+						<p class="text-foreground"><strong>{videoResult.prompt}</strong></p>
+						<p class="text-muted-foreground">
+							Rendered · {videoResult.model} · {videoResult.size} · {videoResult.frames} frames · saved
+							to gallery
+						</p>
+					</div>
+				</div>
 			{:else}
+				{@const imgResult = lastResult.result as RunImageGenerationResult | RunImageEditResult}
 				<div class="flex flex-col gap-4">
 					<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-						{#each lastResult.dataUrls as dataUrl, i (lastResult.result.images[i].artifactId)}
+						{#each lastResult.dataUrls as dataUrl, i (imgResult.images[i].artifactId)}
 							{#if dataUrl}
 								<a
-									href="#/artifacts/{lastResult.result.images[i].artifactId}"
+									href="#/artifacts/{imgResult.images[i].artifactId}"
 									class="block overflow-hidden rounded-md border bg-background shadow-sm transition-shadow hover:shadow-md"
 								>
-									<img src={dataUrl} alt={lastResult.result.prompt} class="h-auto w-full" />
+									<img src={dataUrl} alt={imgResult.prompt} class="h-auto w-full" />
 								</a>
 							{/if}
 						{/each}
 					</div>
 					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">
-						<p class="text-foreground"><strong>{lastResult.result.prompt}</strong></p>
+						<p class="text-foreground"><strong>{imgResult.prompt}</strong></p>
 						<p class="text-muted-foreground">
-							{lastResult.mode === 'edit' ? 'Edited' : 'Generated'} · {lastResult.result.model}
-							{lastResult.result.size ? `· ${lastResult.result.size}` : ''}
-							· {lastResult.result.images.length} image{lastResult.result.images.length === 1
-								? ''
-								: 's'} · saved to gallery
+							{lastResult.mode === 'edit' ? 'Edited' : 'Generated'} · {imgResult.model}
+							{imgResult.size ? `· ${imgResult.size}` : ''}
+							· {imgResult.images.length} image{imgResult.images.length === 1 ? '' : 's'} · saved to
+							gallery
 						</p>
 					</div>
 				</div>

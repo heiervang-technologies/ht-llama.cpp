@@ -14,9 +14,13 @@
  * the whole point.
  */
 
-import type { RunImageEditResult, RunImageGenerationResult } from '$lib/services/builtin-tools';
+import type {
+	RunImageEditResult,
+	RunImageGenerationResult,
+	RunVideoGenerationResult
+} from '$lib/services/builtin-tools';
 
-type Mode = 'generate' | 'edit';
+type Mode = 'generate' | 'edit' | 'video';
 
 export interface PlaygroundActiveRun {
 	mode: Mode;
@@ -26,9 +30,15 @@ export interface PlaygroundActiveRun {
 	abort: () => void;
 }
 
+/**
+ * `dataUrls` is one entry per produced asset — for image runs there
+ * are typically 1-4, for video there is exactly one mp4 data URL.
+ * The canvas decides how to render based on `mode` (img tag vs
+ * video tag).
+ */
 export interface PlaygroundFinishedRun {
 	mode: Mode;
-	result: RunImageGenerationResult | RunImageEditResult;
+	result: RunImageGenerationResult | RunImageEditResult | RunVideoGenerationResult;
 	dataUrls: string[];
 	finishedAt: number;
 }

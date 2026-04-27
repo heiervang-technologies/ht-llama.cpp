@@ -1105,6 +1105,174 @@ async function pollVideoJob(
 	);
 }
 
+/**
+ * Shared video-generation path. The `generate_video` tool and the
+ * /images playground "Video" mode call this — divergence here would
+ * mean two ways to talk to the same proxy, with predictable drift.
+ *
+ * Async contract:
+ *   POST {base}/v1/videos             → 200/202 + { id, status }
+ *   GET  {base}/v1/videos/{id}        (poll until completed | failed)
+ *   GET  {base}/v1/videos/{id}/content → raw mp4 bytes
+ *
+ * On success the mp4 is saved as a `video` artifact in the gallery
+ * (so the gallery has a single ingest path for media output) and a
+ * compact reference is returned. The full Blob is NOT included in
+ * the result so LLM tool callers don't shovel megabytes back into
+ * context.
+ */
+export interface RunVideoGenerationOptions {
+	source: 'generate_video' | 'playground';
+	prompt: string;
+	model?: string;
+	/** data:image/...;base64,... — REQUIRED for every current model. */
+	image: string;
+	/** data:audio/...;base64,... — required for wan22-s2v, ignored otherwise. */
+	audio?: string;
+	size?: string;
+	frames?: number;
+	signal?: AbortSignal;
+}
+
+export interface RunVideoGenerationResult {
+	model: string;
+	size: string;
+	frames: number;
+	prompt: string;
+	jobId: string;
+	video: {
+		artifactId: string;
+		revisionId: string;
+		title: string;
+		mimeType: string;
+		bytes: number;
+	};
+}
+
+export async function runVideoGeneration(
+	opts: RunVideoGenerationOptions
+): Promise<RunVideoGenerationResult> {
+	const prompt = opts.prompt.trim();
+	if (!prompt) throw new Error('prompt is required');
+	if (!config().videoGenEnabled) {
+		throw new Error('Video generation is currently disabled in Settings → Images.');
+	}
+
+	const model = opts.model?.trim() || 'wan22-i2v';
+	const defaultSize =
+		model === 'ltx-2.3' ? '960x544' : model === 'wan22-s2v' ? '512x288' : '832x480';
+	const size = opts.size?.trim() || defaultSize;
+	const frames = Math.min(121, Math.max(1, opts.frames ?? 17));
+	const image = opts.image.trim();
+	if (!image) {
+		throw new Error(
+			`${model} requires a reference image data URL (all current video models are i2v / s2v).`
+		);
+	}
+	const audio = opts.audio?.trim() || undefined;
+	if (model === 'wan22-s2v' && !audio) {
+		throw new Error('wan22-s2v is sound-to-video; pass an audio data URL (wav/mp3/ogg/flac).');
+	}
+
+	const base = resolveImagesBaseUrl();
+	if (!base) {
+		throw new Error(
+			'Video generation is not configured. Set Settings → Images → Base URL (shared with image generation).'
+		);
+	}
+
+	const apiKey = resolveImagesApiKey();
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${apiKey || 'no-auth'}`
+	};
+
+	const body: Record<string, unknown> = { prompt, model, size, frames, image };
+	if (audio) body.audio = audio;
+
+	let submitRes: Response;
+	try {
+		submitRes = await fetch(`${base}/v1/videos`, {
+			method: 'POST',
+			headers,
+			body: JSON.stringify(body),
+			signal: opts.signal
+		});
+	} catch (fetchErr) {
+		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		throw new Error(`Network error reaching ${base}: ${message}`);
+	}
+	if (!submitRes.ok) {
+		let detail = '';
+		try {
+			detail = JSON.stringify(await submitRes.json());
+		} catch {
+			try {
+				detail = await submitRes.text();
+			} catch {
+				/* ignore */
+			}
+		}
+		throw new Error(`Videos proxy HTTP ${submitRes.status}: ${detail || 'no body'}`);
+	}
+
+	const job = (await submitRes.json()) as VideoJobStatus;
+	if (!job.id) throw new Error('Videos proxy returned no job id.');
+
+	const budget = VIDEO_POLL_BUDGET_MS[model] ?? DEFAULT_VIDEO_POLL_BUDGET_MS;
+	const final = await pollVideoJob(base, job.id, headers, budget, opts.signal);
+	if (final.status === 'failed') {
+		throw new Error(`Video job ${job.id} failed: ${final.error ?? 'no error detail provided'}`);
+	}
+
+	const contentRes = await fetch(`${base}/v1/videos/${encodeURIComponent(job.id)}/content`, {
+		method: 'GET',
+		headers: { Authorization: headers['Authorization'] },
+		signal: opts.signal
+	});
+	if (!contentRes.ok) {
+		throw new Error(
+			`Content fetch HTTP ${contentRes.status} for job ${job.id} (completed but no bytes).`
+		);
+	}
+	const blob = await contentRes.blob();
+	const mimeType = blob.type || 'video/mp4';
+	const title = `Generated video · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`;
+
+	const artifact = await artifactGalleryStore.saveManual({
+		kind: 'video' as DatabaseArtifactKind,
+		title,
+		mimeType,
+		blob,
+		tags: ['generated', model, ...(opts.source === 'playground' ? ['playground'] : [])],
+		metadata: {
+			source: opts.source,
+			model,
+			prompt,
+			size,
+			frames,
+			audioDriven: Boolean(audio),
+			jobId: job.id,
+			generatedAt: new Date().toISOString()
+		}
+	});
+
+	return {
+		model,
+		size,
+		frames,
+		prompt,
+		jobId: job.id,
+		video: {
+			artifactId: artifact.id,
+			revisionId: artifact.currentRevisionId,
+			title: artifact.title,
+			mimeType,
+			bytes: blob.size
+		}
+	};
+}
+
 register({
 	// Same toggle pattern as generate_image. Video is slower (~60 s
 	// minimum, ~3 min for longer clips) so the user really should opt
@@ -1159,147 +1327,23 @@ register({
 		}
 	},
 	async execute(args, signal) {
-		const prompt = String(args.prompt ?? '').trim();
-		if (!prompt) return err('prompt is required');
-		const model =
-			typeof args.model === 'string' && args.model.trim() ? args.model.trim() : 'wan22-i2v';
-		// Default size is per-model since each pipeline has a native
-		// resolution it was trained / distilled at. Overriding too far
-		// from the native value wastes time or crashes the pipeline.
-		const defaultSize =
-			model === 'ltx-2.3' ? '960x544' : model === 'wan22-s2v' ? '512x288' : '832x480';
-		const size = typeof args.size === 'string' && args.size.trim() ? args.size.trim() : defaultSize;
-		const frames = Math.min(121, Math.max(1, Number(args.frames) || 17));
-		const image =
-			typeof args.image === 'string' && args.image.trim() ? args.image.trim() : undefined;
-		const audio =
-			typeof args.audio === 'string' && args.audio.trim() ? args.audio.trim() : undefined;
-
-		// Every current model is image-to-video (or sound-to-video,
-		// which also consumes an image). Missing `image` is a user
-		// intent mismatch worth surfacing as a tool-level error so the
-		// model self-corrects instead of the proxy 400-ing.
-		if (!image) {
-			return err(
-				`${model} requires a reference \`image\` data URL (all current video models are i2v / s2v). Call get_artifact first if the user wants to animate an existing gallery artifact.`
-			);
-		}
-		if (model === 'wan22-s2v' && !audio) {
-			return err(
-				'wan22-s2v is sound-to-video; pass an `audio` data URL (wav/mp3/ogg/flac). Without audio the pipeline has nothing to drive lip-sync / motion from.'
-			);
-		}
-
-		const base = resolveImagesBaseUrl();
-		if (!base) {
-			return err(
-				'Video generation is not configured. Ask the user to set Settings → Images → Base URL (shared with image generation).'
-			);
-		}
-
-		const apiKey = resolveImagesApiKey();
-		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-		headers['Authorization'] = `Bearer ${apiKey || 'no-auth'}`;
-
-		const body: Record<string, unknown> = { prompt, model, size, frames };
-		if (image) body.image = image;
-		if (audio) body.audio = audio;
-
-		// Submit the job. Accept 200 or 202 — some proxies normalise to
-		// 200 even though the spec says 202.
-		let submitRes: Response;
 		try {
-			submitRes = await fetch(`${base}/v1/videos`, {
-				method: 'POST',
-				headers,
-				body: JSON.stringify(body),
+			const result = await runVideoGeneration({
+				source: 'generate_video',
+				prompt: String(args.prompt ?? ''),
+				model: typeof args.model === 'string' ? args.model : undefined,
+				image: String(args.image ?? ''),
+				audio: typeof args.audio === 'string' ? args.audio : undefined,
+				size: typeof args.size === 'string' ? args.size : undefined,
+				frames: Number(args.frames) || undefined,
 				signal
 			});
-		} catch (fetchErr) {
-			const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-			return err(`Network error reaching ${base}: ${message}`);
+			return ok({
+				...result,
+				note: "Video is in the user's gallery; reference by artifactId in follow-ups."
+			});
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
 		}
-		if (!submitRes.ok) {
-			let detail = '';
-			try {
-				detail = JSON.stringify(await submitRes.json());
-			} catch {
-				try {
-					detail = await submitRes.text();
-				} catch {
-					/* ignore */
-				}
-			}
-			return err(`Videos proxy HTTP ${submitRes.status}: ${detail || 'no body'}`);
-		}
-
-		const job = (await submitRes.json()) as VideoJobStatus;
-		if (!job.id) return err('Videos proxy returned no job id.');
-
-		// Poll until terminal status or per-model budget exhausted.
-		const budget = VIDEO_POLL_BUDGET_MS[model] ?? DEFAULT_VIDEO_POLL_BUDGET_MS;
-		let final: VideoJobStatus;
-		try {
-			final = await pollVideoJob(base, job.id, headers, budget, signal);
-		} catch (pollErr) {
-			const message = pollErr instanceof Error ? pollErr.message : String(pollErr);
-			return err(`Job ${job.id}: ${message}`);
-		}
-		if (final.status === 'failed') {
-			return err(`Video job ${job.id} failed: ${final.error ?? 'no error detail provided'}`);
-		}
-
-		// Fetch the mp4 bytes. The proxy returns raw video/mp4; stream
-		// into a Blob for saveManual.
-		const contentRes = await fetch(`${base}/v1/videos/${encodeURIComponent(job.id)}/content`, {
-			method: 'GET',
-			headers: { Authorization: headers['Authorization'] },
-			signal
-		});
-		if (!contentRes.ok) {
-			return err(
-				`Content fetch HTTP ${contentRes.status} for job ${job.id} (completed but no bytes).`
-			);
-		}
-		const blob = await contentRes.blob();
-		const mimeType = blob.type || 'video/mp4';
-
-		const title = `Generated video · ${prompt.slice(0, 80)}${prompt.length > 80 ? '…' : ''}`;
-		const artifact = await artifactGalleryStore.saveManual({
-			kind: 'video' as DatabaseArtifactKind,
-			title,
-			mimeType,
-			blob,
-			tags: ['generated', model],
-			metadata: {
-				source: 'generate_video',
-				model,
-				prompt,
-				size,
-				frames,
-				// Flag sound-driven runs so the gallery detail view can
-				// show "audio-driven" next to the video. We don't store
-				// the audio bytes themselves — they can be megabytes and
-				// the source is whatever the user uploaded.
-				audioDriven: Boolean(audio),
-				jobId: job.id,
-				generatedAt: new Date().toISOString()
-			}
-		});
-
-		return ok({
-			model,
-			size,
-			frames,
-			prompt,
-			video: {
-				artifactId: artifact.id,
-				revisionId: artifact.currentRevisionId,
-				title: artifact.title,
-				mimeType,
-				bytes: blob.size
-			},
-			note: "Video is in the user's gallery; reference by artifactId in follow-ups."
-		});
 	}
 });
