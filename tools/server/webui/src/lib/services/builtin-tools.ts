@@ -317,7 +317,7 @@ register({
 		function: {
 			name: 'send_keys',
 			description:
-				"Type into a sandbox terminal's shared PTY. The user sees everything you type appear in their xterm in real time; use this for pair-debugging, running commands on the user's behalf, or reacting to program output. The terminal must already exist and have been opened at least once (so a bash session is live). Ends with a newline automatically if `auto_enter` is true. Pass the `id` from `list_terminals` — name and container_id are accepted as fallbacks but `id` is the canonical handle that determines mode (solo / shared / review).",
+				"Type into a sandbox terminal's shared PTY. The user sees everything you type appear in their xterm in real time; use this for pair-debugging, running commands on the user's behalf, or reacting to program output. The terminal must already exist and have been opened at least once (so a bash session is live). Ends with a newline automatically if `auto_enter` is true. Pass the `id` from `list_terminals` — name and container_id are accepted as fallbacks. If exactly one terminal is open, `terminalId` may be omitted and that one is auto-selected; if zero or more than one exist with no id, the call fails with a clear message asking the user to create / pick one.",
 			parameters: {
 				type: 'object',
 				properties: {
@@ -336,42 +336,70 @@ register({
 							'If true, append a newline to `text` so the shell executes it as a single command. Default false — use false when injecting partial input or control sequences.'
 					}
 				},
-				required: ['terminalId']
+				required: []
 			}
 		}
 	},
 	async execute(args) {
 		const supplied = String(args.terminalId ?? '');
-		if (!supplied) return err('terminalId is required');
 		const text = typeof args.text === 'string' ? args.text : '';
 		if (!text) return err('text is required (non-empty)');
 		const autoEnter = Boolean(args.auto_enter);
 
-		// Resolve to the canonical terminal id. Models sometimes pass
-		// the display name or the docker container_id instead of the
-		// uuid, which would silently miss the per-terminal mode lookup
-		// and the user gets "blocked" even though they switched the
-		// right terminal to shared. Look up against the live list and
-		// match `id` first, then `name`, then a 12-char prefix of
-		// `container_id` (xterm UI shows a short prefix). If nothing
-		// matches we still pass the supplied id through so the user's
-		// own URL-shared id keeps working when the list endpoint is
-		// briefly unreachable.
+		// Resolve to the canonical terminal id. Two failure modes:
+		//   1. Model passed the display name or container_id prefix
+		//      instead of the uuid — the per-terminal mode lookup is
+		//      keyed on the uuid, so a miss returns the default `solo`
+		//      and the user gets "blocked" even after switching the
+		//      right terminal to shared.
+		//   2. Model passed nothing because it forgot list_terminals.
+		//      If exactly one terminal is live we pick it — that's
+		//      almost always what the user meant when they said "send
+		//      X to my terminal".
 		const { TermdService } = await import('./termd.service');
 		let terminalId = supplied;
 		try {
 			const list = await TermdService.list();
-			const match =
-				list.find((t) => t.id === supplied) ??
-				list.find((t) => t.name === supplied) ??
-				list.find(
-					(t) => t.container_id?.startsWith(supplied) || supplied.startsWith(t.container_id ?? '')
-				);
-			if (match) terminalId = match.id;
+			if (!supplied) {
+				if (list.length === 0) {
+					return err(
+						'No sandbox terminals exist. Ask the user to create one (Sidebar → Terminals → New terminal).'
+					);
+				}
+				if (list.length > 1) {
+					return err(
+						`terminalId is required when more than one terminal is open — call list_terminals to see ids; the user has ${list.length} live now.`
+					);
+				}
+				terminalId = list[0].id;
+			} else {
+				const match =
+					list.find((t) => t.id === supplied) ??
+					list.find((t) => t.name === supplied) ??
+					list.find(
+						(t) => t.container_id?.startsWith(supplied) || supplied.startsWith(t.container_id ?? '')
+					);
+				if (match) terminalId = match.id;
+			}
 		} catch {
 			/* termd unreachable — proceed with the supplied id; the
-			   downstream input call will surface the real error. */
+			   downstream input call will surface the real error. If
+			   nothing was supplied AND we can't list, we have no way
+			   to guess. */
+			if (!supplied) {
+				return err('Could not list terminals (termd unreachable) and no terminalId was supplied.');
+			}
 		}
+
+		// Attach the resolved terminal to the chat layout's drawer
+		// regardless of whether the call ultimately succeeds — even
+		// the `solo`-blocked or HTTP-error cases are useful for the
+		// user to see (it shows them which terminal the model is
+		// trying to act on so they can flip the mode or fix the
+		// state). The drawer is dismissable, so re-attaching costs
+		// the user nothing if they want it closed.
+		const { chatTerminalAttachment } = await import('$lib/stores/chat-terminal-attachment.svelte');
+		chatTerminalAttachment.attach(terminalId);
 
 		// Per-terminal mode gate. Default is `solo` so a freshly
 		// created terminal is opaque to the model until the user
