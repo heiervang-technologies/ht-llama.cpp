@@ -1,10 +1,11 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "Default permissions plus the webview-window creation surface the chat-side terminal drawer needs to pop a single terminal into its own native window. The term-* glob covers every spawned terminal window without needing per-id capability entries.",
+	"description": "Default permissions plus the webview-window creation surface the pop-out buttons need (terminal drawer in chat → term-*; artifact detail → art-*). The globs cover every spawned window without needing per-id capability entries.",
 	"windows": [
 		"main",
-		"term-*"
+		"term-*",
+		"art-*"
 	],
 	"permissions": [
 		"core:default",

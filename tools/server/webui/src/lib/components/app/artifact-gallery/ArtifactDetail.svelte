@@ -14,9 +14,11 @@
 		Trash2,
 		MessageSquarePlus,
 		PencilLine,
+		PictureInPicture2,
 		Save,
 		X
 	} from '@lucide/svelte';
+	import { openInNewWindow } from '$lib/utils/tauri-window';
 	import ArtifactRevisionList from './ArtifactRevisionList.svelte';
 	import ArtifactRevisionPreview from './ArtifactRevisionPreview.svelte';
 
@@ -207,6 +209,19 @@
 		if (!artifact?.sourceConversationId) return;
 		goto(`#/chat/${artifact.sourceConversationId}`);
 	}
+
+	async function popOut() {
+		if (!artifact) return;
+		// Stable label per artifact id so re-clicking pop-out focuses
+		// the existing window instead of duplicating it. Tauri-only;
+		// the helper falls back to window.open in plain browser mode.
+		await openInNewWindow(`#/artifacts/${artifact.id}`, {
+			title: `${artifact.title} · ht-llama.cpp`,
+			label: `art-${artifact.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+			width: 1100,
+			height: 800
+		});
+	}
 </script>
 
 <div
@@ -275,6 +290,9 @@
 			</Button>
 			<Button variant="ghost" size="sm" onclick={beginEdit} title="Edit as new revision">
 				<PencilLine class="h-4 w-4" />
+			</Button>
+			<Button variant="ghost" size="sm" onclick={popOut} title="Pop out into its own window">
+				<PictureInPicture2 class="h-4 w-4" />
 			</Button>
 			<Button
 				variant="ghost"
