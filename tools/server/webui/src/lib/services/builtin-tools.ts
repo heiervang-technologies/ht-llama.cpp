@@ -489,23 +489,13 @@ function resolveImagesApiKey(): string {
 }
 
 /**
- * Accept either a raw base64 string or a `data:image/...;base64,...`
- * data URL and return a Blob plus a sane filename. Used by the
- * multipart/form-data path of `runImageEdit`. The mime type is
- * sniffed from the data URL prefix when present, otherwise we fall
- * back to image/png — qwen-image-edit on the proxy side accepts
- * common formats.
+ * Strip a `data:image/...;base64,` prefix if present so the proxy
+ * receives only the raw base64 payload. Returning unchanged input is
+ * fine when the caller already passed clean base64.
  */
-function dataUrlOrBase64ToFile(input: string): { blob: Blob; filename: string } {
-	const dataUrlMatch = /^data:([a-z0-9.+/-]+);base64,(.+)$/i.exec(input);
-	if (dataUrlMatch) {
-		const mime = dataUrlMatch[1];
-		const b64 = dataUrlMatch[2];
-		const ext = mime === 'image/jpeg' ? 'jpg' : mime.split('/')[1] || 'png';
-		return { blob: base64ToBlob(b64, mime), filename: `source.${ext}` };
-	}
-	// Plain base64 — assume PNG.
-	return { blob: base64ToBlob(input, 'image/png'), filename: 'source.png' };
+function stripDataUrlPrefix(input: string): string {
+	const m = /^data:[a-z0-9.+/-]+;base64,(.+)$/i.exec(input);
+	return m ? m[1] : input;
 }
 
 /**
@@ -888,31 +878,36 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	}
 
 	const apiKey = resolveImagesApiKey();
-	// OpenAI's canonical /v1/images/edits contract is multipart/form-data
-	// with `image` as a binary file part — NOT a base64 string in JSON.
-	// Sending JSON used to make the proxy save bytes that PIL couldn't
-	// parse (the data:URL prefix or naive b64 decode round-trip
-	// corrupted the file), so ComfyUI's LoadImage node would throw
-	// PIL.UnidentifiedImageError. Use FormData to match the spec
-	// exactly; the proxy passes the binary through untouched.
+	// The proxy on this fork accepts JSON with `image` as a base64
+	// string — multipart/form-data is the OpenAI canonical shape but
+	// snoop's images-proxy doesn't speak it (request dies as a generic
+	// WebKit "Load failed"). The previous JSON path was almost right;
+	// the bug was that we sent the full `data:image/...;base64,...`
+	// data URL when the user picked a source from gallery / file
+	// upload. The proxy then either preserved the `data:` prefix in
+	// the file it wrote, or naively base64-decoded the whole string,
+	// either way producing bytes PIL couldn't parse. Strip the prefix
+	// here so the proxy always receives pure base64.
+	const cleanImage = stripDataUrlPrefix(rawImage);
 	const headers: Record<string, string> = {
+		'Content-Type': 'application/json',
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
 	};
-	const { blob: imageBlob, filename } = dataUrlOrBase64ToFile(rawImage);
-	const form = new FormData();
-	form.set('prompt', prompt);
-	form.set('model', model);
-	form.set('n', String(n));
-	form.set('size', size);
-	form.set('response_format', 'b64_json');
-	form.set('image', imageBlob, filename);
+	const body: Record<string, unknown> = {
+		prompt,
+		model,
+		n,
+		size,
+		image: cleanImage,
+		response_format: 'b64_json'
+	};
 
 	let res: Response;
 	try {
 		res = await fetch(`${base}/v1/images/edits`, {
 			method: 'POST',
 			headers,
-			body: form,
+			body: JSON.stringify(body),
 			signal: opts.signal
 		});
 	} catch (fetchErr) {
