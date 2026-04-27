@@ -281,9 +281,43 @@ register({
 	definition: {
 		type: 'function',
 		function: {
+			name: 'list_terminals',
+			description:
+				'List the user\'s sandbox terminals. Returns each terminal\'s `id` (use this for `send_keys`), display `name`, container image, status, and current interaction `mode` ("solo" blocks send_keys, "shared" allows live typing, "review" queues each keystroke for human approval). Call this first when the user asks you to do something in their terminal — the `id` is the only stable handle.',
+			parameters: {
+				type: 'object',
+				properties: {},
+				required: []
+			}
+		}
+	},
+	async execute() {
+		const { TermdService } = await import('./termd.service');
+		const { terminalModes } = await import('$lib/stores/terminal-modes.svelte');
+		try {
+			const list = await TermdService.list();
+			const terminals = list.map((t) => ({
+				id: t.id,
+				name: t.name,
+				image: t.image,
+				status: t.status,
+				created_at: t.created_at,
+				mode: terminalModes.snapshot(t.id)
+			}));
+			return ok({ terminals });
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
+		}
+	}
+});
+
+register({
+	definition: {
+		type: 'function',
+		function: {
 			name: 'send_keys',
 			description:
-				"Type into a sandbox terminal's shared PTY. The user sees everything you type appear in their xterm in real time; use this for pair-debugging, running commands on the user's behalf, or reacting to program output. The terminal must already exist and have been opened at least once (so a bash session is live). Ends with a newline automatically if `auto_enter` is true.",
+				"Type into a sandbox terminal's shared PTY. The user sees everything you type appear in their xterm in real time; use this for pair-debugging, running commands on the user's behalf, or reacting to program output. The terminal must already exist and have been opened at least once (so a bash session is live). Ends with a newline automatically if `auto_enter` is true. Pass the `id` from `list_terminals` — name and container_id are accepted as fallbacks but `id` is the canonical handle that determines mode (solo / shared / review).",
 			parameters: {
 				type: 'object',
 				properties: {
@@ -307,11 +341,37 @@ register({
 		}
 	},
 	async execute(args) {
-		const terminalId = String(args.terminalId ?? '');
-		if (!terminalId) return err('terminalId is required');
+		const supplied = String(args.terminalId ?? '');
+		if (!supplied) return err('terminalId is required');
 		const text = typeof args.text === 'string' ? args.text : '';
 		if (!text) return err('text is required (non-empty)');
 		const autoEnter = Boolean(args.auto_enter);
+
+		// Resolve to the canonical terminal id. Models sometimes pass
+		// the display name or the docker container_id instead of the
+		// uuid, which would silently miss the per-terminal mode lookup
+		// and the user gets "blocked" even though they switched the
+		// right terminal to shared. Look up against the live list and
+		// match `id` first, then `name`, then a 12-char prefix of
+		// `container_id` (xterm UI shows a short prefix). If nothing
+		// matches we still pass the supplied id through so the user's
+		// own URL-shared id keeps working when the list endpoint is
+		// briefly unreachable.
+		const { TermdService } = await import('./termd.service');
+		let terminalId = supplied;
+		try {
+			const list = await TermdService.list();
+			const match =
+				list.find((t) => t.id === supplied) ??
+				list.find((t) => t.name === supplied) ??
+				list.find(
+					(t) => t.container_id?.startsWith(supplied) || supplied.startsWith(t.container_id ?? '')
+				);
+			if (match) terminalId = match.id;
+		} catch {
+			/* termd unreachable — proceed with the supplied id; the
+			   downstream input call will surface the real error. */
+		}
 
 		// Per-terminal mode gate. Default is `solo` so a freshly
 		// created terminal is opaque to the model until the user
@@ -321,8 +381,9 @@ register({
 		const { terminalModes } = await import('$lib/stores/terminal-modes.svelte');
 		const mode = terminalModes.snapshot(terminalId);
 		if (mode === 'solo') {
+			const hint = supplied !== terminalId ? ` (resolved "${supplied}" → ${terminalId})` : '';
 			return err(
-				`Terminal ${terminalId} is in "solo" mode; send_keys is blocked. Ask the user to switch it to "shared" (type live) or "review" (user approves each keystroke) mode first.`
+				`Terminal ${terminalId} is in "solo" mode${hint}; send_keys is blocked. Ask the user to switch it to "shared" (type live) or "review" (user approves each keystroke) mode first. Use list_terminals to see each terminal's current mode.`
 			);
 		}
 		if (mode === 'review') {
