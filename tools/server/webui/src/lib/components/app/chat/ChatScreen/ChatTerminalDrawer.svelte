@@ -1,9 +1,17 @@
 <script lang="ts">
-	import { TerminalSquare, X, ExternalLink, ChevronDown, ChevronUp } from '@lucide/svelte';
+	import {
+		TerminalSquare,
+		X,
+		ExternalLink,
+		ChevronDown,
+		ChevronUp,
+		PictureInPicture2
+	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { TerminalView } from '$lib/components/app/terminals';
 	import { chatTerminalAttachment } from '$lib/stores/chat-terminal-attachment.svelte';
 	import { terminalsStore } from '$lib/stores/terminals.svelte';
+	import { openInNewWindow } from '$lib/utils/tauri-window';
 	import { goto } from '$app/navigation';
 
 	// Drawer is dismissable AND collapsible. Dismiss = "the model
@@ -25,6 +33,19 @@
 	function openFull() {
 		if (!id) return;
 		goto(`#/terminals/${id}`);
+	}
+
+	async function popOut() {
+		if (!id) return;
+		// Stable label keyed on terminal id so a second pop-out for
+		// the same terminal focuses the existing window instead of
+		// spawning a duplicate.
+		await openInNewWindow(`#/terminals/${id}`, {
+			title: `${displayName} · ht-llama.cpp`,
+			label: `term-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
+			width: 960,
+			height: 720
+		});
 	}
 </script>
 
@@ -57,8 +78,17 @@
 				variant="ghost"
 				size="sm"
 				class="h-6 w-6 p-0"
+				onclick={popOut}
+				title="Pop out into its own window"
+			>
+				<PictureInPicture2 class="h-3.5 w-3.5" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="sm"
+				class="h-6 w-6 p-0"
 				onclick={openFull}
-				title="Open full terminal view"
+				title="Open full terminal view in this window"
 			>
 				<ExternalLink class="h-3.5 w-3.5" />
 			</Button>
