@@ -11,6 +11,7 @@
 	import ArtifactGalleryCard from './ArtifactGalleryCard.svelte';
 	import NextcloudBrowseDrawer from './NextcloudBrowseDrawer.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import {
 		Images as GalleryIcon,
 		Cloud,
@@ -85,10 +86,17 @@
 		selected.clear();
 	}
 
-	async function deleteSelected() {
+	let showBulkDeleteConfirm = $state(false);
+
+	function deleteSelected() {
+		if (selected.size === 0) return;
+		showBulkDeleteConfirm = true;
+	}
+
+	async function confirmBulkDelete() {
 		const ids = [...selected];
+		showBulkDeleteConfirm = false;
 		if (ids.length === 0) return;
-		if (!confirm(`Delete ${ids.length} ${ids.length === 1 ? 'artifact' : 'artifacts'}?`)) return;
 		await artifactGalleryStore.removeMany(ids);
 		selected.clear();
 		selectMode = false;
@@ -356,3 +364,28 @@
 </div>
 
 <NextcloudBrowseDrawer open={cloudDrawerOpen} onOpenChange={(next) => (cloudDrawerOpen = next)} />
+
+<AlertDialog.Root bind:open={showBulkDeleteConfirm}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>
+				Delete {selected.size}
+				{selected.size === 1 ? 'artifact' : 'artifacts'}?
+			</AlertDialog.Title>
+			<AlertDialog.Description>
+				This removes the selected
+				{selected.size === 1 ? 'artifact' : 'artifacts'} and all their revisions from the gallery. The
+				action cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={confirmBulkDelete}
+			>
+				Delete {selected.size}
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

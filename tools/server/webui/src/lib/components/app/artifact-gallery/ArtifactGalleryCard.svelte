@@ -26,6 +26,7 @@
 		uploadArtifact
 	} from '$lib/services/nextcloud-upload.service';
 	import { toast } from 'svelte-sonner';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 
 	interface Props {
 		artifact: DatabaseArtifact;
@@ -59,9 +60,15 @@
 		revokeThumb(thumb);
 	});
 
-	async function quickDelete(ev: Event) {
+	let showDeleteConfirm = $state(false);
+
+	function quickDelete(ev: Event) {
 		ev.stopPropagation();
-		if (!confirm(`Delete "${artifact.title}"?`)) return;
+		showDeleteConfirm = true;
+	}
+
+	async function confirmDelete() {
+		showDeleteConfirm = false;
 		await artifactGalleryStore.remove(artifact.id);
 	}
 
@@ -263,3 +270,24 @@
 		</button>
 	{/if}
 </div>
+
+<AlertDialog.Root bind:open={showDeleteConfirm}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete artifact?</AlertDialog.Title>
+			<AlertDialog.Description>
+				This removes <span class="font-mono">"{artifact.title}"</span> and all its revisions from the
+				gallery. The action cannot be undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={confirmDelete}
+			>
+				Delete
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
