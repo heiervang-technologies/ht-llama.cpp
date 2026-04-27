@@ -170,12 +170,14 @@ export class WebDavClient {
 
 	/** PUT bytes at `path`, creating or overwriting. Server-side validation
 	 *  decides whether to allow overwrite — pass `If-None-Match: *` via
-	 *  `extraHeaders` to refuse overwrite. */
+	 *  `extraHeaders` to refuse overwrite. Returns the server-assigned
+	 *  ETag if the response exposed one (Nextcloud's nginx ingress
+	 *  whitelists ETag in Access-Control-Expose-Headers). */
 	async put(
 		path: string,
 		body: Blob | ArrayBuffer | Uint8Array | string,
 		opts: { contentType?: string; extraHeaders?: Record<string, string> } = {}
-	): Promise<void> {
+	): Promise<{ etag: string | null }> {
 		const headers: Record<string, string> = {
 			'Content-Type': opts.contentType ?? 'application/octet-stream',
 			...(opts.extraHeaders ?? {})
@@ -184,6 +186,7 @@ export class WebDavClient {
 		// 201 Created (new), 204 No Content (overwrite). Some servers
 		// also return 200 on overwrite — accept.
 		await this.assertOk('PUT', path, res, [200, 201, 204]);
+		return { etag: res.headers.get('ETag') };
 	}
 
 	/** DELETE a file or collection. 404 is treated as success — caller's
