@@ -36,6 +36,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as Select from '$lib/components/ui/select';
 
@@ -83,6 +84,13 @@
 	let ratioLocked = $state(false);
 	let lockedRatio = $state(1);
 	let nVariants = $state(1);
+
+	// Advanced toggle. Most users only ever touch prompt + size + model;
+	// power users want negative prompt and a fixed seed for reproducibility.
+	// Default off keeps the surface uncluttered.
+	let showAdvanced = $state(false);
+	let negativePrompt = $state('');
+	let seed = $state<number | null>(null);
 
 	let editSourceDataUrl = $state<string | null>(null);
 	let editSourceArtifactId = $state<string | null>(null);
@@ -317,6 +325,10 @@
 		});
 
 		const size = `${width}x${height}`;
+		const trimmedNeg = negativePrompt.trim();
+		const advancedExtras: { negativePrompt?: string; seed?: number } = {};
+		if (showAdvanced && trimmedNeg) advancedExtras.negativePrompt = trimmedNeg;
+		if (showAdvanced && typeof seed === 'number' && seed >= 0) advancedExtras.seed = seed;
 		try {
 			if (startedMode === 'generate') {
 				const result = await runImageGeneration({
@@ -325,6 +337,7 @@
 					model: startedModel,
 					size,
 					n: nVariants,
+					...advancedExtras,
 					signal: controller.signal
 				});
 				const dataUrls = await Promise.all(
@@ -348,6 +361,7 @@
 					size,
 					n: nVariants,
 					sourceArtifactId: editSourceArtifactId,
+					...advancedExtras,
 					signal: controller.signal
 				});
 				const dataUrls = await Promise.all(
@@ -577,6 +591,76 @@
 						class="w-full"
 					/>
 				</div>
+
+				<!-- Advanced settings toggle. Hides power-user knobs (negative
+				     prompt, seed) behind a switch so first-time users see a
+				     clean Prompt + Size + Variants surface. State doesn't
+				     persist between sessions on purpose — most runs are
+				     ad-hoc, not project-scoped. -->
+				<div class="flex items-center justify-between border-t pt-3">
+					<Label for="img-advanced" class="text-xs text-muted-foreground uppercase">Advanced</Label>
+					<Switch id="img-advanced" bind:checked={showAdvanced} disabled={isRunning} />
+				</div>
+
+				{#if showAdvanced}
+					<div class="flex flex-col gap-1.5">
+						<Label for="img-negative" class="text-xs text-muted-foreground uppercase">
+							Negative prompt
+						</Label>
+						<Textarea
+							id="img-negative"
+							bind:value={negativePrompt}
+							placeholder="What you do NOT want — e.g. blurry, low quality, extra fingers"
+							rows={3}
+							disabled={isRunning}
+							class="resize-y"
+						/>
+						<p class="text-[10px] text-muted-foreground">
+							Models that don't read negative prompts ignore this silently.
+						</p>
+					</div>
+
+					<div class="flex flex-col gap-1.5">
+						<Label for="img-seed" class="text-xs text-muted-foreground uppercase">Seed</Label>
+						<div class="flex gap-1.5">
+							<Input
+								id="img-seed"
+								type="number"
+								min={0}
+								placeholder="random"
+								value={seed ?? ''}
+								oninput={(e) => {
+									const v = (e.target as HTMLInputElement).value;
+									seed = v.trim() === '' ? null : Number(v);
+								}}
+								disabled={isRunning}
+								class="w-full"
+							/>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								onclick={() => (seed = Math.floor(Math.random() * 2 ** 31))}
+								disabled={isRunning}
+								class="flex-shrink-0"
+								title="Roll a new seed"
+							>
+								🎲
+							</Button>
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								onclick={() => (seed = null)}
+								disabled={isRunning || seed === null}
+								class="flex-shrink-0"
+								title="Clear seed (random per run)"
+							>
+								<X class="h-3 w-3" />
+							</Button>
+						</div>
+					</div>
+				{/if}
 
 				<div class="flex flex-col gap-2">
 					{#if isRunning}
