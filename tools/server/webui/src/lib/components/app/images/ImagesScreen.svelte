@@ -127,31 +127,66 @@
 
 	const SIZE_STEP = 64; // ComfyUI VAEs prefer multiples of 64
 
-	let taskType = $state<TaskType>('t2i');
+	// Persist the input-rail knobs across reloads so the user's last
+	// session shape (task type, model, size, prompt, advanced toggles,
+	// frames) comes back when they revisit /images. Source images and
+	// audio are not persisted — they're typically one-shot uploads and
+	// stale data URLs in localStorage would bloat the bundle for no
+	// real benefit. We do remember the prompt because most image-gen
+	// UX (A1111, Krea, ComfyUI) keeps it sticky.
+	const PERSIST_KEY = 'ht.images.lastParams.v1';
+	type PersistedParams = {
+		taskType?: TaskType;
+		model?: string;
+		prompt?: string;
+		width?: number;
+		height?: number;
+		ratioLocked?: boolean;
+		lockedRatio?: number;
+		nVariants?: number;
+		showAdvanced?: boolean;
+		negativePrompt?: string;
+		seed?: number | null;
+		videoFrames?: number;
+	};
+	function loadPersisted(): PersistedParams {
+		if (typeof localStorage === 'undefined') return {};
+		try {
+			const raw = localStorage.getItem(PERSIST_KEY);
+			if (!raw) return {};
+			const parsed = JSON.parse(raw) as PersistedParams;
+			return parsed && typeof parsed === 'object' ? parsed : {};
+		} catch {
+			return {};
+		}
+	}
+	const initial = loadPersisted();
+
+	let taskType = $state<TaskType>(initial.taskType ?? 't2i');
 	// Playground store still uses the modality-flavoured Mode union;
 	// derive it from taskType at the boundary so we don't churn the
 	// store/persistence layer for the new task-type axis.
 	let mode = $derived<'generate' | 'edit' | 'video'>(
 		taskType === 't2i' ? 'generate' : taskType === 'i2i' ? 'edit' : 'video'
 	);
-	let prompt = $state('');
-	let model = $state(GENERATE_MODELS[0].id);
-	let width = $state(1024);
-	let height = $state(1024);
+	let prompt = $state(initial.prompt ?? '');
+	let model = $state(initial.model ?? GENERATE_MODELS[0].id);
+	let width = $state(initial.width ?? 1024);
+	let height = $state(initial.height ?? 1024);
 	// When the chain is locked, edits to width/height preserve the
 	// aspect ratio captured at the moment the lock was clicked. We
 	// hold the ratio as a frozen number rather than recomputing on
 	// every edit so a tiny rounding drift can't slowly distort it.
-	let ratioLocked = $state(false);
-	let lockedRatio = $state(1);
-	let nVariants = $state(1);
+	let ratioLocked = $state(initial.ratioLocked ?? false);
+	let lockedRatio = $state(initial.lockedRatio ?? 1);
+	let nVariants = $state(initial.nVariants ?? 1);
 
 	// Advanced toggle. Most users only ever touch prompt + size + model;
 	// power users want negative prompt and a fixed seed for reproducibility.
 	// Default off keeps the surface uncluttered.
-	let showAdvanced = $state(false);
-	let negativePrompt = $state('');
-	let seed = $state<number | null>(null);
+	let showAdvanced = $state(initial.showAdvanced ?? false);
+	let negativePrompt = $state(initial.negativePrompt ?? '');
+	let seed = $state<number | null>(initial.seed ?? null);
 
 	let editSourceDataUrl = $state<string | null>(null);
 	let editSourceArtifactId = $state<string | null>(null);
@@ -160,7 +195,7 @@
 	// Video-specific knobs. The audio source is only used by s2v;
 	// the last-frame source is only used by flf. Both fields render
 	// conditionally on the active task type.
-	let videoFrames = $state(17);
+	let videoFrames = $state(initial.videoFrames ?? 17);
 	let videoAudioDataUrl = $state<string | null>(null);
 	let videoAudioFileInputRef: HTMLInputElement | null = $state(null);
 	let lastFrameDataUrl = $state<string | null>(null);
@@ -189,6 +224,33 @@
 			elapsedMs = Date.now() - startedAt;
 		}, 1000);
 		return () => clearInterval(id);
+	});
+
+	// Persist the input-rail snapshot on every change. Reads are cheap
+	// (one localStorage.setItem per state mutation) and the bundle
+	// stays small because we never serialise large data URLs (source
+	// images, audio).
+	$effect(() => {
+		if (typeof localStorage === 'undefined') return;
+		const snapshot: PersistedParams = {
+			taskType,
+			model,
+			prompt,
+			width,
+			height,
+			ratioLocked,
+			lockedRatio,
+			nVariants,
+			showAdvanced,
+			negativePrompt,
+			seed,
+			videoFrames
+		};
+		try {
+			localStorage.setItem(PERSIST_KEY, JSON.stringify(snapshot));
+		} catch {
+			/* quota exceeded or storage disabled — silently skip */
+		}
 	});
 
 	function formatElapsed(ms: number): string {
