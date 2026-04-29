@@ -37,6 +37,16 @@ pub fn run() {
 				}
 			}
 
+			// HT_OPEN_DEVTOOLS=1 → pop the inspector on launch. Used to
+			// diagnose splash-stuck regressions on release builds where
+			// the bundle import fails silently. open_devtools is only
+			// linked when the tauri/devtools feature is enabled.
+			if std::env::var("HT_OPEN_DEVTOOLS").is_ok() {
+				if let Some(window) = app.get_webview_window("main") {
+					window.open_devtools();
+				}
+			}
+
 			Ok(())
 		})
 		.run(tauri::generate_context!())
