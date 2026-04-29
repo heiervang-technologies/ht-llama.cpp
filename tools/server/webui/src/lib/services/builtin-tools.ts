@@ -1148,7 +1148,8 @@ const VIDEO_POLL_BUDGET_MS: Record<string, number> = {
 	'wan22-i2v': 6 * 60 * 1000,
 	'wan22-i2v-hq': 15 * 60 * 1000,
 	'ltx-2.3': 10 * 60 * 1000,
-	'wan22-s2v': 8 * 60 * 1000
+	'wan22-s2v': 8 * 60 * 1000,
+	'wan21-flf': 8 * 60 * 1000
 };
 const DEFAULT_VIDEO_POLL_BUDGET_MS = 10 * 60 * 1000;
 
@@ -1214,10 +1215,14 @@ export interface RunVideoGenerationOptions {
 	source: 'generate_video' | 'playground';
 	prompt: string;
 	model?: string;
-	/** data:image/...;base64,... — REQUIRED for every current model. */
+	/** data:image/...;base64,... — REQUIRED for every current model.
+	 *  For FLF this is the FIRST frame; the LAST frame goes in `lastFrame`. */
 	image: string;
 	/** data:audio/...;base64,... — required for wan22-s2v, ignored otherwise. */
 	audio?: string;
+	/** data:image/...;base64,... — second frame for FLF (first-last-frame
+	 *  interpolation). Required for wan21-flf, ignored otherwise. */
+	lastFrame?: string;
 	size?: string;
 	frames?: number;
 	signal?: AbortSignal;
@@ -1242,12 +1247,17 @@ export async function runVideoGeneration(
 	opts: RunVideoGenerationOptions
 ): Promise<RunVideoGenerationResult> {
 	const prompt = opts.prompt.trim();
-	if (!prompt) throw new Error('prompt is required');
 	if (!config().videoGenEnabled) {
 		throw new Error('Video generation is currently disabled in Settings → Images.');
 	}
 
 	const model = opts.model?.trim() || 'wan22-i2v';
+	// Prompt requirement is per-model: wan22-s2v drives motion + lip-sync
+	// from the audio track and treats prompt as optional flavoring.
+	// Every other model needs prompt as the primary/secondary signal.
+	if (!prompt && model !== 'wan22-s2v') {
+		throw new Error('prompt is required');
+	}
 	const defaultSize =
 		model === 'ltx-2.3' ? '960x544' : model === 'wan22-s2v' ? '512x288' : '832x480';
 	const size = opts.size?.trim() || defaultSize;
@@ -1255,12 +1265,18 @@ export async function runVideoGeneration(
 	const image = opts.image.trim();
 	if (!image) {
 		throw new Error(
-			`${model} requires a reference image data URL (all current video models are i2v / s2v).`
+			`${model} requires a reference image data URL (every current video model needs a starting still — for FLF this is the first frame).`
 		);
 	}
 	const audio = opts.audio?.trim() || undefined;
 	if (model === 'wan22-s2v' && !audio) {
 		throw new Error('wan22-s2v is sound-to-video; pass an audio data URL (wav/mp3/ogg/flac).');
+	}
+	const lastFrame = opts.lastFrame?.trim() || undefined;
+	if (model === 'wan21-flf' && !lastFrame) {
+		throw new Error(
+			'wan21-flf is first-last-frame interpolation; pass `lastFrame` as a data:image/... URL alongside the first-frame `image`.'
+		);
 	}
 
 	const base = resolveImagesBaseUrl();
@@ -1278,6 +1294,10 @@ export async function runVideoGeneration(
 
 	const body: Record<string, unknown> = { prompt, model, size, frames, image };
 	if (audio) body.audio = audio;
+	// FLF second-frame field. Naming follows the most common
+	// convention in Wan 2.2 FLF docs (`last_frame` as a sibling of
+	// `image`); if the proxy uses a different field, adjust here.
+	if (lastFrame) body.last_frame = lastFrame;
 
 	let submitRes: Response;
 	try {
@@ -1373,7 +1393,7 @@ register({
 		function: {
 			name: 'generate_video',
 			description:
-				'Generate a short video clip via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion, then saves the mp4 as a `video` artifact in the gallery. Every generation ties up the chat turn for minutes — warn the user about wait time before calling.\n\nModel matrix:\n  • `wan22-i2v` — image-to-video with 4-step lightning LoRAs. Fast (~60s for a 17-frame short, ~3min for 81 frames). Default.\n  • `wan22-i2v-hq` — same i2v pipeline without LoRAs, 20 steps. ~5× slower than wan22-i2v but noticeably sharper. Use when the user asks for quality over speed.\n  • `ltx-2.3` — LTX 2.3 distilled (i2v). ~4 min for 49 frames at 960x544. Good for slightly longer cinematic clips.\n  • `wan22-s2v` — sound-driven i2v (lip-sync / motion from audio). Needs BOTH `image` and `audio`. ~3.5 min for a 49-frame 512x288 clip.\n\nAll four models are image-to-video and require `image`. Call `get_artifact` first if the user wants to animate an existing gallery artifact.',
+				'Generate a short video clip via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion, then saves the mp4 as a `video` artifact in the gallery. Every generation ties up the chat turn for minutes — warn the user about wait time before calling.\n\nModel matrix:\n  • `wan22-i2v` — image-to-video with 4-step lightning LoRAs. Fast (~60s for a 17-frame short, ~3min for 81 frames). Default.\n  • `wan22-i2v-hq` — same i2v pipeline without LoRAs, 20 steps. ~5× slower than wan22-i2v but noticeably sharper. Use when the user asks for quality over speed.\n  • `ltx-2.3` — LTX 2.3 distilled (i2v). ~4 min for 49 frames at 960x544. Good for slightly longer cinematic clips.\n  • `wan22-s2v` — sound-driven i2v (lip-sync / motion from audio). Needs BOTH `image` and `audio`. ~3.5 min for a 49-frame 512x288 clip.\n  • `wan21-flf` — first-last-frame interpolation. Needs BOTH `image` (first frame) and `last_frame` (last frame). The model invents the motion that takes the still from one to the other.\n\nEvery model requires `image`. For FLF that `image` is the FIRST frame and `last_frame` is required as the second still. Call `get_artifact` first if the user wants to animate or interpolate gallery artifacts.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -1384,19 +1404,24 @@ register({
 					},
 					model: {
 						type: 'string',
-						enum: ['wan22-i2v', 'wan22-i2v-hq', 'ltx-2.3', 'wan22-s2v'],
+						enum: ['wan22-i2v', 'wan22-i2v-hq', 'ltx-2.3', 'wan22-s2v', 'wan21-flf'],
 						description:
 							'Model id on the proxy. See the main description for the per-model speed/quality trade. Default `wan22-i2v`.'
 					},
 					image: {
 						type: 'string',
 						description:
-							'Reference image as a `data:image/...;base64,...` URL. Required for every model (all current models are image-to-video or sound-to-video). Use `get_artifact` to fetch an existing artifact.'
+							'Reference image as a `data:image/...;base64,...` URL. Required for every model. For `wan21-flf` this is the FIRST frame; pair with `last_frame`. Use `get_artifact` to fetch an existing artifact.'
 					},
 					audio: {
 						type: 'string',
 						description:
 							'Reference audio as a `data:audio/...;base64,...` URL (wav / mp3 / ogg / flac). Required for `wan22-s2v`, ignored by the others. The model uses this to drive lip-sync / motion.'
+					},
+					last_frame: {
+						type: 'string',
+						description:
+							'Second still as a `data:image/...;base64,...` URL. Required for `wan21-flf` (first-last-frame interpolation), ignored by the others. The model fills in the motion between `image` (first frame) and this last frame.'
 					},
 					size: {
 						type: 'string',
@@ -1423,6 +1448,7 @@ register({
 				model: typeof args.model === 'string' ? args.model : undefined,
 				image: String(args.image ?? ''),
 				audio: typeof args.audio === 'string' ? args.audio : undefined,
+				lastFrame: typeof args.last_frame === 'string' ? args.last_frame : undefined,
 				size: typeof args.size === 'string' ? args.size : undefined,
 				frames: Number(args.frames) || undefined,
 				signal

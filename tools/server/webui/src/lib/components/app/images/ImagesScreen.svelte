@@ -58,22 +58,35 @@
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import type { DatabaseArtifact } from '$lib/types/database';
 
-	type Mode = 'generate' | 'edit' | 'video';
+	// Task type is the unit of "what we're asking the proxy to do" —
+	// the model picker, required inputs, and output modality all
+	// derive from it. Picker is a flat strip rather than
+	// modality→task because the only branching in the UI is
+	// "which fields are visible", and that's already keyed off
+	// taskType anyway. Adding a future t2v / v2v / inpaint slot is
+	// just a new chip + a new filter case.
+	type TaskType = 't2i' | 'i2i' | 'i2v' | 's2v' | 'flf';
 
-	const GENERATE_MODELS = [
+	type ImageModel = { id: string; label: string };
+	type VideoModel = { id: string; label: string; taskType: 'i2v' | 's2v' | 'flf' };
+
+	const GENERATE_MODELS: ImageModel[] = [
 		{ id: 'z-image-turbo', label: 'z-image-turbo · ~52s · default' },
 		{ id: 'newbie-image', label: 'newbie-image · ~22s · anime / manga' },
 		{ id: 'qwen-image', label: 'qwen-image · ~10 min · slow but high quality' },
 		{ id: 'flux2-klein', label: 'flux2-klein · broken · OOM on 24 GB' }
 	];
 
-	const EDIT_MODELS = [{ id: 'qwen-image-edit', label: 'qwen-image-edit · ~2.5 min @ 1024' }];
+	const EDIT_MODELS: ImageModel[] = [
+		{ id: 'qwen-image-edit', label: 'qwen-image-edit · ~2.5 min @ 1024' }
+	];
 
-	const VIDEO_MODELS = [
-		{ id: 'wan22-i2v', label: 'wan22-i2v · ~60s — 3min · default · i2v', requiresAudio: false },
-		{ id: 'wan22-i2v-hq', label: 'wan22-i2v-hq · ~5× slower · sharper', requiresAudio: false },
-		{ id: 'ltx-2.3', label: 'ltx-2.3 · ~4 min · cinematic', requiresAudio: false },
-		{ id: 'wan22-s2v', label: 'wan22-s2v · ~3.5 min · sound-driven', requiresAudio: true }
+	const VIDEO_MODELS: VideoModel[] = [
+		{ id: 'wan22-i2v', label: 'wan22-i2v · ~60s — 3min · default', taskType: 'i2v' },
+		{ id: 'wan22-i2v-hq', label: 'wan22-i2v-hq · ~5× slower · sharper', taskType: 'i2v' },
+		{ id: 'ltx-2.3', label: 'ltx-2.3 · ~4 min · cinematic', taskType: 'i2v' },
+		{ id: 'wan22-s2v', label: 'wan22-s2v · ~3.5 min · sound-driven', taskType: 's2v' },
+		{ id: 'wan21-flf', label: 'wan21-flf · first ↔ last frame interpolation', taskType: 'flf' }
 	];
 
 	// Per-model native size — overriding crashes pipelines, so we
@@ -83,8 +96,24 @@
 		'wan22-i2v': '832x480',
 		'wan22-i2v-hq': '832x480',
 		'ltx-2.3': '960x544',
-		'wan22-s2v': '512x288'
+		'wan22-s2v': '512x288',
+		'wan21-flf': '832x480'
 	};
+
+	function modelsForTask(t: TaskType): Array<ImageModel | VideoModel> {
+		switch (t) {
+			case 't2i':
+				return GENERATE_MODELS;
+			case 'i2i':
+				return EDIT_MODELS;
+			default:
+				return VIDEO_MODELS.filter((m) => m.taskType === t);
+		}
+	}
+
+	function isVideoTask(t: TaskType): boolean {
+		return t === 'i2v' || t === 's2v' || t === 'flf';
+	}
 
 	const ASPECT_PRESETS: Array<{ id: string; label: string; w: number; h: number }> = [
 		{ id: '1:1', label: '1 : 1 · square', w: 1024, h: 1024 },
@@ -98,7 +127,13 @@
 
 	const SIZE_STEP = 64; // ComfyUI VAEs prefer multiples of 64
 
-	let mode = $state<Mode>('generate');
+	let taskType = $state<TaskType>('t2i');
+	// Playground store still uses the modality-flavoured Mode union;
+	// derive it from taskType at the boundary so we don't churn the
+	// store/persistence layer for the new task-type axis.
+	let mode = $derived<'generate' | 'edit' | 'video'>(
+		taskType === 't2i' ? 'generate' : taskType === 'i2i' ? 'edit' : 'video'
+	);
 	let prompt = $state('');
 	let model = $state(GENERATE_MODELS[0].id);
 	let width = $state(1024);
@@ -122,11 +157,14 @@
 	let editSourceArtifactId = $state<string | null>(null);
 	let editFileInputRef: HTMLInputElement | null = $state(null);
 
-	// Video-specific knobs. The audio source is only used by wan22-s2v;
-	// the file-input is rendered conditionally on the active model.
+	// Video-specific knobs. The audio source is only used by s2v;
+	// the last-frame source is only used by flf. Both fields render
+	// conditionally on the active task type.
 	let videoFrames = $state(17);
 	let videoAudioDataUrl = $state<string | null>(null);
 	let videoAudioFileInputRef: HTMLInputElement | null = $state(null);
+	let lastFrameDataUrl = $state<string | null>(null);
+	let lastFrameFileInputRef: HTMLInputElement | null = $state(null);
 
 	// Run state lives in the imagePlaygroundStore (module-level), not
 	// here, so a generation in flight survives navigating away from
@@ -168,20 +206,22 @@
 	// flows share `imageGenEnabled` (Generate + Edit are the same
 	// proxy); Video has its own toggle since it's an order of magnitude
 	// slower and the user should opt in explicitly.
-	let modeEnabled = $derived(mode === 'video' ? videoGenEnabled : imageGenEnabled);
+	let modeEnabled = $derived(isVideoTask(taskType) ? videoGenEnabled : imageGenEnabled);
 
-	// Currently selected video model, derived for cleaner UI conditionals.
-	let videoModelDescriptor = $derived(VIDEO_MODELS.find((m) => m.id === model));
-	let videoNeedsAudio = $derived(Boolean(videoModelDescriptor?.requiresAudio));
+	// Derived task-type booleans for cleaner UI conditionals.
+	let isVideo = $derived(isVideoTask(taskType));
+	let needsSourceImage = $derived(taskType !== 't2i');
+	let needsAudio = $derived(taskType === 's2v');
+	let needsLastFrame = $derived(taskType === 'flf');
 
 	// Reactive history: every image artifact in the gallery, newest first.
 	// Includes output from all four entry points; metadata.source is what
 	// distinguishes them, but for browsing we want everything in one rail.
 	let history = $derived.by<DatabaseArtifact[]>(() => {
-		// Include images by default; widen to video when the user is in
-		// Video mode so they can drag an old generation back into the
-		// canvas without flipping tabs.
-		const wanted = mode === 'video' ? ['image', 'video'] : ['image'];
+		// Include images by default; widen to video when the user is on
+		// a video-output task so they can drag an old generation back
+		// into the canvas without flipping tabs.
+		const wanted = isVideo ? ['image', 'video'] : ['image'];
 		return [...artifactGalleryStore.artifacts]
 			.filter((a) => wanted.includes(a.kind))
 			.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -198,17 +238,16 @@
 	});
 
 	$effect(() => {
-		// Switching modes resets the model selection so we never end up
-		// with a Generate-only model id selected in Edit mode (or vice
-		// versa). The size knob is shared.
-		const allowed =
-			mode === 'generate' ? GENERATE_MODELS : mode === 'edit' ? EDIT_MODELS : VIDEO_MODELS;
+		// Switching task types resets the model selection so we never
+		// end up with a t2i-only model id selected in i2v mode (etc).
+		// Each task type has its own model list — see modelsForTask().
+		const allowed = modelsForTask(taskType);
 		if (!allowed.some((m) => m.id === model)) {
-			model = allowed[0].id;
+			model = allowed[0]?.id ?? '';
 		}
 		// Snap size to the selected video model's native resolution so
 		// the user doesn't waste 5 minutes finding out 1024x1024 OOMs.
-		if (mode === 'video') {
+		if (isVideo) {
 			const native = VIDEO_DEFAULT_SIZE[model];
 			if (native) {
 				const [w, h] = native.split('x').map(Number);
@@ -316,7 +355,12 @@
 			return;
 		}
 		const dataUrl = await blobToDataUrl(revision.blob);
-		if (mode === 'edit') {
+		// History click ALSO loads the artifact into the source-image
+		// slot for tasks that consume one — saves a re-upload round-trip
+		// when iterating on the same still. Skip for t2i (no source
+		// slot) and flf (ambiguous: would the user mean first or last?
+		// Force them to drag onto the explicit drop zone instead).
+		if (taskType === 'i2i' || taskType === 'i2v' || taskType === 's2v') {
 			editSourceDataUrl = dataUrl;
 			editSourceArtifactId = artifact.id;
 		}
@@ -443,19 +487,72 @@
 		videoAudioDataUrl = null;
 	}
 
+	// ----- last-frame drop zone (FLF only) ---------------------------
+	let lastFrameDropActive = $state(false);
+
+	function pickLastFrame() {
+		lastFrameFileInputRef?.click();
+	}
+
+	async function setLastFrameFromFile(file: File) {
+		try {
+			lastFrameDataUrl = await blobToDataUrl(file);
+		} catch (e) {
+			toast.error(`Failed to read file: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	async function handleLastFrameFileChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (!file) return;
+		await setLastFrameFromFile(file);
+		input.value = '';
+	}
+
+	function onLastFrameDragEnter(ev: DragEvent) {
+		if (!ev.dataTransfer?.types.includes('Files')) return;
+		ev.preventDefault();
+		lastFrameDropActive = true;
+	}
+	function onLastFrameDragOver(ev: DragEvent) {
+		if (ev.dataTransfer?.types.includes('Files')) ev.preventDefault();
+	}
+	function onLastFrameDragLeave(ev: DragEvent) {
+		ev.preventDefault();
+		lastFrameDropActive = false;
+	}
+	async function onLastFrameDrop(ev: DragEvent) {
+		ev.preventDefault();
+		lastFrameDropActive = false;
+		const file = pickFileFromDrop(ev, (f) => f.type.startsWith('image/'));
+		if (!file) {
+			toast.info('Drop an image file (PNG, JPG, WebP, …)');
+			return;
+		}
+		await setLastFrameFromFile(file);
+	}
+
+	function clearLastFrame() {
+		lastFrameDataUrl = null;
+	}
+
 	async function run() {
 		if (isRunning) return;
 		const trimmedPrompt = prompt.trim();
-		if (!trimmedPrompt) {
+		// s2v drives motion + lip-sync from the audio; prompt is
+		// optional. Every other task (t2i, i2i, i2v, flf) needs the
+		// prompt as the primary or secondary instruction.
+		if (!trimmedPrompt && taskType !== 's2v') {
 			toast.info('Enter a prompt first.');
 			return;
 		}
-		if (mode === 'video' && !videoGenEnabled) {
+		if (isVideo && !videoGenEnabled) {
 			toast.error('Video generation is disabled. Enable it in Settings → Images.');
 			openImagesSettings();
 			return;
 		}
-		if (mode !== 'video' && !imageGenEnabled) {
+		if (!isVideo && !imageGenEnabled) {
 			toast.error('Image generation is disabled. Enable it in Settings → Images.');
 			openImagesSettings();
 			return;
@@ -465,21 +562,28 @@
 			openImagesSettings();
 			return;
 		}
-		if (mode === 'edit' && !editSourceDataUrl) {
-			toast.info('Drop a source image first, or click a history card to reuse one.');
+		if (needsSourceImage && !editSourceDataUrl) {
+			toast.info(
+				taskType === 'flf'
+					? 'FLF needs a first frame. Drop one in the source slot.'
+					: taskType === 'i2i'
+						? 'Drop a source image first, or click a history card to reuse one.'
+						: 'Drop a source image first.'
+			);
 			return;
 		}
-		if (mode === 'video' && !editSourceDataUrl) {
-			toast.info('All video models are image-to-video — drop a source image first.');
-			return;
-		}
-		if (mode === 'video' && videoNeedsAudio && !videoAudioDataUrl) {
+		if (needsAudio && !videoAudioDataUrl) {
 			toast.info(`${model} is sound-driven — attach an audio clip below the source image.`);
+			return;
+		}
+		if (needsLastFrame && !lastFrameDataUrl) {
+			toast.info('FLF needs a last frame as well — drop one in the last-frame slot.');
 			return;
 		}
 
 		const controller = new AbortController();
-		const startedMode: Mode = mode;
+		const startedMode = mode;
+		const startedTask = taskType;
 		const startedModel = model;
 		imagePlaygroundStore.beginRun({
 			mode: startedMode,
@@ -547,7 +651,8 @@
 					prompt: trimmedPrompt,
 					model: startedModel,
 					image: editSourceDataUrl as string,
-					audio: videoAudioDataUrl ?? undefined,
+					audio: startedTask === 's2v' ? (videoAudioDataUrl ?? undefined) : undefined,
+					lastFrame: startedTask === 'flf' ? (lastFrameDataUrl ?? undefined) : undefined,
 					size,
 					frames: videoFrames,
 					signal: controller.signal
@@ -578,49 +683,80 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden">
-	<!-- Top strip: mode toggle + page title -->
-	<div class="flex flex-shrink-0 items-center gap-3 border-b px-4 py-3">
+	<!-- Top strip: task-type picker + page title.
+		 Five chips, flat: t2i / i2i / i2v / s2v / flf. The model
+		 dropdown filters to whichever task is active; required input
+		 fields (source image / audio / last frame) appear conditionally
+		 below. -->
+	<div class="flex flex-shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3">
 		<h1 class="text-lg font-semibold">Images</h1>
 
 		<div class="ml-2 inline-flex rounded-full border bg-muted/30 p-0.5">
 			<button
 				type="button"
-				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {mode ===
-				'generate'
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {taskType ===
+				't2i'
 					? 'bg-primary text-primary-foreground'
 					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => (mode = 'generate')}
+				onclick={() => (taskType = 't2i')}
+				title="Text → image"
 			>
 				<ImageIcon class="h-3.5 w-3.5" />
-				Generate
+				t2i
 			</button>
 			<button
 				type="button"
-				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {mode ===
-				'edit'
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {taskType ===
+				'i2i'
 					? 'bg-primary text-primary-foreground'
 					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => (mode = 'edit')}
+				onclick={() => (taskType = 'i2i')}
+				title="Image → image (edit)"
 			>
 				<Pencil class="h-3.5 w-3.5" />
-				Edit
+				i2i
 			</button>
 			<button
 				type="button"
-				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {mode ===
-				'video'
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {taskType ===
+				'i2v'
 					? 'bg-primary text-primary-foreground'
 					: 'text-muted-foreground hover:text-foreground'}"
-				onclick={() => (mode = 'video')}
+				onclick={() => (taskType = 'i2v')}
+				title="Image → video"
 			>
 				<Film class="h-3.5 w-3.5" />
-				Video
+				i2v
+			</button>
+			<button
+				type="button"
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {taskType ===
+				's2v'
+					? 'bg-primary text-primary-foreground'
+					: 'text-muted-foreground hover:text-foreground'}"
+				onclick={() => (taskType = 's2v')}
+				title="Sound → video"
+			>
+				<Music class="h-3.5 w-3.5" />
+				s2v
+			</button>
+			<button
+				type="button"
+				class="inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium transition-colors {taskType ===
+				'flf'
+					? 'bg-primary text-primary-foreground'
+					: 'text-muted-foreground hover:text-foreground'}"
+				onclick={() => (taskType = 'flf')}
+				title="First + last frame → video"
+			>
+				<Film class="h-3.5 w-3.5" />
+				flf
 			</button>
 		</div>
 
-		{#if mode === 'video' && !videoGenEnabled}
+		{#if isVideo && !videoGenEnabled}
 			<span class="ml-2 text-xs text-amber-600">Video generation is disabled.</span>
-		{:else if mode !== 'video' && !imageGenEnabled}
+		{:else if !isVideo && !imageGenEnabled}
 			<span class="ml-2 text-xs text-amber-600">Image generation is disabled.</span>
 		{/if}
 
@@ -644,16 +780,20 @@
 					<Textarea
 						id="img-prompt"
 						bind:value={prompt}
-						placeholder={mode === 'generate'
+						placeholder={taskType === 't2i'
 							? 'A photo of a calico cat sitting on a sunlit windowsill…'
-							: 'Make the sky a deep purple at sunset, keep everything else.'}
+							: taskType === 'i2i'
+								? 'Make the sky a deep purple at sunset, keep everything else.'
+								: taskType === 'flf'
+									? 'How the first frame should morph into the last frame…'
+									: 'Describe how the still should animate…'}
 						rows={6}
 						disabled={isRunning}
 						class="resize-y"
 					/>
 				</div>
 
-				{#if mode === 'edit' || mode === 'video'}
+				{#if needsSourceImage}
 					<div
 						class="flex flex-col gap-1.5"
 						ondragenter={onEditDragEnter}
@@ -663,7 +803,11 @@
 						role="presentation"
 					>
 						<Label class="text-xs text-muted-foreground uppercase">
-							{mode === 'video' ? 'Source image (i2v)' : 'Source image'}
+							{taskType === 'flf'
+								? 'First frame'
+								: taskType === 'i2v' || taskType === 's2v'
+									? 'Source image (still to animate)'
+									: 'Source image'}
 						</Label>
 						{#if editSourceDataUrl}
 							<div
@@ -712,7 +856,62 @@
 					</div>
 				{/if}
 
-				{#if mode === 'video' && videoNeedsAudio}
+				{#if needsLastFrame}
+					<div
+						class="flex flex-col gap-1.5"
+						ondragenter={onLastFrameDragEnter}
+						ondragover={onLastFrameDragOver}
+						ondragleave={onLastFrameDragLeave}
+						ondrop={onLastFrameDrop}
+						role="presentation"
+					>
+						<Label class="text-xs text-muted-foreground uppercase">Last frame</Label>
+						{#if lastFrameDataUrl}
+							<div
+								class="relative overflow-hidden rounded-md border bg-background transition-colors {lastFrameDropActive
+									? 'border-primary ring-2 ring-primary/40'
+									: ''}"
+							>
+								<img src={lastFrameDataUrl} alt="Last frame" class="h-40 w-full object-cover" />
+								<button
+									type="button"
+									onclick={clearLastFrame}
+									class="absolute top-1 right-1 rounded-full bg-background/80 p-1 hover:bg-background"
+									aria-label="Clear last frame"
+								>
+									<X class="h-3 w-3" />
+								</button>
+								{#if lastFrameDropActive}
+									<div
+										class="pointer-events-none absolute inset-0 flex items-center justify-center bg-primary/15 text-xs font-medium text-primary"
+									>
+										Drop to replace
+									</div>
+								{/if}
+							</div>
+						{:else}
+							<button
+								type="button"
+								onclick={pickLastFrame}
+								class="flex h-32 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground {lastFrameDropActive
+									? 'border-primary bg-primary/5 text-primary'
+									: ''}"
+							>
+								<ImageIcon class="mb-1 h-5 w-5 opacity-60" />
+								{lastFrameDropActive ? 'Drop image here' : 'Click to upload, or drop a file here'}
+							</button>
+						{/if}
+						<input
+							type="file"
+							accept="image/*"
+							class="hidden"
+							bind:this={lastFrameFileInputRef}
+							onchange={handleLastFrameFileChange}
+						/>
+					</div>
+				{/if}
+
+				{#if needsAudio}
 					<div
 						class="flex flex-col gap-1.5"
 						ondragenter={onAudioDragEnter}
@@ -772,15 +971,10 @@
 					<Label for="img-model" class="text-xs text-muted-foreground uppercase">Model</Label>
 					<Select.Root type="single" bind:value={model} disabled={isRunning}>
 						<Select.Trigger id="img-model" class="w-full">
-							{(mode === 'generate'
-								? GENERATE_MODELS
-								: mode === 'edit'
-									? EDIT_MODELS
-									: VIDEO_MODELS
-							).find((m) => m.id === model)?.label ?? model}
+							{modelsForTask(taskType).find((m) => m.id === model)?.label ?? model}
 						</Select.Trigger>
 						<Select.Content>
-							{#each mode === 'generate' ? GENERATE_MODELS : mode === 'edit' ? EDIT_MODELS : VIDEO_MODELS as opt (opt.id)}
+							{#each modelsForTask(taskType) as opt (opt.id)}
 								<Select.Item value={opt.id} label={opt.label}>{opt.label}</Select.Item>
 							{/each}
 						</Select.Content>
