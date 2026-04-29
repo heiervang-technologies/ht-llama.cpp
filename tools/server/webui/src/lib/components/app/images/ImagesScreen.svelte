@@ -351,6 +351,81 @@
 		editSourceArtifactId = null;
 	}
 
+	// Drag-and-drop wiring for the Source image / Source audio drop zones.
+	// The composer copy literally says "drop a source image first" — backing
+	// it with real drop handlers so the affordance isn't a lie.
+	let editDropActive = $state(false);
+	let audioDropActive = $state(false);
+
+	async function setEditSourceFromFile(file: File) {
+		try {
+			const dataUrl = await blobToDataUrl(file);
+			editSourceDataUrl = dataUrl;
+			editSourceArtifactId = null;
+		} catch (e) {
+			toast.error(`Failed to read file: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
+	function pickFileFromDrop(ev: DragEvent, predicate: (f: File) => boolean): File | null {
+		const items = ev.dataTransfer?.files;
+		if (!items?.length) return null;
+		for (const f of Array.from(items)) {
+			if (predicate(f)) return f;
+		}
+		return null;
+	}
+
+	function onEditDragEnter(ev: DragEvent) {
+		if (!ev.dataTransfer?.types.includes('Files')) return;
+		ev.preventDefault();
+		editDropActive = true;
+	}
+	function onEditDragOver(ev: DragEvent) {
+		if (ev.dataTransfer?.types.includes('Files')) ev.preventDefault();
+	}
+	function onEditDragLeave(ev: DragEvent) {
+		ev.preventDefault();
+		editDropActive = false;
+	}
+	async function onEditDrop(ev: DragEvent) {
+		ev.preventDefault();
+		editDropActive = false;
+		const file = pickFileFromDrop(ev, (f) => f.type.startsWith('image/'));
+		if (!file) {
+			toast.info('Drop an image file (PNG, JPG, WebP, …)');
+			return;
+		}
+		await setEditSourceFromFile(file);
+	}
+
+	function onAudioDragEnter(ev: DragEvent) {
+		if (!ev.dataTransfer?.types.includes('Files')) return;
+		ev.preventDefault();
+		audioDropActive = true;
+	}
+	function onAudioDragOver(ev: DragEvent) {
+		if (ev.dataTransfer?.types.includes('Files')) ev.preventDefault();
+	}
+	function onAudioDragLeave(ev: DragEvent) {
+		ev.preventDefault();
+		audioDropActive = false;
+	}
+	async function onAudioDrop(ev: DragEvent) {
+		ev.preventDefault();
+		audioDropActive = false;
+		const file = pickFileFromDrop(ev, (f) => f.type.startsWith('audio/'));
+		if (!file) {
+			toast.info('Drop an audio file (wav, mp3, ogg, flac)');
+			return;
+		}
+		try {
+			videoAudioDataUrl = await blobToDataUrl(file);
+		} catch (e) {
+			toast.error(`Failed to read audio: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	}
+
 	async function handleVideoAudioFileChange(event: Event) {
 		const input = event.target as HTMLInputElement;
 		const file = input.files?.[0];
@@ -579,12 +654,23 @@
 				</div>
 
 				{#if mode === 'edit' || mode === 'video'}
-					<div class="flex flex-col gap-1.5">
+					<div
+						class="flex flex-col gap-1.5"
+						ondragenter={onEditDragEnter}
+						ondragover={onEditDragOver}
+						ondragleave={onEditDragLeave}
+						ondrop={onEditDrop}
+						role="presentation"
+					>
 						<Label class="text-xs text-muted-foreground uppercase">
 							{mode === 'video' ? 'Source image (i2v)' : 'Source image'}
 						</Label>
 						{#if editSourceDataUrl}
-							<div class="relative overflow-hidden rounded-md border bg-background">
+							<div
+								class="relative overflow-hidden rounded-md border bg-background transition-colors {editDropActive
+									? 'border-primary ring-2 ring-primary/40'
+									: ''}"
+							>
 								<img src={editSourceDataUrl} alt="Source" class="h-40 w-full object-cover" />
 								<button
 									type="button"
@@ -594,15 +680,26 @@
 								>
 									<X class="h-3 w-3" />
 								</button>
+								{#if editDropActive}
+									<div
+										class="pointer-events-none absolute inset-0 flex items-center justify-center bg-primary/15 text-xs font-medium text-primary"
+									>
+										Drop to replace
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<button
 								type="button"
 								onclick={pickEditSource}
-								class="flex h-32 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+								class="flex h-32 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground {editDropActive
+									? 'border-primary bg-primary/5 text-primary'
+									: ''}"
 							>
 								<ImageIcon class="mb-1 h-5 w-5 opacity-60" />
-								Click to upload, or pick from history →
+								{editDropActive
+									? 'Drop image here'
+									: 'Click to upload, drop a file, or pick from history →'}
 							</button>
 						{/if}
 						<input
@@ -616,10 +713,21 @@
 				{/if}
 
 				{#if mode === 'video' && videoNeedsAudio}
-					<div class="flex flex-col gap-1.5">
+					<div
+						class="flex flex-col gap-1.5"
+						ondragenter={onAudioDragEnter}
+						ondragover={onAudioDragOver}
+						ondragleave={onAudioDragLeave}
+						ondrop={onAudioDrop}
+						role="presentation"
+					>
 						<Label class="text-xs text-muted-foreground uppercase">Source audio (s2v)</Label>
 						{#if videoAudioDataUrl}
-							<div class="relative flex items-center gap-2 rounded-md border bg-background p-2">
+							<div
+								class="relative flex items-center gap-2 rounded-md border bg-background p-2 transition-colors {audioDropActive
+									? 'border-primary ring-2 ring-primary/40'
+									: ''}"
+							>
 								<Music class="h-4 w-4 text-muted-foreground" />
 								<audio src={videoAudioDataUrl} controls class="min-w-0 flex-1"></audio>
 								<button
@@ -630,15 +738,24 @@
 								>
 									<X class="h-3 w-3" />
 								</button>
+								{#if audioDropActive}
+									<div
+										class="pointer-events-none absolute inset-0 flex items-center justify-center rounded-md bg-primary/15 text-xs font-medium text-primary"
+									>
+										Drop to replace
+									</div>
+								{/if}
 							</div>
 						{:else}
 							<button
 								type="button"
 								onclick={() => videoAudioFileInputRef?.click()}
-								class="flex h-20 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+								class="flex h-20 flex-col items-center justify-center rounded-md border border-dashed text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground {audioDropActive
+									? 'border-primary bg-primary/5 text-primary'
+									: ''}"
 							>
 								<Music class="mb-1 h-4 w-4 opacity-60" />
-								wav · mp3 · ogg · flac
+								{audioDropActive ? 'Drop audio here' : 'wav · mp3 · ogg · flac · click or drop'}
 							</button>
 						{/if}
 						<input
@@ -972,14 +1089,41 @@
 								type="button"
 								onclick={() => pickFromHistory(artifact)}
 								class="group block overflow-hidden rounded-md border bg-background transition-shadow hover:shadow-sm"
-								title={artifact.title}
+								title={artifact.kind === 'video'
+									? `${artifact.title} (hover to play)`
+									: artifact.title}
 							>
 								{#if dataUrl}
-									<img
-										src={dataUrl}
-										alt={artifact.title}
-										class="aspect-square w-full object-cover"
-									/>
+									{#if artifact.kind === 'video'}
+										<!-- preload="metadata" gives us the poster frame without
+										     downloading the whole clip. Hover plays muted, leave
+										     pauses and rewinds so the next hover starts clean. -->
+										<video
+											src={dataUrl}
+											preload="metadata"
+											muted
+											playsinline
+											loop
+											class="aspect-square w-full object-cover"
+											onmouseenter={(ev) => {
+												const v = ev.currentTarget as HTMLVideoElement;
+												v.play().catch(() => {});
+											}}
+											onmouseleave={(ev) => {
+												const v = ev.currentTarget as HTMLVideoElement;
+												v.pause();
+												v.currentTime = 0;
+											}}
+										>
+											<track kind="captions" />
+										</video>
+									{:else}
+										<img
+											src={dataUrl}
+											alt={artifact.title}
+											class="aspect-square w-full object-cover"
+										/>
+									{/if}
 								{:else}
 									<div class="aspect-square w-full bg-muted/40"></div>
 								{/if}
