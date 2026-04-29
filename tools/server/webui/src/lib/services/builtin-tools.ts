@@ -1252,10 +1252,14 @@ export async function runVideoGeneration(
 	}
 
 	const model = opts.model?.trim() || 'wan22-i2v';
-	// Prompt requirement is per-model: wan22-s2v drives motion + lip-sync
-	// from the audio track and treats prompt as optional flavoring.
-	// Every other model needs prompt as the primary/secondary signal.
-	if (!prompt && model !== 'wan22-s2v') {
+	// The proxy schema marks `prompt` as required with minLength 1,
+	// even for s2v where audio is the actual motion driver. Substitute
+	// a neutral placeholder when the user leaves it empty on s2v so
+	// the request gets past validation; for every other model the
+	// prompt is meaningful and the user-supplied empty is a real bug.
+	const effectivePrompt =
+		prompt || (model === 'wan22-s2v' ? 'animate the still in time with the audio' : '');
+	if (!effectivePrompt) {
 		throw new Error('prompt is required');
 	}
 	const defaultSize =
@@ -1292,12 +1296,18 @@ export async function runVideoGeneration(
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
 	};
 
-	const body: Record<string, unknown> = { prompt, model, size, frames, image };
+	const body: Record<string, unknown> = {
+		prompt: effectivePrompt,
+		model,
+		size,
+		frames,
+		image
+	};
 	if (audio) body.audio = audio;
-	// FLF second-frame field. Naming follows the most common
-	// convention in Wan 2.2 FLF docs (`last_frame` as a sibling of
-	// `image`); if the proxy uses a different field, adjust here.
-	if (lastFrame) body.last_frame = lastFrame;
+	// FLF second-frame field. The ComfyUI proxy spells this
+	// `image_end` (verified against /openapi.json — VideoGenRequest
+	// schema). Earlier guesses of `last_frame` got silently dropped.
+	if (lastFrame) body.image_end = lastFrame;
 
 	let submitRes: Response;
 	try {
@@ -1393,7 +1403,7 @@ register({
 		function: {
 			name: 'generate_video',
 			description:
-				'Generate a short video clip via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion, then saves the mp4 as a `video` artifact in the gallery. Every generation ties up the chat turn for minutes — warn the user about wait time before calling.\n\nModel matrix:\n  • `wan22-i2v` — image-to-video with 4-step lightning LoRAs. Fast (~60s for a 17-frame short, ~3min for 81 frames). Default.\n  • `wan22-i2v-hq` — same i2v pipeline without LoRAs, 20 steps. ~5× slower than wan22-i2v but noticeably sharper. Use when the user asks for quality over speed.\n  • `ltx-2.3` — LTX 2.3 distilled (i2v). ~4 min for 49 frames at 960x544. Good for slightly longer cinematic clips.\n  • `wan22-s2v` — sound-driven i2v (lip-sync / motion from audio). Needs BOTH `image` and `audio`. ~3.5 min for a 49-frame 512x288 clip.\n  • `wan21-flf` — first-last-frame interpolation. Needs BOTH `image` (first frame) and `last_frame` (last frame). The model invents the motion that takes the still from one to the other.\n\nEvery model requires `image`. For FLF that `image` is the FIRST frame and `last_frame` is required as the second still. Call `get_artifact` first if the user wants to animate or interpolate gallery artifacts.',
+				'Generate a short video clip via the OpenAI-compatible videos proxy. Async: the tool submits a job, polls until completion, then saves the mp4 as a `video` artifact in the gallery. Every generation ties up the chat turn for minutes — warn the user about wait time before calling.\n\nModel matrix:\n  • `wan22-i2v` — image-to-video with 4-step lightning LoRAs. Fast (~60s for a 17-frame short, ~3min for 81 frames). Default.\n  • `wan22-i2v-hq` — same i2v pipeline without LoRAs, 20 steps. ~5× slower than wan22-i2v but noticeably sharper. Use when the user asks for quality over speed.\n  • `ltx-2.3` — LTX 2.3 distilled (i2v). ~4 min for 49 frames at 960x544. Good for slightly longer cinematic clips.\n  • `wan22-s2v` — sound-driven i2v (lip-sync / motion from audio). Needs BOTH `image` and `audio`. ~3.5 min for a 49-frame 512x288 clip.\n  • `wan21-flf` — first-last-frame interpolation. Needs BOTH `image` (first frame) and `image_end` (last frame). The model invents the motion that takes the still from one to the other.\n\nEvery model requires `image`. For FLF that `image` is the FIRST frame and `image_end` is required as the last frame. Call `get_artifact` first if the user wants to animate or interpolate gallery artifacts.',
 			parameters: {
 				type: 'object',
 				properties: {
@@ -1411,17 +1421,17 @@ register({
 					image: {
 						type: 'string',
 						description:
-							'Reference image as a `data:image/...;base64,...` URL. Required for every model. For `wan21-flf` this is the FIRST frame; pair with `last_frame`. Use `get_artifact` to fetch an existing artifact.'
+							'Reference image as a `data:image/...;base64,...` URL. Required for every model. For `wan21-flf` this is the FIRST frame; pair with `image_end`. Use `get_artifact` to fetch an existing artifact.'
 					},
 					audio: {
 						type: 'string',
 						description:
 							'Reference audio as a `data:audio/...;base64,...` URL (wav / mp3 / ogg / flac). Required for `wan22-s2v`, ignored by the others. The model uses this to drive lip-sync / motion.'
 					},
-					last_frame: {
+					image_end: {
 						type: 'string',
 						description:
-							'Second still as a `data:image/...;base64,...` URL. Required for `wan21-flf` (first-last-frame interpolation), ignored by the others. The model fills in the motion between `image` (first frame) and this last frame.'
+							'Last frame as a `data:image/...;base64,...` URL. Required for `wan21-flf` (first-last-frame interpolation), ignored by the others. The model fills in the motion between `image` (first frame) and this last frame.'
 					},
 					size: {
 						type: 'string',
@@ -1448,7 +1458,7 @@ register({
 				model: typeof args.model === 'string' ? args.model : undefined,
 				image: String(args.image ?? ''),
 				audio: typeof args.audio === 'string' ? args.audio : undefined,
-				lastFrame: typeof args.last_frame === 'string' ? args.last_frame : undefined,
+				lastFrame: typeof args.image_end === 'string' ? args.image_end : undefined,
 				size: typeof args.size === 'string' ? args.size : undefined,
 				frames: Number(args.frames) || undefined,
 				signal
