@@ -540,10 +540,13 @@
 	async function run() {
 		if (isRunning) return;
 		const trimmedPrompt = prompt.trim();
-		// s2v drives motion + lip-sync from the audio; prompt is
-		// optional. Every other task (t2i, i2i, i2v, flf) needs the
-		// prompt as the primary or secondary instruction.
-		if (!trimmedPrompt && taskType !== 's2v') {
+		// Video tasks drive output from the visual / audio signal (the
+		// still, the audio track, the first+last frame pair) — the
+		// prompt is at most flavoring. runVideoGeneration substitutes a
+		// neutral placeholder when empty so the proxy's minLength-1
+		// schema passes. t2i and i2i are genuinely prompt-driven so the
+		// empty guard still applies.
+		if (!trimmedPrompt && !isVideo) {
 			toast.info('Enter a prompt first.');
 			return;
 		}

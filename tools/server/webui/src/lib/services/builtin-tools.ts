@@ -1253,12 +1253,20 @@ export async function runVideoGeneration(
 
 	const model = opts.model?.trim() || 'wan22-i2v';
 	// The proxy schema marks `prompt` as required with minLength 1,
-	// even for s2v where audio is the actual motion driver. Substitute
-	// a neutral placeholder when the user leaves it empty on s2v so
-	// the request gets past validation; for every other model the
-	// prompt is meaningful and the user-supplied empty is a real bug.
-	const effectivePrompt =
-		prompt || (model === 'wan22-s2v' ? 'animate the still in time with the audio' : '');
+	// but for video models the visual signal (image, last frame, audio)
+	// is what actually drives the output — the prompt is at most
+	// flavoring. Substitute a per-model neutral placeholder when the
+	// user leaves it empty so the request gets past validation. Only
+	// truly prompt-driven calls (t2i / i2i, handled by their own
+	// runners) keep the empty-prompt error.
+	const VIDEO_PLACEHOLDERS: Record<string, string> = {
+		'wan22-i2v': 'animate the still naturally',
+		'wan22-i2v-hq': 'animate the still naturally',
+		'ltx-2.3': 'animate the still naturally',
+		'wan22-s2v': 'animate the still in time with the audio',
+		'wan21-flf': 'smooth interpolation between the first and last frames'
+	};
+	const effectivePrompt = prompt || VIDEO_PLACEHOLDERS[model] || '';
 	if (!effectivePrompt) {
 		throw new Error('prompt is required');
 	}
