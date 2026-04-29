@@ -13,7 +13,11 @@ import { resolveApiUrl } from '$lib/utils/backend-url';
  */
 
 export interface InlineCompletionOptions {
-	prompt: string;
+	/** Text before the cursor. Required. */
+	prefix: string;
+	/** Text after the cursor. Optional but strongly recommended — without it
+	 *  FIM degrades to one-sided prediction. */
+	suffix?: string;
 	maxTokens?: number;
 	stop?: string[];
 	temperature?: number;
@@ -25,6 +29,23 @@ export interface InlineCompletionResult {
 }
 
 export class CompletionService {
+	/**
+	 * Inline ghost-text completion via llama-server's `/infill` endpoint.
+	 *
+	 * Why /infill and not /completion: instruct models fed raw prefix text
+	 * try to "respond" instead of continue, producing repetition,
+	 * preambles, or apologetic disclaimers. `/infill` injects the model's
+	 * own FIM (fill-in-middle) tokens — `<|fim_prefix|>` /
+	 * `<|fim_suffix|>` / `<|fim_middle|>` for Qwen-Coder / DeepSeek-Coder,
+	 * `[PREFIX]` / `[SUFFIX]` / `[MIDDLE]` for Codestral, etc. — which
+	 * keeps the model on-distribution. llama.cpp auto-detects the right
+	 * tokens from GGUF metadata.
+	 *
+	 * Sampling defaults follow the llama.vscode reference client:
+	 *   top_k 40, top_p 0.99, samplers: top_k → top_p → infill,
+	 *   temperature 0.2, repeat_penalty to dampen the loops the user was
+	 *   seeing on instruct-only models.
+	 */
 	static async complete(opts: InlineCompletionOptions): Promise<InlineCompletionResult> {
 		const c = config();
 		const apiKey = c.apiKey?.toString().trim();
@@ -35,18 +56,36 @@ export class CompletionService {
 		if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
 
 		const body: Record<string, unknown> = {
-			prompt: opts.prompt,
+			input_prefix: opts.prefix,
+			input_suffix: opts.suffix ?? '',
 			n_predict: opts.maxTokens ?? Number(c.inlineCompletionMaxTokens ?? 48),
 			stream: false,
 			cache_prompt: true,
+			samplers: ['top_k', 'top_p', 'infill'],
+			top_k: 40,
+			top_p: 0.99,
+			temperature: opts.temperature ?? 0.2,
+			// Repetition guard. FIM-trained models rarely loop, but the
+			// fallback path through instruct models (when the GGUF lacks
+			// FIM tokens and llama-server stitches a regular prompt) often
+			// does — repeat_penalty 1.1 is the inflection point that kills
+			// loops without flattening valid repeats like list bullets.
+			repeat_penalty: 1.1,
+			repeat_last_n: 64,
+			// Stop on a paragraph break to keep ghost text inline-shaped.
+			// `\n\n` covers prose, `\n#` / `\n- ` / `\n* ` cover markdown
+			// structural breaks the user is unlikely to want auto-filled.
 			stop: opts.stop ?? ['\n\n', '\n#', '\n- ', '\n* '],
-			temperature: opts.temperature ?? 0.2
+			// Bound generation latency so a slow model can't stall the
+			// editor. Triggers only after the first newline so short
+			// completions still come through.
+			t_max_predict_ms: 2000
 		};
-		// Router mode on /completion also requires a model name.
+		// Router mode requires a model name on every request.
 		const model = selectedModelName();
 		if (model) body.model = model;
 
-		const response = await fetch(resolveApiUrl('/completion'), {
+		const response = await fetch(resolveApiUrl('/infill'), {
 			method: 'POST',
 			headers,
 			body: JSON.stringify(body),
