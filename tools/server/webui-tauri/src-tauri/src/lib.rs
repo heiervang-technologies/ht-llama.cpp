@@ -13,7 +13,14 @@ const RELEASE_PORT: u16 = 5173;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	tauri::Builder::default()
-		.plugin(tauri_plugin_localhost::Builder::new(RELEASE_PORT).build())
+		// Pin the embedded server to 127.0.0.1 — left to its default
+		// "localhost" the plugin's tiny-http binds to whichever IP
+		// glibc returns first, which on this stack is `::1`. WebKit2GTK
+		// then resolves the windows.url's `localhost` to 127.0.0.1
+		// first via /etc/hosts and hits ConnRefused, leaving the
+		// webview white. Pinning IPv4 on both ends avoids that
+		// asymmetry.
+		.plugin(tauri_plugin_localhost::Builder::new(RELEASE_PORT).host("127.0.0.1").build())
 		.setup(|app| {
 			if cfg!(debug_assertions) {
 				app.handle().plugin(

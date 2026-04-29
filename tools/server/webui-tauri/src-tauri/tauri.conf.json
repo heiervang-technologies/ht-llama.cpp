@@ -6,18 +6,19 @@
   "build": {
     "frontendDist": "../../public",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": "cd ../webui && bun run dev -- --host 127.0.0.1",
+    "beforeDevCommand": "cd ../webui && bun run dev -- --host localhost",
     "beforeBuildCommand": "cd ../webui && bun run build"
   },
   "app": {
     "windows": [
       {
         "title": "ht-llama.cpp",
-        "url": "http://localhost:5173/#/",
+        "url": "http://localhost:5173/index.html#/",
         "width": 1280,
         "height": 860,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "decorations": false
       }
     ],
     "security": {
