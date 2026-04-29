@@ -1,8 +1,19 @@
 use tauri::Manager;
 
+/// Port the embedded frontend is served on in release builds.
+///
+/// Locked to 5173 to match `cargo tauri dev`'s vite default. Same port →
+/// same origin → same IndexedDB / localStorage / OPFS, so a user who
+/// accumulated artifacts and settings under `cargo tauri dev` does not
+/// lose them after switching to the optimized release binary. Only one
+/// of {vite, the embedded server} can bind at a time, which is the
+/// intended invariant — you run dev OR release, not both.
+const RELEASE_PORT: u16 = 5173;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	tauri::Builder::default()
+		.plugin(tauri_plugin_localhost::Builder::new(RELEASE_PORT).build())
 		.setup(|app| {
 			if cfg!(debug_assertions) {
 				app.handle().plugin(

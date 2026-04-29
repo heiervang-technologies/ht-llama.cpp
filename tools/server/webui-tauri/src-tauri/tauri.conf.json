@@ -13,7 +13,7 @@
     "windows": [
       {
         "title": "ht-llama.cpp",
-        "url": "index.html#/",
+        "url": "http://localhost:5173/#/",
         "width": 1280,
         "height": 860,
         "resizable": true,
