@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { ChatMessage } from '$lib/components/app';
+	import { ChatMessage, ChatMessagePhantomContext } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -133,14 +133,40 @@
 			siblingInfo: ChatMessageSiblingInfo;
 		}> = [];
 
+		// When the transparency toggle is on, tool messages render as their own
+		// cards (see `ChatMessageTool` + the routing in `ChatMessage.svelte`).
+		// We keep the assistant-grouping loop below for the default (folded)
+		// mode.
+		const standaloneTools = Boolean(currentConfig.showToolMessagesAsStandalone);
+
 		for (let i = 0; i < filteredMessages.length; i++) {
 			const msg = filteredMessages[i];
 
-			// Skip tool messages - they're grouped with preceding assistant
-			if (msg.role === MessageRole.TOOL) continue;
+			// In folded mode, skip tool messages — they're absorbed into the
+			// preceding assistant turn. In standalone mode, emit them as their
+			// own display entries (no sibling controls, no toolMessages group).
+			if (msg.role === MessageRole.TOOL) {
+				if (standaloneTools) {
+					result.push({
+						message: msg,
+						toolMessages: [],
+						isLastAssistantMessage: false,
+						siblingInfo: {
+							message: msg,
+							siblingIds: [msg.id],
+							currentIndex: 0,
+							totalSiblings: 1
+						}
+					});
+				}
+				continue;
+			}
 
 			const toolMessages: DatabaseMessage[] = [];
-			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
+			// In standalone mode we skip the look-ahead that folds tool
+			// messages into the assistant's group — each tool message will
+			// land as its own entry in this same loop.
+			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg) && !standaloneTools) {
 				let j = i + 1;
 
 				while (j < filteredMessages.length) {
@@ -160,7 +186,7 @@
 				}
 
 				i = j - 1;
-			} else if (msg.role === MessageRole.ASSISTANT) {
+			} else if (msg.role === MessageRole.ASSISTANT && !standaloneTools) {
 				let j = i + 1;
 
 				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
@@ -200,6 +226,10 @@
 	class="flex h-full flex-col space-y-10 pt-24 {className}"
 	style="height: auto; min-height: calc(100dvh - 14rem);"
 >
+	{#if currentConfig.showToolMessagesAsStandalone}
+		<ChatMessagePhantomContext />
+	{/if}
+
 	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
 		<div use:fadeInView>
 			<ChatMessage

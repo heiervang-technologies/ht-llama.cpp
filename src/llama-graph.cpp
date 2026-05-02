@@ -18,6 +18,63 @@
 #include <sstream>
 #include <unordered_set>
 
+// TBQ rotation functions (from ggml/src/ggml-turboq.h)
+extern "C" {
+void turboq_rotate_forward(float * y, const float * x, int64_t d, uint64_t seed);
+uint64_t turboq_seed_from_row(int64_t row_idx);
+}
+
+// ---------------------------------------------------------------------------
+// TBQ rotated-domain attention support
+//
+// TBQ stores KV cache values in a rotated domain (Householder rotation).
+// Instead of inverse-rotating every cached vector during dequant (O(seq_len)),
+// we pre-rotate Q once and post-rotate the output once (O(1) per token).
+// This makes TBQ attention cost comparable to q8_0.
+// ---------------------------------------------------------------------------
+
+static std::vector<float> & get_tbq_rotation_matrix() {
+    static std::vector<float> s_rot;
+    if (s_rot.empty()) {
+        const int64_t d = 128;  // TURBOQ_KV_DIM
+        s_rot.resize(d * d);
+
+        float * in  = (float *)calloc(d, sizeof(float));
+        float * out = (float *)malloc(d * sizeof(float));
+        const uint64_t seed = turboq_seed_from_row(0);
+
+        for (int64_t col = 0; col < d; col++) {
+            memset(in, 0, d * sizeof(float));
+            in[col] = 1.0f;
+            turboq_rotate_forward(out, in, d, seed);
+            for (int64_t row = 0; row < d; row++) {
+                s_rot[row * d + col] = out[row];
+            }
+        }
+        free(in);
+        free(out);
+    }
+    return s_rot;
+}
+
+// Graph input for TBQ rotation matrix — fills the tensor before graph eval
+struct llm_graph_input_tbq_rot : public llm_graph_input_i {
+    ggml_tensor * tbq_rot = nullptr;
+
+    void set_input(const llama_ubatch * ubatch) override {
+        GGML_UNUSED(ubatch);
+        if (tbq_rot && tbq_rot->data) {
+            auto & rot = get_tbq_rotation_matrix();
+            memcpy(tbq_rot->data, rot.data(), ggml_nbytes(tbq_rot));
+        }
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        GGML_UNUSED(params);
+        return true;  // rotation matrix never changes
+    }
+};
+
 // dedup helpers
 
 static ggml_tensor * build_attn_inp_kq_mask(
@@ -1940,19 +1997,76 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                float   kq_scale,
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
+    const bool k_is_tbq = k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0;
+    const bool v_is_tbq = v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0;
+    const bool any_tbq  = k_is_tbq || v_is_tbq;
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    const enum ggml_type tbq_attn_type = use_flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    // TBQ rotated-domain attention: create rotation matrix tensor once
+    ggml_tensor * tbq_rot = nullptr;
+    if (any_tbq) {
+        const int64_t d = 128;
+        auto inp_tbq = std::make_unique<llm_graph_input_tbq_rot>();
+        inp_tbq->tbq_rot = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d, d);
+        ggml_set_input(inp_tbq->tbq_rot);
+        ggml_set_name(inp_tbq->tbq_rot, "tbq_rot");
+        tbq_rot = inp_tbq->tbq_rot;
+        res->add_input(std::move(inp_tbq));
+    }
 
     // split the batch into streams if needed
-    const auto n_stream = k->ne[3];
+    const auto n_stream = k_is_tbq ? k->ne[2] : (v_is_tbq ? v->ne[2] : k->ne[3]);
 
     q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
+
+    if (k_is_tbq) {
+        const int64_t n_head_kv = hparams.n_head_kv(il);
+        const int64_t n_embd_k_gqa = k->ne[0];
+
+        GGML_ASSERT(n_head_kv > 0);
+        GGML_ASSERT(n_embd_k_gqa % n_head_kv == 0);
+
+        // Codebook-only dequant: skip rotation (values stay in rotated domain)
+        k = ggml_cast(ctx0, k, tbq_attn_type);
+        int32_t codebook_flag = 1;
+        memcpy(k->op_params, &codebook_flag, sizeof(int32_t));
+        cb(k, use_flash_attn ? "k_tbq_cb_f16" : "k_tbq_cb_f32", il);
+
+        k = ggml_reshape_4d(ctx0, k, n_embd_k_gqa / n_head_kv, n_head_kv, k->ne[1], k->ne[2]);
+        cb(k, "k_tbq_reshaped", il);
+    }
+
+    if (v_is_tbq) {
+        const int64_t n_head_kv = hparams.n_head_kv(il);
+        const int64_t n_embd_v_gqa = v->ne[0];
+
+        GGML_ASSERT(n_head_kv > 0);
+        GGML_ASSERT(n_embd_v_gqa % n_head_kv == 0);
+
+        // Codebook-only dequant: skip rotation
+        v = ggml_cast(ctx0, v, tbq_attn_type);
+        int32_t codebook_flag = 1;
+        memcpy(v->op_params, &codebook_flag, sizeof(int32_t));
+        cb(v, use_flash_attn ? "v_tbq_cb_f16" : "v_tbq_cb_f32", il);
+
+        v = ggml_reshape_4d(ctx0, v, n_embd_v_gqa / n_head_kv, n_head_kv, v->ne[1], v->ne[2]);
+        cb(v, "v_tbq_reshaped", il);
+    }
 
     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
+    // Pre-rotate Q by TBQ rotation matrix so dot products with rotated K are correct
+    if (any_tbq && tbq_rot) {
+        q = ggml_cont(ctx0, q);
+        q = ggml_mul_mat_aux(ctx0, q, tbq_rot);
+        cb(q, "q_tbq_rotated", il);
+    }
+
     ggml_tensor * cur;
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
@@ -2057,6 +2171,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             // all nodes between the KV store and the attention output are run on the CPU
             ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
         }
+    }
+
+    // Post-rotate attention output back from TBQ rotated domain
+    // H_tbq is self-inverse (Householder), so applying it undoes the rotation
+    if (any_tbq && tbq_rot) {
+        cur = ggml_cont(ctx0, cur);
+        cur = ggml_mul_mat_aux(ctx0, cur, tbq_rot);
+        cb(cur, "attn_tbq_unrotated", il);
     }
 
     ggml_build_forward_expand(gf, cur);

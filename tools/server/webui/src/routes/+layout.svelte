@@ -3,7 +3,7 @@
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
 		ChatSidebar,
 		DialogConversationTitleUpdate,
@@ -28,7 +28,25 @@
 
 	let { children } = $props();
 
+	// Tag the boot splash (defined inline in app.html) with `.hide` once
+	// the root layout is mounted and interactive. The CSS transition
+	// fades it out over 250 ms, then we remove it from the DOM so it
+	// can't intercept clicks. This closes the "green-black blank
+	// screen" window cold-boot used to spend on bundle parse.
+	onMount(() => {
+		if (typeof document === 'undefined') return;
+		const splash = document.getElementById('boot-splash');
+		if (!splash) return;
+		splash.classList.add('hide');
+		splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+		// Safety net in case `transitionend` never fires (e.g. user has
+		// `prefers-reduced-motion`; some browsers skip transitions in
+		// that case so the event is suppressed).
+		setTimeout(() => splash.remove(), 600);
+	});
+
 	let isChatRoute = $derived(page.route.id === '/chat/[id]');
+	let isDocRoute = $derived(page.route.id === '/doc/[id]');
 	let isHomeRoute = $derived(page.route.id === '/');
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
@@ -112,8 +130,8 @@
 		} else if (isHomeRoute && isNewChatMode) {
 			// Keep sidebar open in new chat mode
 			sidebarOpen = true;
-		} else if (isChatRoute) {
-			// On chat routes, only auto-show sidebar if setting is enabled
+		} else if (isChatRoute || isDocRoute) {
+			// On chat/doc routes, only auto-show sidebar if setting is enabled
 			if (autoShowSidebarOnNewChat) {
 				sidebarOpen = true;
 			}
@@ -207,6 +225,16 @@
 					console.error('Error checking API key:', e);
 				});
 		}
+	});
+
+	// Push theme hue settings onto the document root so app.css picks them up.
+	$effect(() => {
+		if (!browser) return;
+		const primary = Number(config().themePrimaryHue);
+		const secondary = Number(config().themeSecondaryHue);
+		const root = document.documentElement;
+		if (Number.isFinite(primary)) root.style.setProperty('--hue-primary', String(primary));
+		if (Number.isFinite(secondary)) root.style.setProperty('--hue-secondary', String(secondary));
 	});
 
 	// Set up title update confirmation callback

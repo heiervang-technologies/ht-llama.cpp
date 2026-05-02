@@ -468,3 +468,21 @@ export { default as DialogMcpResources } from './DialogMcpResources.svelte';
  * ```
  */
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
+
+/**
+ * **DialogAvailableTools** - Model tool-surface inspector
+ *
+ * Shows exactly what the model sees on the next chat turn: MCP tools that
+ * will be serialised into the `tools[]` request array (with expandable
+ * JSON schemas + one-click copy), built-in features active at the
+ * prompt/pipeline layer (reasoning parsing, python interpreter, continue
+ * generation, inline completions), and user-defined AI commands local to
+ * the doc editor. Everything derives off the live stores so the dialog
+ * mirrors the real pipeline state at open time.
+ *
+ * @example
+ * ```svelte
+ * <DialogAvailableTools bind:open={showToolsDialog} />
+ * ```
+ */
+export { default as DialogAvailableTools } from './DialogAvailableTools.svelte';

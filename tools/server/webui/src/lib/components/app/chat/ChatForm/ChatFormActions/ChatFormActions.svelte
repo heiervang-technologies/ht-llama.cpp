@@ -4,17 +4,18 @@
 	import {
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionAttachmentsSheet,
+		ChatFormActionImageGen,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
-		McpServersSelector,
-		ModelsSelector,
-		ModelsSelectorSheet
+		McpServersSelector
 	} from '$lib/components/app';
+	import ChainPicker from './ChainPicker.svelte';
 	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
+	import { SttService } from '$lib/services/stt.service';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
@@ -28,7 +29,7 @@
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
-		hasText?: boolean;
+		isTranscribing?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -44,7 +45,7 @@
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
-		hasText = false,
+		isTranscribing = false,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -134,9 +135,15 @@
 	let hasAudioAttachments = $derived(
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
-	let shouldShowRecordButton = $derived(
-		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
-	);
+	// Whether the active LLM accepts audio natively, or STT is configured, is
+	// passed through to the record button for its tooltip copy. Recording
+	// itself only requires mic permission; if neither path is set up we still
+	// attach the .wav so the user never hits a silent no-op.
+	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
+	// Mic is always visible alongside the send button (conversation-first UX).
+	// Hide only while a reply is streaming or when there's already an audio
+	// attachment queued.
+	let shouldShowRecordButton = $derived(!isLoading && !hasAudioAttachments);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 
@@ -165,12 +172,12 @@
 		return '';
 	});
 
-	let selectorModelRef: ModelsSelector | ModelsSelectorSheet | undefined = $state(undefined);
+	let chainPickerRef: ChainPicker | undefined = $state(undefined);
 
 	let isMobile = new IsMobile();
 
 	export function openModelSelector() {
-		selectorModelRef?.open();
+		chainPickerRef?.openModelSelector();
 	}
 
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -222,26 +229,19 @@
 			{disabled}
 			onSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 		/>
+
+		<ChatFormActionImageGen {disabled} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
-		{#if isMobile.current}
-			<ModelsSelectorSheet
-				disabled={disabled || isOffline}
-				bind:this={selectorModelRef}
-				currentModel={conversationModel}
-				forceForegroundText
-				useGlobalSelection
-			/>
-		{:else}
-			<ModelsSelector
-				disabled={disabled || isOffline}
-				bind:this={selectorModelRef}
-				currentModel={conversationModel}
-				forceForegroundText
-				useGlobalSelection
-			/>
-		{/if}
+		<ChainPicker
+			bind:this={chainPickerRef}
+			{disabled}
+			{isOffline}
+			{activeModelId}
+			{conversationModel}
+			{isRouter}
+		/>
 	</div>
 
 	{#if isLoading}
@@ -257,9 +257,19 @@
 				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
-	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
 	{:else}
+		{#if shouldShowRecordButton}
+			<ChatFormActionRecord
+				{disabled}
+				{hasAudioModality}
+				{sttReady}
+				{isLoading}
+				{isRecording}
+				{isTranscribing}
+				{onMicClick}
+			/>
+		{/if}
+
 		<ChatFormActionSubmit
 			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}

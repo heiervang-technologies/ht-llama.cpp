@@ -5,22 +5,37 @@
 
 import { browser } from '$app/environment';
 import { MimeTypeApplication, MimeTypeImage } from '$lib/enums';
-import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {
 	items: Array<{ str: string }>;
 };
 
-if (browser) {
-	// Import worker as text and create blob URL for inline bundling
-	import('pdfjs-dist/build/pdf.worker.min.mjs?raw')
-		.then((workerModule) => {
-			const workerBlob = new Blob([workerModule.default], { type: 'application/javascript' });
-			pdfjs.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
-		})
-		.catch(() => {
-			console.warn('Failed to load PDF.js worker, PDF processing may not work');
-		});
+// pdfjs is ~500 KB gzipped of wasm+js. We only need it when a user
+// actually drops a PDF attachment, so load it lazily the first time
+// `convertPDFToText` / `convertPDFToImage` is called. The promise is
+// cached so the second call is cheap. This keeps cold boot lean on
+// the ~98 % of sessions that never touch a PDF.
+type Pdfjs = typeof import('pdfjs-dist');
+let pdfjsPromise: Promise<Pdfjs> | null = null;
+async function loadPdfjs(): Promise<Pdfjs> {
+	if (!pdfjsPromise) {
+		pdfjsPromise = (async () => {
+			const mod = await import('pdfjs-dist');
+			// Worker: load as raw text in parallel, wrap in a blob URL so
+			// it ships inside the chunk rather than as a separate network
+			// request. Swallow failures — pdfjs still works (just slower)
+			// without the worker.
+			try {
+				const w = await import('pdfjs-dist/build/pdf.worker.min.mjs?raw');
+				const blob = new Blob([w.default], { type: 'application/javascript' });
+				mod.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+			} catch {
+				console.warn('PDF.js worker unavailable; falling back to main-thread parsing');
+			}
+			return mod;
+		})();
+	}
+	return pdfjsPromise;
 }
 
 /**
@@ -56,6 +71,7 @@ export async function convertPDFToText(file: File): Promise<string> {
 	}
 
 	try {
+		const pdfjs = await loadPdfjs();
 		const buffer = await getFileAsBuffer(file);
 		const pdf = await pdfjs.getDocument(buffer).promise;
 		const numPages = pdf.numPages;
@@ -93,6 +109,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	}
 
 	try {
+		const pdfjs = await loadPdfjs();
 		const buffer = await getFileAsBuffer(file);
 		const doc = await pdfjs.getDocument(buffer).promise;
 		const pages: Promise<string>[] = [];

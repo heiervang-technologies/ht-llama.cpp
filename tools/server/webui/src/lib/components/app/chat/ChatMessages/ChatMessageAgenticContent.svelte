@@ -5,6 +5,7 @@
 		MarkdownContent,
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
+	import ToolResultArtifactPreviews from './ToolResultArtifactPreviews.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
@@ -222,6 +223,17 @@
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
+
+		<!-- Gallery artifacts referenced in the tool result rendered
+		     OUTSIDE the collapsible card so the user sees the actual
+		     image / video / audio even when the tool-call is collapsed
+		     (which is the default for completed calls). Without this,
+		     a `generate_image` reply just looks like an empty
+		     "Wrench: generate_image" pill until you click to expand,
+		     which misses the image-render contract. -->
+		{#if section.toolResult}
+			<ToolResultArtifactPreviews toolResult={section.toolResult} />
+		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}

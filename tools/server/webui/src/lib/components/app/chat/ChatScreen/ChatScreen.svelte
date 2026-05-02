@@ -1,15 +1,16 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import {
+		ArtifactDrawer,
 		ChatScreenForm,
 		ChatScreenHeader,
 		ChatMessages,
 		ChatScreenProcessingInfo,
 		DialogEmptyFileAlert,
-		DialogChatError,
 		ServerLoadingSplash,
 		DialogConfirmation
 	} from '$lib/components/app';
+	import { toast } from 'svelte-sonner';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { KeyboardKey } from '$lib/enums';
@@ -32,10 +33,13 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { tryHandleSlashCommand } from '$lib/services/chat-slash-commands';
+	import { extractMarkdownDataImageAttachments } from '$lib/utils/extract-markdown-images';
 	import { ErrorDialogType } from '$lib/enums';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { Trash2, AlertTriangle, RefreshCw } from '@lucide/svelte';
+	import { Trash2, AlertTriangle, FileText, RefreshCw } from '@lucide/svelte';
+	import { docsStore } from '$lib/stores/docs.svelte';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 
 	let { showCenteredEmpty = false } = $props();
@@ -138,6 +142,19 @@
 		return false;
 	});
 
+	// A video attachment is accepted when the model natively supports video,
+	// OR when at least one of its output channels (vision / audio) lets us
+	// fall back to the frames+audio decomposition path.
+	let hasVideoModality = $derived.by(() => {
+		if (!activeModelId) return false;
+		void modelPropsVersion;
+		if (modelsStore.modelSupportsVideo(activeModelId)) return true;
+		return (
+			modelsStore.modelSupportsVision(activeModelId) ||
+			modelsStore.modelSupportsAudio(activeModelId)
+		);
+	});
+
 	async function handleDeleteConfirm() {
 		const conversation = activeConversation();
 
@@ -168,11 +185,31 @@
 		}
 	}
 
-	function handleErrorDialogOpenChange(open: boolean) {
-		if (!open) {
-			chatStore.dismissErrorDialog();
-		}
-	}
+	$effect(() => {
+		const err = activeErrorDialog;
+		if (!err) return;
+		// Render the error as a non-blocking toast instead of a modal takeover.
+		// The chat history stays visible and the user can keep typing while
+		// they read the message.
+		const isTimeout = err.type === ErrorDialogType.TIMEOUT;
+		const title = isTimeout ? 'Request timed out' : 'Server error';
+		const ctx = err.contextInfo;
+		const detail = ctx
+			? `${err.message}\nPrompt tokens: ${ctx.n_prompt_tokens.toLocaleString()}${
+					ctx.n_ctx ? ` · context size: ${ctx.n_ctx.toLocaleString()}` : ''
+				}`
+			: err.message;
+		toast.error(title, {
+			description: detail,
+			// Long enough to read, short enough not to linger. Users can dismiss
+			// manually via the X.
+			duration: 10_000,
+			closeButton: true
+		});
+		// Drain the state immediately so the effect doesn't retrigger and so
+		// subsequent errors always fire a fresh toast.
+		chatStore.dismissErrorDialog();
+	});
 
 	function handleDragOver(event: DragEvent) {
 		event.preventDefault();
@@ -236,6 +273,19 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+		// Intercept composer slash commands before the normal chat
+		// pipeline. `/image <prompt>` dispatches the images proxy
+		// directly (no LLM round-trip); `/edit` and `/video` toast a
+		// coming-soon notice. Attached files are ignored for slash
+		// turns — the grammar is pure text today.
+		if (!files || files.length === 0) {
+			if (await tryHandleSlashCommand(message)) {
+				autoScroll.enable();
+				autoScroll.scrollToBottom();
+				return true;
+			}
+		}
+
 		const plainFiles = files ? $state.snapshot(files) : undefined;
 		const result = plainFiles
 			? await parseFilesToMessageExtras(plainFiles, activeModelId ?? undefined)
@@ -254,9 +304,16 @@
 
 		const extras = result?.extras;
 
+		// Lift inline `![](data:image/...)` refs into attachment extras so the
+		// vision encoder receives them, while the text keeps the markdown so
+		// the image still renders inline in the user bubble.
+		const inlineImageExtras = extractMarkdownDataImageAttachments(message);
+		const mergedExtras =
+			inlineImageExtras.length > 0 ? [...(extras ?? []), ...inlineImageExtras] : extras;
+
 		// Enable autoscroll for user-initiated message sending
 		autoScroll.enable();
-		await chatStore.sendMessage(message, extras);
+		await chatStore.sendMessage(message, mergedExtras);
 		autoScroll.scrollToBottom();
 
 		return true;
@@ -275,7 +332,11 @@
 		}
 
 		// Use model-specific capabilities for file validation
-		const capabilities = { hasVision: hasVisionModality, hasAudio: hasAudioModality };
+		const capabilities = {
+			hasVision: hasVisionModality,
+			hasAudio: hasAudioModality,
+			hasVideo: hasVideoModality
+		};
 		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(
 			generallySupported,
 			capabilities
@@ -325,6 +386,16 @@
 			initialMessage = pendingDraft.message;
 			uploadedFiles = pendingDraft.files;
 		}
+
+		try {
+			const docSeed = globalThis.sessionStorage?.getItem('pendingDocSeed');
+			if (docSeed) {
+				initialMessage = docSeed;
+				globalThis.sessionStorage?.removeItem('pendingDocSeed');
+			}
+		} catch {
+			/* ignore */
+		}
 	});
 
 	$effect(() => {
@@ -348,7 +419,7 @@
 	<div
 		bind:this={chatScrollContainer}
 		aria-label="Chat interface with file drop zone"
-		class="flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
+		class="chat-scroll-container flex h-full flex-col-reverse overflow-y-auto px-4 md:px-6"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
@@ -427,7 +498,7 @@
 	>
 		<div class="w-full max-w-[48rem] px-4">
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
-				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">llama.cpp</h1>
+				<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">ht-llama.cpp</h1>
 
 				<p class="text-muted-foreground md:text-lg">
 					{serverStore.props?.modalities?.audio
@@ -472,6 +543,17 @@
 					showHelperText
 					bind:uploadedFiles
 				/>
+
+				<div class="mt-6 flex justify-center">
+					<button
+						type="button"
+						onclick={() => docsStore.createDoc()}
+						class="inline-flex items-center gap-2 rounded-full border border-border/60 bg-background/60 px-4 py-2 text-sm text-muted-foreground backdrop-blur transition-colors hover:bg-background hover:text-foreground"
+					>
+						<FileText class="h-4 w-4" />
+						Or start a document
+					</button>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -568,15 +650,22 @@
 	}}
 />
 
-<DialogChatError
-	message={activeErrorDialog?.message ?? ''}
-	contextInfo={activeErrorDialog?.contextInfo}
-	onOpenChange={handleErrorDialogOpenChange}
-	open={Boolean(activeErrorDialog)}
-	type={activeErrorDialog?.type ?? ErrorDialogType.SERVER}
-/>
+<ArtifactDrawer />
 
 <style>
+	/*
+	 * Chrome/WebKit scroll anchoring picks an element near the top of the
+	 * viewport and shifts scrollTop to keep it in view as content grows. In a
+	 * column-reverse streaming chat this fights our AutoScrollController — the
+	 * browser clings to an older message while new tokens arrive, producing a
+	 * "scroll jumps back up" effect. Letting the controller own scroll
+	 * position by disabling the browser heuristic.
+	 */
+	.chat-scroll-container,
+	.chat-scroll-container * {
+		overflow-anchor: none;
+	}
+
 	.conversation-chat-form {
 		position: relative;
 

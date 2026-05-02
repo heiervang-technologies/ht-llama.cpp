@@ -1,5 +1,8 @@
 <script lang="ts">
-	import hljs from 'highlight.js';
+	// See the comment in `$lib/utils/code.ts` — shipping the 36-language
+	// `common` bundle instead of the full 192-language default shaves
+	// ~1.2 MB off the webui cold-boot payload.
+	import hljs from 'highlight.js/lib/common';
 	import { browser } from '$app/environment';
 	import { mode } from 'mode-watcher';
 

@@ -292,6 +292,7 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool remap_developer_role = false;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;

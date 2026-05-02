@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
 	import { ChatFormHelperText, ChatForm } from '$lib/components/app';
+	import ChatTerminalDrawer from './ChatTerminalDrawer.svelte';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -118,5 +119,7 @@
 		onUploadedFileRemove={handleUploadedFileRemove}
 	/>
 </div>
+
+<ChatTerminalDrawer />
 
 <ChatFormHelperText show={showHelperText} />

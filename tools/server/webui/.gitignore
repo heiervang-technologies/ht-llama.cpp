@@ -26,3 +26,6 @@ vite.config.ts.timestamp-*
 *storybook.log
 storybook-static
 *.code-workspace
+
+# Bundle analyzer output (opt-in via ANALYZE=1 npm run build)
+/dist/

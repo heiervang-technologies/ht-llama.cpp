@@ -1,10 +1,34 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import type { McpServerOverride } from '$lib/types/database';
+import type {
+	DatabaseArtifact,
+	DatabaseArtifactRevision,
+	DatabaseDoc,
+	McpServerOverride
+} from '$lib/types/database';
+
+/**
+ * Single-row secrets table — used for credentials that we don't want
+ * sitting in localStorage alongside ordinary preferences. Each row is
+ * `{ key, value }` keyed by `key`. Stored in IndexedDB without
+ * encryption — this is a "treat as sensitive" signal, not a security
+ * boundary. The threat model on a trusted desktop / Tauri install is
+ * "an XSS could read either store anyway", but keeping passwords out
+ * of the prefs blob makes export/import flows and accidental console
+ * dumps safer.
+ */
+export interface DatabaseSecret {
+	key: string;
+	value: string;
+}
 
 class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<DatabaseConversation, string>;
 	messages!: EntityTable<DatabaseMessage, string>;
+	docs!: EntityTable<DatabaseDoc, 'id'>;
+	artifacts!: EntityTable<DatabaseArtifact, 'id'>;
+	artifactRevisions!: EntityTable<DatabaseArtifactRevision, 'id'>;
+	secrets!: EntityTable<DatabaseSecret, 'key'>;
 
 	constructor() {
 		super('LlamacppWebui');
@@ -12,6 +36,35 @@ class LlamacppDatabase extends Dexie {
 		this.version(1).stores({
 			conversations: 'id, lastModified, currNode, name',
 			messages: 'id, convId, type, role, timestamp, parent, children'
+		});
+
+		this.version(2).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name'
+		});
+
+		// v3: artifact gallery + per-artifact revisions. Composite index
+		// [sourceConversationId+sourceMessageSlot] is how the auto-capture hook
+		// finds the existing artifact when a turn is regenerated.
+		this.version(3).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name',
+			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
+			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash'
+		});
+
+		// v4: secrets table for sensitive prefs (Nextcloud app password,
+		// future API tokens). Keyed by `key` so we can put/get/delete
+		// by name without listing.
+		this.version(4).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name',
+			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
+			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash',
+			secrets: 'key'
 		});
 	}
 }
@@ -487,5 +540,225 @@ export class DatabaseService {
 
 			return newConv;
 		});
+	}
+
+	/**
+	 *
+	 *
+	 * Docs
+	 *
+	 *
+	 */
+
+	static async listDocs(): Promise<DatabaseDoc[]> {
+		return await db.docs.orderBy('lastModified').reverse().toArray();
+	}
+
+	static async getDoc(id: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.get(id);
+	}
+
+	/**
+	 * Look up a doc by `name`, case-insensitively. Used by the ai-patch
+	 * live-chat bootstrap (commit 5) to resolve a filename line above a
+	 * SEARCH/REPLACE fence to a persisted doc. Returns `undefined` on miss;
+	 * callers treat that as an unambiguous `E_NO_TARGET` (never a fuzzy
+	 * filename guess).
+	 */
+	static async findDocByName(name: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.where('name').equalsIgnoreCase(name).first();
+	}
+
+	static async createDoc(name: string, content = ''): Promise<DatabaseDoc> {
+		const now = Date.now();
+		const doc: DatabaseDoc = {
+			id: uuid(),
+			name,
+			content,
+			createdAt: now,
+			lastModified: now
+		};
+		await db.docs.add(doc);
+		return doc;
+	}
+
+	static async updateDoc(
+		id: string,
+		updates: Partial<Omit<DatabaseDoc, 'id' | 'createdAt'>>
+	): Promise<void> {
+		await db.docs.update(id, { ...updates, lastModified: Date.now() });
+	}
+
+	static async deleteDoc(id: string): Promise<void> {
+		await db.docs.delete(id);
+	}
+
+	/**
+	 *
+	 *
+	 * Artifacts
+	 *
+	 *
+	 */
+
+	static async listArtifacts(): Promise<DatabaseArtifact[]> {
+		return await db.artifacts.orderBy('updatedAt').reverse().toArray();
+	}
+
+	static async getArtifact(id: string): Promise<DatabaseArtifact | undefined> {
+		return await db.artifacts.get(id);
+	}
+
+	static async listArtifactRevisions(artifactId: string): Promise<DatabaseArtifactRevision[]> {
+		return await db.artifactRevisions
+			.where('artifactId')
+			.equals(artifactId)
+			.sortBy('revisionNumber');
+	}
+
+	static async getArtifactRevision(
+		revisionId: string
+	): Promise<DatabaseArtifactRevision | undefined> {
+		return await db.artifactRevisions.get(revisionId);
+	}
+
+	/**
+	 * Finds the existing artifact for a given conversation + slot, if any.
+	 * Slot is the caller's choice: for chat it's typically
+	 * `${messageId}#${artifactIndex}` at capture time, but on regenerate the
+	 * hook supplies the stable pre-regenerate slot so we match the prior
+	 * chain and append a revision instead of creating a new artifact.
+	 */
+	static async findArtifactBySlot(
+		conversationId: string,
+		slot: string
+	): Promise<DatabaseArtifact | undefined> {
+		return await db.artifacts
+			.where('[sourceConversationId+sourceMessageSlot]')
+			.equals([conversationId, slot])
+			.first();
+	}
+
+	/**
+	 * Creates a brand-new artifact with its initial revision. All writes
+	 * happen in one Dexie transaction so a crash mid-save can't leave an
+	 * artifact without at least one revision.
+	 */
+	static async createArtifact(
+		meta: Omit<DatabaseArtifact, 'id' | 'currentRevisionId' | 'createdAt' | 'updatedAt'>,
+		revision: Omit<
+			DatabaseArtifactRevision,
+			'id' | 'artifactId' | 'revisionNumber' | 'createdAt' | 'reason' | 'parentRevisionId'
+		> & { reason?: DatabaseArtifactRevision['reason'] }
+	): Promise<{ artifact: DatabaseArtifact; revision: DatabaseArtifactRevision }> {
+		return await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			const now = Date.now();
+			const artifactId = uuid();
+			const revisionId = uuid();
+			const rev: DatabaseArtifactRevision = {
+				id: revisionId,
+				artifactId,
+				revisionNumber: 1,
+				createdAt: now,
+				reason: revision.reason ?? 'initial',
+				contentHash: revision.contentHash,
+				mimeType: revision.mimeType,
+				text: revision.text,
+				blob: revision.blob,
+				sourceMessageId: revision.sourceMessageId,
+				metadata: revision.metadata
+			};
+			const artifact: DatabaseArtifact = {
+				...meta,
+				id: artifactId,
+				currentRevisionId: revisionId,
+				createdAt: now,
+				updatedAt: now
+			};
+			await db.artifacts.add(artifact);
+			await db.artifactRevisions.add(rev);
+			return { artifact, revision: rev };
+		});
+	}
+
+	/**
+	 * Appends a new revision to an existing artifact and points
+	 * `currentRevisionId` at it. Callers dedupe on contentHash upstream so
+	 * no-op regenerations don't flood the timeline.
+	 */
+	static async appendArtifactRevision(
+		artifactId: string,
+		revision: Omit<
+			DatabaseArtifactRevision,
+			'id' | 'artifactId' | 'revisionNumber' | 'createdAt'
+		> & { reason: DatabaseArtifactRevision['reason'] }
+	): Promise<DatabaseArtifactRevision> {
+		return await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			const artifact = await db.artifacts.get(artifactId);
+			if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+			const last = (
+				await db.artifactRevisions.where('artifactId').equals(artifactId).sortBy('revisionNumber')
+			).at(-1);
+			const now = Date.now();
+			const rev: DatabaseArtifactRevision = {
+				id: uuid(),
+				artifactId,
+				revisionNumber: (last?.revisionNumber ?? 0) + 1,
+				createdAt: now,
+				parentRevisionId: revision.parentRevisionId ?? last?.id,
+				reason: revision.reason,
+				contentHash: revision.contentHash,
+				mimeType: revision.mimeType,
+				text: revision.text,
+				blob: revision.blob,
+				sourceMessageId: revision.sourceMessageId,
+				metadata: revision.metadata
+			};
+			await db.artifactRevisions.add(rev);
+			await db.artifacts.update(artifactId, {
+				currentRevisionId: rev.id,
+				updatedAt: now
+			});
+			return rev;
+		});
+	}
+
+	static async updateArtifact(
+		id: string,
+		updates: Partial<Omit<DatabaseArtifact, 'id' | 'createdAt'>>
+	): Promise<void> {
+		await db.artifacts.update(id, { ...updates, updatedAt: Date.now() });
+	}
+
+	static async deleteArtifact(id: string): Promise<void> {
+		await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			await db.artifactRevisions.where('artifactId').equals(id).delete();
+			await db.artifacts.delete(id);
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Secrets — opaque key/value strings kept out of localStorage.
+	 *
+	 * Use for credentials (app passwords, API tokens) that we want
+	 * separate from the ordinary settings blob. NOT encrypted —
+	 * IndexedDB is plaintext-on-disk, same as localStorage.
+	 *
+	 *
+	 */
+
+	static async getSecret(key: string): Promise<string | null> {
+		const row = await db.secrets.get(key);
+		return row?.value ?? null;
+	}
+
+	static async setSecret(key: string, value: string): Promise<void> {
+		await db.secrets.put({ key, value });
+	}
+
+	static async clearSecret(key: string): Promise<void> {
+		await db.secrets.delete(key);
 	}
 }

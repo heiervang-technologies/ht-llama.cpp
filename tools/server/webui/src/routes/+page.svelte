@@ -4,6 +4,7 @@
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
@@ -84,6 +85,23 @@
 			}
 		}
 
+		// Apply the configured default model when nothing's selected yet and the
+		// named model is currently available. URL param takes precedence (handled
+		// below). Silent when the default doesn't match any available model — a
+		// stale config shouldn't block the user from chatting.
+		const configured = (config().defaultModel ?? '').toString().trim();
+		if (configured && !modelsStore.selectedModelName && !modelParam) {
+			if (modelsStore.models.length === 0) await modelsStore.fetch();
+			const match = modelsStore.findModelByName(configured);
+			if (match) {
+				try {
+					await modelsStore.selectModelById(match.id);
+				} catch (err) {
+					console.warn('[default-model] select failed', configured, err);
+				}
+			}
+		}
+
 		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
 		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
 			await handleUrlParams();
@@ -92,7 +110,7 @@
 </script>
 
 <svelte:head>
-	<title>llama.cpp - AI Chat Interface</title>
+	<title>ht-llama.cpp - AI Chat Interface</title>
 </svelte:head>
 
 <ChatScreen showCenteredEmpty />

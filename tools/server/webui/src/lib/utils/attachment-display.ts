@@ -52,12 +52,14 @@ export function getAttachmentDisplayItems(
 
 	// Add uploaded files (ChatForm)
 	for (const file of uploadedFiles) {
+		const uploadedCategory = getUploadedFileCategory(file);
 		items.push({
 			id: file.id,
 			name: file.name,
 			size: file.size,
 			preview: file.preview,
-			isImage: getUploadedFileCategory(file) === FileTypeCategory.IMAGE,
+			isImage: uploadedCategory === FileTypeCategory.IMAGE,
+			isVideo: uploadedCategory === FileTypeCategory.VIDEO,
 			isMcpPrompt: isMcpPromptUpload(file),
 			isLoading: file.isLoading,
 			loadError: file.loadError,
@@ -69,14 +71,26 @@ export function getAttachmentDisplayItems(
 	// Add stored attachments (ChatMessage)
 	for (const [index, attachment] of attachments.entries()) {
 		const isImage = isImageFile(attachment);
+		const isVideo = attachment.type === AttachmentType.VIDEO;
 		const isMcpPrompt = isMcpPromptAttachment(attachment);
 		const isMcpResource = isMcpResourceAttachment(attachment);
+
+		let preview: string | undefined;
+		if (isImage && 'base64Url' in attachment) {
+			preview = attachment.base64Url;
+		} else if (isVideo && 'base64Url' in attachment) {
+			// Prefer the full video data URL so the attachment preview can
+			// play inline; the poster is only used when we want a still
+			// thumbnail (attachment list in history).
+			preview = attachment.base64Url;
+		}
 
 		items.push({
 			id: `attachment-${index}`,
 			name: attachment.name,
-			preview: isImage && 'base64Url' in attachment ? attachment.base64Url : undefined,
+			preview,
 			isImage,
+			isVideo,
 			isMcpPrompt,
 			isMcpResource,
 			attachment,

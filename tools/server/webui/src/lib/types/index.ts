@@ -28,6 +28,7 @@ export type {
 	ApiRouterModelsStatusRequest,
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsListResponse,
+	ApiDiscoveredLoraAdapter,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse
 } from './api';
@@ -62,8 +63,10 @@ export type {
 	DatabaseMessageExtraMcpResource,
 	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtra,
 	DatabaseMessage,
+	DatabaseDoc,
 	ExportedConversation,
 	ExportedConversations
 } from './database';

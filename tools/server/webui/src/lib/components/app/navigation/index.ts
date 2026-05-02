@@ -63,3 +63,10 @@ export { default as DropdownMenuSearchable } from './DropdownMenuSearchable.svel
  * ```
  */
 export { default as DropdownMenuActions } from './DropdownMenuActions.svelte';
+
+/**
+ * **BackendPill** - Displays configured backend hostname as a themed pill.
+ *
+ * Renders nothing when no custom backend base URL is set.
+ */
+export { default as BackendPill } from './BackendPill.svelte';

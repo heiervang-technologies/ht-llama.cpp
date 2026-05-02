@@ -7,6 +7,9 @@ import { defineConfig, searchForWorkspaceRoot } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { visualizer } from 'rollup-plugin-visualizer';
+
+const ANALYZE_BUNDLE = process.env.ANALYZE === '1';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -35,12 +38,37 @@ export default defineConfig({
 					$use-woff2: true;
 					$use-woff: false;
 					$use-ttf: false;
-				`
+				`,
+				// Silence the Sass deprecation spam from katex upstream
+				// — `katex/src/styles/katex.scss` still uses the legacy
+				// @import + global `nth()` / `length()` builtins. We're
+				// tracking katex, not maintaining it, so silencing the
+				// channel keeps the build log readable without masking
+				// deprecations in our own stylesheets.
+				silenceDeprecations: ['import', 'global-builtin'],
+				quietDeps: true
 			}
 		}
 	},
 
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		devtoolsJson(),
+		llamaCppBuildPlugin(),
+		// Bundle analyzer — opt-in via `ANALYZE=1 npm run build`. Writes
+		// dist/stats.html with a treemap of every module's contribution
+		// to the final bundle. Lets us answer "what is in those 8 MB"
+		// without guessing.
+		ANALYZE_BUNDLE &&
+			visualizer({
+				filename: 'dist/stats.html',
+				template: 'treemap',
+				gzipSize: true,
+				brotliSize: true,
+				open: false
+			})
+	].filter(Boolean),
 
 	test: {
 		projects: [
@@ -95,7 +123,8 @@ export default defineConfig({
 			'/v1': 'http://localhost:8080',
 			'/props': 'http://localhost:8080',
 			'/models': 'http://localhost:8080',
-			'/cors-proxy': 'http://localhost:8080'
+			'/cors-proxy': 'http://localhost:8080',
+			'/lora-adapters': 'http://localhost:8080'
 		},
 		headers: {
 			'Cross-Origin-Embedder-Policy': 'require-corp',

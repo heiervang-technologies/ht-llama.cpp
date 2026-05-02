@@ -40,6 +40,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
+	import { SttService } from '$lib/services/stt.service';
+	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -104,6 +106,11 @@
 	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
+	let isTranscribing = $state(false);
+	// Held while an STT request is in flight so a second mic click can cancel it,
+	// mirroring the doc-editor mic. Without this, a hung STT server would strand
+	// the user in the spinner state.
+	let transcribeAbort: AbortController | null = null;
 
 	// Prompt Picker State
 	let isPromptPickerOpen = $state(false);
@@ -522,7 +529,18 @@
 
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
+			toast.error(
+				'Audio recording is not supported in this browser. Try Chrome, Firefox, or Edge.'
+			);
+			return;
+		}
+
+		// Clicking while transcribing cancels the in-flight STT request so a slow
+		// or hung server doesn't leave the composer frozen.
+		if (isTranscribing) {
+			transcribeAbort?.abort();
+			transcribeAbort = null;
+			isTranscribing = false;
 			return;
 		}
 
@@ -531,12 +549,53 @@
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
-
-				onFilesAdd?.([audioFile]);
 				isRecording = false;
+
+				const sttOn =
+					Boolean(currentConfig.sttEnabled) &&
+					Boolean(currentConfig.sttAutoTranscribe) &&
+					SttService.isConfigured();
+
+				if (sttOn) {
+					isTranscribing = true;
+					const controller = new AbortController();
+					transcribeAbort = controller;
+					try {
+						const text = await SttService.transcribe(audioFile, {
+							signal: controller.signal
+						});
+						if (text) {
+							const current = value ?? '';
+							const needsSpace = current.length > 0 && !/\s$/.test(current);
+							value = current + (needsSpace ? ' ' : '') + text;
+							onValueChange?.(value);
+							// Give the textarea a tick to render, then focus + resize.
+							queueMicrotask(() => textareaRef?.focus());
+							// Voice-only flow: submit automatically when the user has opted
+							// in. Skip when a model response is already streaming so we don't
+							// fire a second request mid-stream.
+							if (currentConfig.sttAutoSend && !isLoading && !disabled) {
+								queueMicrotask(() => onSubmit?.());
+							}
+						}
+					} catch (err) {
+						// Silent on user-initiated aborts — state is already reset above.
+						if ((err as { name?: string })?.name === 'AbortError') return;
+						console.error('STT transcription failed, falling back to file attach:', err);
+						const msg = err instanceof Error ? err.message : String(err);
+						toast.error(`Transcription failed: ${msg}. Attached the recording instead.`);
+						onFilesAdd?.([audioFile]);
+					} finally {
+						if (transcribeAbort === controller) transcribeAbort = null;
+						isTranscribing = false;
+					}
+				} else {
+					onFilesAdd?.([audioFile]);
+				}
 			} catch (error) {
 				console.error('Failed to stop recording:', error);
 				isRecording = false;
+				isTranscribing = false;
 			}
 		} else {
 			try {
@@ -544,6 +603,19 @@
 				isRecording = true;
 			} catch (error) {
 				console.error('Failed to start recording:', error);
+				const name = (error as { name?: string })?.name;
+				const msg = error instanceof Error ? error.message : String(error);
+				if (name === 'NotAllowedError' || name === 'SecurityError') {
+					toast.error(
+						'Microphone permission denied. Enable mic access for this site in your browser settings and try again.'
+					);
+				} else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+					toast.error('No microphone detected. Plug one in or check your system audio settings.');
+				} else if (name === 'NotReadableError') {
+					toast.error('Microphone is busy. Close other apps using the mic and try again.');
+				} else {
+					toast.error(`Could not start recording: ${msg}`);
+				}
 			}
 		}
 	}
@@ -625,10 +697,10 @@
 				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
-				hasText={value.trim().length > 0}
 				{disabled}
 				{isLoading}
 				{isRecording}
+				{isTranscribing}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

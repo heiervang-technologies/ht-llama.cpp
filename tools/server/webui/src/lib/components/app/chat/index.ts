@@ -185,6 +185,15 @@ export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormAc
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
 
 /**
+ * Composer chip that flips the imageGenEnabled flag in one click.
+ * Mirrors the reasoning toggle pattern — one-shot affordance for
+ * something otherwise buried in Settings → Images. When on, the
+ * model sees generate_image / edit_image and the /image slash
+ * command works; when off all three are gated.
+ */
+export { default as ChatFormActionImageGen } from './ChatForm/ChatFormActions/ChatFormActionImageGen.svelte';
+
+/**
  * Container for chat form action buttons. Arranges file attachment, audio record,
  * and submit/stop buttons in a horizontal layout. Handles conditional visibility
  * based on model capabilities and loading state.
@@ -501,6 +510,20 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
 export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.svelte';
 
 /**
+ * Tool message display component. Renders a role=tool result as a dim
+ * dashed-border card when `showToolMessagesAsStandalone` is on.
+ */
+export { default as ChatMessageTool } from './ChatMessages/ChatMessageTool.svelte';
+
+/**
+ * Phantom context card. Rendered above the first message when
+ * `showToolMessagesAsStandalone` is on, showing the system prompt and
+ * every tool definition the model will see on the next turn — handy
+ * for eyeballing prompt context before sending.
+ */
+export { default as ChatMessagePhantomContext } from './ChatMessages/ChatMessagePhantomContext.svelte';
+
+/**
  * User message display component. Renders user messages with right-aligned bubble styling.
  * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
  * Supports inline editing mode with ChatMessageEditForm integration.
@@ -594,6 +617,13 @@ export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
  * Integrated with ChatScreen's drag-drop file upload handling.
  */
 export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOverlay.svelte';
+
+/**
+ * Right-side slide-out drawer for rendering HTML/SVG artifacts extracted from
+ * assistant messages. Reads from artifactsStore and opens automatically the
+ * first time an artifact is registered (unless the user explicitly closed it).
+ */
+export { default as ArtifactDrawer } from './ChatScreen/ArtifactDrawer.svelte';
 
 /**
  * Chat form wrapper within ChatScreen. Positions the ChatForm component at the
@@ -784,6 +814,12 @@ export { default as ChatSidebarActions } from './ChatSidebar/ChatSidebarActions.
  * Handles click to navigate and keyboard accessibility.
  */
 export { default as ChatSidebarConversationItem } from './ChatSidebar/ChatSidebarConversationItem.svelte';
+
+/**
+ * Single document item in sidebar. Mirrors ChatSidebarConversationItem for docs:
+ * cursor-pointer row, tooltip, hover-revealed dropdown with Rename/Delete actions.
+ */
+export { default as ChatSidebarDocItem } from './ChatSidebar/ChatSidebarDocItem.svelte';
 
 /**
  * Search input for filtering conversations in sidebar. Filters conversation
