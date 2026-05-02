@@ -21,6 +21,11 @@ pub fn run() {
 		// webview white. Pinning IPv4 on both ends avoids that
 		// asymmetry.
 		.plugin(tauri_plugin_localhost::Builder::new(RELEASE_PORT).host("127.0.0.1").build())
+		// Routes `fetch` calls from JS through reqwest in the Tauri runtime
+		// rather than WebKit's resource loader. ht-termd traffic uses this
+		// path so a stalled / throttled webview never strands a `send_keys`
+		// invocation. Scope is locked down in `capabilities/default.json`.
+		.plugin(tauri_plugin_http::init())
 		.setup(|app| {
 			if cfg!(debug_assertions) {
 				app.handle().plugin(

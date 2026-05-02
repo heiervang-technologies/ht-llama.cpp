@@ -27,6 +27,12 @@ tauri-plugin-log = "2"
 # :5173) and release (this plugin at :5173) share an origin — IndexedDB,
 # localStorage, and the gallery DB carry over without an export/import dance.
 tauri-plugin-localhost = "2"
+# Reqwest-backed `fetch` from JS. We use it to talk to ht-termd (loopback)
+# so HTTP requests aren't routed through WebKit's resource loader, which
+# stalls under page-throttling when the Tauri window sits on a non-active
+# Hyprland workspace. The plugin handles requests on the Tokio runtime
+# inside the app process; the IPC bridge surfaces the response back to JS.
+tauri-plugin-http = "2"
 
 # Linux-only: reach into the underlying webkit2gtk webview so we can enable
 # MediaStream APIs and auto-approve getUserMedia permission requests. Without

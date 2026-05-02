@@ -18,8 +18,8 @@
 	 * playground) write into the same gallery — `metadata.source` plus
 	 * the `playground` tag is what distinguishes them downstream.
 	 */
-	import { onMount } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { onDestroy, onMount } from 'svelte';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 	import {
 		Image as ImageIcon,
@@ -289,15 +289,42 @@
 			.sort((a, b) => b.updatedAt - a.updatedAt);
 	});
 
-	// Resolved data-URL cache keyed by revisionId, for the history rail
-	// thumbnails. Loaded lazily as artifacts come into view.
+	// Resolved preview-url cache keyed by revisionId, for the history rail
+	// thumbnails. Blob-backed artifact previews use object URLs to avoid
+	// base64 inflation in the webview; user-selected source files still use
+	// data URLs because the generation APIs send those in JSON.
 	let thumbnailCache = new SvelteMap<string, string>();
+	const objectUrls = new SvelteSet<string>();
+	type PlaygroundFinishedRunArg = Parameters<typeof imagePlaygroundStore.finishRun>[0];
 
 	onMount(async () => {
 		// Refresh the gallery so the history rail is populated even if
 		// the user lands here directly without visiting /artifacts.
 		await artifactGalleryStore.load();
 	});
+
+	onDestroy(() => {
+		for (const url of objectUrls) URL.revokeObjectURL(url);
+		objectUrls.clear();
+	});
+
+	function objectUrlFor(blob: Blob): string {
+		const url = URL.createObjectURL(blob);
+		objectUrls.add(url);
+		return url;
+	}
+
+	function releaseObjectUrls(urls: string[] | undefined) {
+		for (const url of urls ?? []) {
+			URL.revokeObjectURL(url);
+			objectUrls.delete(url);
+		}
+	}
+
+	function finishPreviewRun(args: PlaygroundFinishedRunArg) {
+		releaseObjectUrls(imagePlaygroundStore.lastFinished?.revokeUrls);
+		imagePlaygroundStore.finishRun(args);
+	}
 
 	$effect(() => {
 		// Switching task types resets the model selection so we never
@@ -366,12 +393,13 @@
 		}
 	}
 
-	async function loadThumbnail(revisionId: string): Promise<string | null> {
+	async function loadThumbnail(artifact: DatabaseArtifact): Promise<string | null> {
+		const revisionId = artifact.currentRevisionId;
 		const cached = thumbnailCache.get(revisionId);
 		if (cached) return cached;
 		const revision = await DatabaseService.getArtifactRevision(revisionId);
 		if (!revision?.blob) return null;
-		const dataUrl = await blobToDataUrl(revision.blob);
+		const dataUrl = objectUrlFor(revision.blob);
 		thumbnailCache.set(revisionId, dataUrl);
 		return dataUrl;
 	}
@@ -416,14 +444,44 @@
 			toast.error('Could not load that artifact.');
 			return;
 		}
-		const dataUrl = await blobToDataUrl(revision.blob);
+		if (artifact.kind === 'video') {
+			const objectUrl = objectUrlFor(revision.blob);
+			const metadata = (artifact.metadata ?? {}) as Record<string, unknown>;
+			finishPreviewRun({
+				mode: 'video',
+				result: {
+					model: String(
+						metadata.model ??
+							artifact.tags.find((t) => t !== 'generated' && t !== 'playground') ??
+							'video'
+					),
+					size: String(metadata.size ?? 'unknown size'),
+					frames: Number(metadata.frames ?? 0),
+					prompt: String(metadata.prompt ?? artifact.title),
+					jobId: String(metadata.jobId ?? ''),
+					video: {
+						artifactId: artifact.id,
+						revisionId: artifact.currentRevisionId,
+						title: artifact.title,
+						mimeType: revision.mimeType ?? 'video/mp4',
+						bytes: revision.blob.size
+					}
+				},
+				dataUrls: [objectUrl],
+				revokeUrls: [objectUrl],
+				finishedAt: Date.now()
+			});
+			return;
+		}
+		const previewUrl = objectUrlFor(revision.blob);
+		const sourceDataUrl = needsSourceImage ? await blobToDataUrl(revision.blob) : null;
 		// History click ALSO loads the artifact into the source-image
 		// slot for tasks that consume one — saves a re-upload round-trip
 		// when iterating on the same still. Skip for t2i (no source
 		// slot) and flf (ambiguous: would the user mean first or last?
 		// Force them to drag onto the explicit drop zone instead).
-		if (taskType === 'i2i' || taskType === 'i2v' || taskType === 's2v') {
-			editSourceDataUrl = dataUrl;
+		if ((taskType === 'i2i' || taskType === 'i2v' || taskType === 's2v') && sourceDataUrl) {
+			editSourceDataUrl = sourceDataUrl;
 			editSourceArtifactId = artifact.id;
 		}
 		// Don't trample an in-flight run's spinner state. The user can
@@ -432,7 +490,7 @@
 		if (imagePlaygroundStore.active) return;
 		// Show in the canvas as a "viewing existing" preview by writing
 		// to the playground store, same surface a real run uses.
-		imagePlaygroundStore.finishRun({
+		finishPreviewRun({
 			mode: 'generate',
 			result: {
 				model: String(artifact.tags.find((t) => t !== 'generated' && t !== 'playground') ?? '—'),
@@ -447,7 +505,8 @@
 					}
 				]
 			},
-			dataUrls: [dataUrl],
+			dataUrls: [previewUrl],
+			revokeUrls: [previewUrl],
 			finishedAt: Date.now()
 		});
 	}
@@ -677,13 +736,14 @@
 				const dataUrls = await Promise.all(
 					result.images.map(async (img) => {
 						const rev = await DatabaseService.getArtifactRevision(img.revisionId);
-						return rev?.blob ? blobToDataUrl(rev.blob) : Promise.resolve('');
+						return rev?.blob ? objectUrlFor(rev.blob) : Promise.resolve('');
 					})
 				);
-				imagePlaygroundStore.finishRun({
+				finishPreviewRun({
 					mode: 'generate',
 					result,
 					dataUrls,
+					revokeUrls: dataUrls.filter(Boolean),
 					finishedAt: Date.now()
 				});
 			} else if (startedMode === 'edit') {
@@ -701,13 +761,14 @@
 				const dataUrls = await Promise.all(
 					result.images.map(async (img) => {
 						const rev = await DatabaseService.getArtifactRevision(img.revisionId);
-						return rev?.blob ? blobToDataUrl(rev.blob) : Promise.resolve('');
+						return rev?.blob ? objectUrlFor(rev.blob) : Promise.resolve('');
 					})
 				);
-				imagePlaygroundStore.finishRun({
+				finishPreviewRun({
 					mode: 'edit',
 					result,
 					dataUrls,
+					revokeUrls: dataUrls.filter(Boolean),
 					finishedAt: Date.now()
 				});
 			} else {
@@ -723,11 +784,12 @@
 					signal: controller.signal
 				});
 				const rev = await DatabaseService.getArtifactRevision(result.video.revisionId);
-				const dataUrl = rev?.blob ? await blobToDataUrl(rev.blob) : '';
-				imagePlaygroundStore.finishRun({
+				const objectUrl = rev?.blob ? objectUrlFor(rev.blob) : '';
+				finishPreviewRun({
 					mode: 'video',
 					result,
-					dataUrls: [dataUrl],
+					dataUrls: [objectUrl],
+					revokeUrls: objectUrl ? [objectUrl] : undefined,
 					finishedAt: Date.now()
 				});
 			}
@@ -1291,8 +1353,8 @@
 						class="block overflow-hidden rounded-md border bg-background shadow-sm transition-shadow hover:shadow-md"
 						aria-label="Open video in gallery"
 					>
-						<video src={lastResult.dataUrls[0]} controls autoplay loop muted class="h-auto w-full"
-						></video>
+						<!-- svelte-ignore a11y_media_has_caption -->
+						<video src={lastResult.dataUrls[0]} controls loop class="h-auto w-full"></video>
 					</a>
 					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">
 						<p class="text-foreground"><strong>{videoResult.prompt}</strong></p>
@@ -1343,7 +1405,7 @@
 			{:else}
 				<div class="grid grid-cols-2 gap-2">
 					{#each history.slice(0, 60) as artifact (artifact.id)}
-						{#await loadThumbnail(artifact.currentRevisionId) then dataUrl}
+						{#await loadThumbnail(artifact) then dataUrl}
 							<button
 								type="button"
 								onclick={() => pickFromHistory(artifact)}

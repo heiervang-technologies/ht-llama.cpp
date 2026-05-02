@@ -16,7 +16,8 @@
 	 * silently skipped (this is a non-essential UX nicety, not a hard
 	 * contract — tool authors are not required to produce previews).
 	 */
-	import { SvelteMap } from 'svelte/reactivity';
+	import { onDestroy } from 'svelte';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { DatabaseService } from '$lib/services/database.service';
 
 	interface Props {
@@ -80,27 +81,22 @@
 	});
 
 	const cache = new SvelteMap<string, string>();
+	const objectUrls = new SvelteSet<string>();
+
+	onDestroy(() => {
+		for (const url of objectUrls) URL.revokeObjectURL(url);
+		objectUrls.clear();
+	});
 
 	async function loadRef(revisionId: string): Promise<string | null> {
 		const cached = cache.get(revisionId);
 		if (cached) return cached;
 		const revision = await DatabaseService.getArtifactRevision(revisionId);
 		if (!revision?.blob) return null;
-		const dataUrl = await blobToDataUrl(revision.blob);
+		const dataUrl = URL.createObjectURL(revision.blob);
+		objectUrls.add(dataUrl);
 		cache.set(revisionId, dataUrl);
 		return dataUrl;
-	}
-
-	function blobToDataUrl(blob: Blob): Promise<string> {
-		return new Promise((resolve, reject) => {
-			const reader = new FileReader();
-			reader.onloadend = () => {
-				if (typeof reader.result === 'string') resolve(reader.result);
-				else reject(new Error('FileReader did not return a string'));
-			};
-			reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
-			reader.readAsDataURL(blob);
-		});
 	}
 </script>
 

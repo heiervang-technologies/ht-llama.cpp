@@ -105,13 +105,54 @@ function baseOrThrow(): string {
 	return base.replace(/\/+$/, '');
 }
 
+/** Per-request timeout. Termd serves loopback in single-digit ms; if the
+ *  webview pool stalls, we'd rather surface a clean error than hang the
+ *  agentic tool loop forever. The Tauri-plugin-http path is unaffected
+ *  by webview throttling but still benefits from a deadline. */
+const REQUEST_TIMEOUT_MS = 5000;
+
+/** Lazy import of the Tauri-plugin-http `fetch`. Falls back to
+ *  `window.fetch` in the browser / dev mode. We use the plugin in the
+ *  desktop shell to side-step WebKit2GTK's resource-loader stall when
+ *  the Tauri window sits on a non-active Hyprland workspace — reqwest
+ *  on the Rust runtime is not subject to page throttling, so HTTP
+ *  requests proceed even when JS is suspended-ish. */
+async function getFetch(): Promise<typeof fetch> {
+	if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+		try {
+			const mod = await import('@tauri-apps/plugin-http');
+			return mod.fetch as unknown as typeof fetch;
+		} catch {
+			/* plugin missing (dev w/o tauri context) — fall through */
+		}
+	}
+	return fetch;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const token = resolveTermdToken();
 	const headers = new Headers(init?.headers ?? {});
 	if (token && !headers.has('Authorization')) {
 		headers.set('Authorization', `Bearer ${token}`);
 	}
-	const res = await fetch(`${baseOrThrow()}${path}`, { ...init, headers });
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	const doFetch = await getFetch();
+	let res: Response;
+	try {
+		res = await doFetch(`${baseOrThrow()}${path}`, {
+			...init,
+			headers,
+			signal: init?.signal ?? controller.signal
+		});
+	} catch (err) {
+		if ((err as { name?: string })?.name === 'AbortError') {
+			throw new Error(`ht-termd ${path} timed out after ${REQUEST_TIMEOUT_MS}ms`);
+		}
+		throw err;
+	} finally {
+		clearTimeout(timer);
+	}
 	if (!res.ok) {
 		let detail = '';
 		try {

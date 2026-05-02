@@ -31,15 +31,16 @@ export interface PlaygroundActiveRun {
 }
 
 /**
- * `dataUrls` is one entry per produced asset — for image runs there
- * are typically 1-4, for video there is exactly one mp4 data URL.
- * The canvas decides how to render based on `mode` (img tag vs
- * video tag).
+ * `dataUrls` is one preview URL per produced asset. Most entries are Blob
+ * object URLs so the webview doesn't inflate binary media into base64
+ * strings; older callers may still pass data URLs. The canvas decides how
+ * to render based on `mode` (img tag vs video tag).
  */
 export interface PlaygroundFinishedRun {
 	mode: Mode;
 	result: RunImageGenerationResult | RunImageEditResult | RunVideoGenerationResult;
 	dataUrls: string[];
+	revokeUrls?: string[];
 	finishedAt: number;
 }
 
@@ -52,6 +53,9 @@ class ImagePlaygroundStore {
 	}
 
 	finishRun(finished: PlaygroundFinishedRun) {
+		for (const url of this.lastFinished?.revokeUrls ?? []) {
+			URL.revokeObjectURL(url);
+		}
 		this.active = null;
 		this.lastFinished = finished;
 	}

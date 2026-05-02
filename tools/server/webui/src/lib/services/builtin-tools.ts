@@ -428,30 +428,16 @@ register({
 			});
 		}
 
-		// Reuse the termd service's URL resolution so `send_keys`
-		// works identically from the Tauri sidecar or a manually-
-		// configured endpoint. Imported lazily to avoid a circular
-		// dependency with `services/termd.service.ts` at module load.
-		const { resolveTermdUrl } = await import('./termd.service');
-		const base = resolveTermdUrl();
-		if (!base) return err('terminals are not configured (no ht-termd URL)');
-
-		const res = await fetch(
-			`${base.replace(/\/+$/, '')}/v1/terminals/${encodeURIComponent(terminalId)}/input`,
-			{
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ text, auto_enter: autoEnter })
-			}
-		);
-		if (!res.ok) {
-			let detail = '';
-			try {
-				detail = ((await res.json()) as { error?: string }).error ?? '';
-			} catch {
-				/* ignore non-JSON error body */
-			}
-			return err(detail || `HTTP ${res.status}`);
+		// Route through TermdService.sendInput so we get the Tauri-
+		// plugin-http path (when running inside the desktop shell) and
+		// the per-request timeout. Hitting `window.fetch` directly here
+		// would bypass both — and was the source of the "second
+		// send_keys hangs forever" bug under Hyprland workspace
+		// throttling.
+		try {
+			await TermdService.sendInput(terminalId, { text, auto_enter: autoEnter });
+		} catch (e) {
+			return err(e instanceof Error ? e.message : String(e));
 		}
 		return ok({ sent: text.length, mode });
 	}
