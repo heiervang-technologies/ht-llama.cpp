@@ -227,14 +227,20 @@
 		}
 	});
 
-	// Push theme hue settings onto the document root so app.css picks them up.
+	// Push theme hue / chroma / mode onto the document root so app.css picks them up.
 	$effect(() => {
 		if (!browser) return;
 		const primary = Number(config().themePrimaryHue);
 		const secondary = Number(config().themeSecondaryHue);
+		const chroma = Number(config().themeChromaScale);
+		const mode = String(config().themeMode ?? 'colorful');
 		const root = document.documentElement;
 		if (Number.isFinite(primary)) root.style.setProperty('--hue-primary', String(primary));
 		if (Number.isFinite(secondary)) root.style.setProperty('--hue-secondary', String(secondary));
+		if (Number.isFinite(chroma))
+			root.style.setProperty('--theme-chroma-scale', String(Math.max(0, Math.min(1, chroma))));
+		root.classList.toggle('theme-pure-black', mode === 'pure-black');
+		root.classList.toggle('theme-pure-white', mode === 'pure-white');
 	});
 
 	// Set up title update confirmation callback

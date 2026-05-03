@@ -27,7 +27,8 @@ export const NUMERIC_FIELDS = [
 	'inlineCompletionDelay',
 	'inlineCompletionMaxTokens',
 	'themePrimaryHue',
-	'themeSecondaryHue'
+	'themeSecondaryHue',
+	'themeChromaScale'
 ] as const;
 
 /**

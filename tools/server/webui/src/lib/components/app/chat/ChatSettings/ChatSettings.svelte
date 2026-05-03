@@ -521,6 +521,23 @@
 		}
 	}
 
+	function handleChromaChange(value: number) {
+		const clamped = Math.max(0, Math.min(1, value));
+		localConfig.themeChromaScale = clamped;
+		if (typeof document !== 'undefined') {
+			document.documentElement.style.setProperty('--theme-chroma-scale', String(clamped));
+		}
+	}
+
+	function handleThemeModeChange(mode: 'colorful' | 'pure-black' | 'pure-white') {
+		localConfig.themeMode = mode;
+		if (typeof document !== 'undefined') {
+			const root = document.documentElement;
+			root.classList.toggle('theme-pure-black', mode === 'pure-black');
+			root.classList.toggle('theme-pure-white', mode === 'pure-white');
+		}
+	}
+
 	function handleReset() {
 		localConfig = { ...config() };
 
@@ -534,8 +551,14 @@
 		const root = document.documentElement;
 		const p = Number(localConfig.themePrimaryHue);
 		const s = Number(localConfig.themeSecondaryHue);
+		const c = Number(localConfig.themeChromaScale);
+		const mode = String(localConfig.themeMode ?? 'colorful');
 		if (Number.isFinite(p)) root.style.setProperty('--hue-primary', String(p));
 		if (Number.isFinite(s)) root.style.setProperty('--hue-secondary', String(s));
+		if (Number.isFinite(c))
+			root.style.setProperty('--theme-chroma-scale', String(Math.max(0, Math.min(1, c))));
+		root.classList.toggle('theme-pure-black', mode === 'pure-black');
+		root.classList.toggle('theme-pure-white', mode === 'pure-white');
 	}
 
 	function handleSave() {
@@ -740,7 +763,17 @@
 								secondary={Number.isFinite(Number(localConfig.themeSecondaryHue))
 									? Number(localConfig.themeSecondaryHue)
 									: 190}
-								onChange={handleHueChange}
+								chroma={Number.isFinite(Number(localConfig.themeChromaScale))
+									? Math.max(0, Math.min(1, Number(localConfig.themeChromaScale)))
+									: 1}
+								mode={(['colorful', 'pure-black', 'pure-white'] as const).includes(
+									localConfig.themeMode as 'colorful' | 'pure-black' | 'pure-white'
+								)
+									? (localConfig.themeMode as 'colorful' | 'pure-black' | 'pure-white')
+									: 'colorful'}
+								onHueChange={handleHueChange}
+								onChromaChange={handleChromaChange}
+								onModeChange={handleThemeModeChange}
 							/>
 						{/if}
 

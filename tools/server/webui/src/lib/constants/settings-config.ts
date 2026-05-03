@@ -9,8 +9,16 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
+	// 'colorful' — hue-driven OKLCH ramps (default). 'pure-black' /
+	// 'pure-white' — flatten everything to a true greyscale palette so
+	// the user can opt out of the chromatic theme entirely.
+	themeMode: 'colorful',
 	themePrimaryHue: 295,
 	themeSecondaryHue: 190,
+	// 0 = monochrome (chroma = 0 everywhere), 1 = full HT chroma. Lets
+	// the OS colour picker round-trip both hue *and* saturation; without
+	// this, picking a faded colour visually snapped back to full saturation.
+	themeChromaScale: 1,
 	showThoughtInProgress: false,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,

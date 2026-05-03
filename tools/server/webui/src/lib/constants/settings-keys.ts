@@ -7,8 +7,10 @@
 export const SETTINGS_KEYS = {
 	// General
 	THEME: 'theme',
+	THEME_MODE: 'themeMode',
 	THEME_PRIMARY_HUE: 'themePrimaryHue',
 	THEME_SECONDARY_HUE: 'themeSecondaryHue',
+	THEME_CHROMA_SCALE: 'themeChromaScale',
 	API_KEY: 'apiKey',
 	BACKEND_BASE_URL: 'backendBaseUrl',
 	SYSTEM_MESSAGE: 'systemMessage',
