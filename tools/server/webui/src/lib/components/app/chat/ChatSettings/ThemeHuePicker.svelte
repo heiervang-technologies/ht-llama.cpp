@@ -1,18 +1,27 @@
 <script lang="ts">
-	import { Shuffle, RotateCcw } from '@lucide/svelte';
+	import { Shuffle, RotateCcw, Circle, CircleDashed } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import Label from '$lib/components/ui/label/label.svelte';
+
+	export type ThemeMode = 'colorful' | 'pure-black' | 'pure-white';
+	type HueKey = 'themePrimaryHue' | 'themeSecondaryHue';
 
 	interface Props {
 		primary: number;
 		secondary: number;
-		onChange: (key: 'themePrimaryHue' | 'themeSecondaryHue', value: number) => void;
+		chroma: number;
+		mode: ThemeMode;
+		onHueChange: (key: HueKey, value: number) => void;
+		onChromaChange: (value: number) => void;
+		onModeChange: (mode: ThemeMode) => void;
 	}
 
-	let { primary, secondary, onChange }: Props = $props();
+	let { primary, secondary, chroma, mode, onHueChange, onChromaChange, onModeChange }: Props =
+		$props();
 
 	const DEFAULT_PRIMARY = 295;
 	const DEFAULT_SECONDARY = 190;
+	const DEFAULT_CHROMA = 1;
 
 	function clampHue(n: number): number {
 		if (!Number.isFinite(n)) return 0;
@@ -20,40 +29,54 @@
 		return Math.round(mod);
 	}
 
+	function clamp01(n: number): number {
+		if (!Number.isFinite(n)) return 1;
+		return Math.max(0, Math.min(1, n));
+	}
+
 	function randomize() {
 		const p = Math.floor(Math.random() * 360);
 		// Keep secondary visually distinct from primary (at least 60° apart).
-		// The expression computes circular distance in [0, 180]; below 60 means
-		// the two hues read as almost the same colour, so push secondary to the
-		// opposite side of the wheel with some jitter.
 		let s = Math.floor(Math.random() * 360);
 		if (Math.abs(((s - p + 540) % 360) - 180) < 60) {
 			s = (p + 180 + Math.floor(Math.random() * 60) - 30 + 360) % 360;
 		}
-		onChange('themePrimaryHue', p);
-		onChange('themeSecondaryHue', s);
+		onHueChange('themePrimaryHue', p);
+		onHueChange('themeSecondaryHue', s);
+		onChromaChange(DEFAULT_CHROMA);
+		onModeChange('colorful');
 	}
 
 	function reset() {
-		onChange('themePrimaryHue', DEFAULT_PRIMARY);
-		onChange('themeSecondaryHue', DEFAULT_SECONDARY);
+		onHueChange('themePrimaryHue', DEFAULT_PRIMARY);
+		onHueChange('themeSecondaryHue', DEFAULT_SECONDARY);
+		onChromaChange(DEFAULT_CHROMA);
+		onModeChange('colorful');
 	}
 
+	// Swatch chip — when chroma is 0 or mode is mono, show the actual
+	// neutral tone the rest of the UI will use, so the chip never lies
+	// about what the user has selected.
 	function swatch(hue: number, lightness = 0.55): string {
-		return `oklch(${lightness} 0.18 ${hue})`;
+		if (mode === 'pure-black') return 'oklch(0.06 0 0)';
+		if (mode === 'pure-white') return 'oklch(0.95 0 0)';
+		return `oklch(${lightness} ${0.18 * chroma} ${hue})`;
 	}
 
 	/**
-	 * Convert an `#rrggbb` hex string to its HSL hue in degrees [0, 360).
-	 * The theme system only stores the hue channel — saturation and
-	 * lightness are derived per-context via OKLCH ramps in app.css — so
-	 * we deliberately discard everything except H. Picking a colour with
-	 * S=0 (pure grey) is degenerate (hue is undefined); fall back to
-	 * keeping the current value in that case so the slider doesn't jump.
+	 * Decompose an `#rrggbb` hex into (hue, saturation-ish, lightness).
+	 * `chromaEstimate` is `max - min` in [0, 1] — a quick proxy for OKLCH
+	 * chroma. Used to round-trip the OS picker's *colourfulness*, not
+	 * just its hue. Pure black / white have chromaEstimate = 0; we route
+	 * those into the dedicated theme modes so the user gets exactly
+	 * what they picked instead of the hue snapping the surface back to
+	 * a tinted palette.
 	 */
-	function hexToHue(hex: string, fallback: number): number {
+	function hexToTriplet(
+		hex: string
+	): { hue: number; chromaEstimate: number; lightness: number } | null {
 		const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
-		if (!m) return fallback;
+		if (!m) return null;
 		const n = parseInt(m[1], 16);
 		const r = ((n >> 16) & 0xff) / 255;
 		const g = ((n >> 8) & 0xff) / 255;
@@ -61,19 +84,48 @@
 		const max = Math.max(r, g, b);
 		const min = Math.min(r, g, b);
 		const d = max - min;
-		if (d === 0) return fallback; // achromatic — keep current hue
-		let h: number;
-		if (max === r) h = ((g - b) / d) % 6;
-		else if (max === g) h = (b - r) / d + 2;
-		else h = (r - g) / d + 4;
-		return clampHue(h * 60);
+		const lightness = (max + min) / 2;
+		let h = 0;
+		if (d !== 0) {
+			if (max === r) h = ((g - b) / d) % 6;
+			else if (max === g) h = (b - r) / d + 2;
+			else h = (r - g) / d + 4;
+			h = clampHue(h * 60);
+		}
+		return { hue: h, chromaEstimate: d, lightness };
 	}
 
-	/**
-	 * Hue → `#rrggbb` round-trip so the colour input opens with the
-	 * current pick selected. Uses HSL with S=70%, L=55% — visually
-	 * matches the swatch chips for a consistent reference colour.
-	 */
+	function applyPickedColor(key: HueKey, hex: string, currentHue: number) {
+		const t = hexToTriplet(hex);
+		if (!t) return;
+
+		// Near-black or near-white achromatic pick → snap into the
+		// matching dedicated theme mode. The hue value still gets stored
+		// in case the user toggles back to colourful later.
+		if (t.chromaEstimate < 0.04) {
+			if (t.lightness < 0.08) {
+				onModeChange('pure-black');
+				return;
+			}
+			if (t.lightness > 0.92) {
+				onModeChange('pure-white');
+				return;
+			}
+			// Mid-tone grey → keep current hue, just zero the chroma.
+			onChromaChange(0);
+			onModeChange('colorful');
+			return;
+		}
+
+		// Coloured pick → store hue + chroma + lightness.
+		onHueChange(key, t.hue || currentHue);
+		// Chroma estimate runs 0..1 already; give the slider a slight
+		// bias so an "ordinary" colour reads as roughly full chroma
+		// rather than half — most UI colours pick land in [0.4, 0.7].
+		onChromaChange(clamp01(Math.min(1, t.chromaEstimate * 1.4)));
+		if (mode !== 'colorful') onModeChange('colorful');
+	}
+
 	function hueToHex(hue: number): string {
 		const s = 0.7;
 		const l = 0.55;
@@ -139,22 +191,65 @@
 		</div>
 	</div>
 
-	<div class="space-y-2">
+	<!-- Mode presets — pure black / pure white short-circuit the
+	     OKLCH ramps in app.css for users who want a strictly greyscale
+	     UI. Tapping one of these swaps the theme; tapping Colourful
+	     returns to hue + chroma controls. -->
+	<div class="flex flex-wrap items-center gap-2">
+		<Label class="text-xs text-muted-foreground">Mode</Label>
+		<div class="flex flex-1 gap-1 rounded-md border border-border/60 bg-background/60 p-1">
+			<Button
+				type="button"
+				variant={mode === 'colorful' ? 'default' : 'ghost'}
+				size="sm"
+				class="flex-1 gap-1.5"
+				onclick={() => onModeChange('colorful')}
+				title="Use the hue-driven palette"
+			>
+				<CircleDashed class="h-3.5 w-3.5" />
+				Colourful
+			</Button>
+			<Button
+				type="button"
+				variant={mode === 'pure-black' ? 'default' : 'ghost'}
+				size="sm"
+				class="flex-1 gap-1.5"
+				onclick={() => onModeChange('pure-black')}
+				title="True greyscale on a near-black background"
+			>
+				<Circle class="h-3.5 w-3.5 fill-foreground" />
+				Pure black
+			</Button>
+			<Button
+				type="button"
+				variant={mode === 'pure-white' ? 'default' : 'ghost'}
+				size="sm"
+				class="flex-1 gap-1.5"
+				onclick={() => onModeChange('pure-white')}
+				title="True greyscale on a near-white background"
+			>
+				<Circle class="h-3.5 w-3.5" />
+				Pure white
+			</Button>
+		</div>
+	</div>
+
+	<!-- Hue + chroma controls only meaningful when the colourful mode is
+	     active; in pure-black / pure-white they're informational, so
+	     visibly dim them but keep them around — flipping back to
+	     Colourful brings the previous hues straight back. -->
+	<div class="space-y-2" class:opacity-50={mode !== 'colorful'}>
 		<div class="flex items-center gap-3">
-			<!-- Native color input. Click the swatch and the OS opens its
-			     full HSL/HSV picker — no extra dependency, accessible by
-			     default. We only keep the hue channel since the theme
-			     system derives S/L per-context via OKLCH ramps. -->
 			<label
 				class="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border/60"
 				style:background-color={swatch(primary, 0.5)}
-				title="Click for full color picker"
+				title="Click for full color picker — black or white auto-switches mode"
 			>
 				<input
 					type="color"
 					value={hueToHex(primary)}
 					oninput={(e) =>
-						onChange('themePrimaryHue', hexToHue((e.target as HTMLInputElement).value, primary))}
+						applyPickedColor('themePrimaryHue', (e.target as HTMLInputElement).value, primary)}
 					class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
 					aria-label="Primary color picker"
 				/>
@@ -170,7 +265,7 @@
 				step="1"
 				value={primary}
 				oninput={(e) =>
-					onChange('themePrimaryHue', clampHue(Number((e.target as HTMLInputElement).value)))}
+					onHueChange('themePrimaryHue', clampHue(Number((e.target as HTMLInputElement).value)))}
 				class="hue-slider flex-1"
 				aria-label="Primary hue"
 			/>
@@ -179,16 +274,13 @@
 			<label
 				class="relative h-5 w-5 shrink-0 cursor-pointer overflow-hidden rounded-full border border-border/60"
 				style:background-color={swatch(secondary, 0.75)}
-				title="Click for full color picker"
+				title="Click for full color picker — black or white auto-switches mode"
 			>
 				<input
 					type="color"
 					value={hueToHex(secondary)}
 					oninput={(e) =>
-						onChange(
-							'themeSecondaryHue',
-							hexToHue((e.target as HTMLInputElement).value, secondary)
-						)}
+						applyPickedColor('themeSecondaryHue', (e.target as HTMLInputElement).value, secondary)}
 					class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
 					aria-label="Secondary color picker"
 				/>
@@ -204,16 +296,37 @@
 				step="1"
 				value={secondary}
 				oninput={(e) =>
-					onChange('themeSecondaryHue', clampHue(Number((e.target as HTMLInputElement).value)))}
+					onHueChange('themeSecondaryHue', clampHue(Number((e.target as HTMLInputElement).value)))}
 				class="hue-slider flex-1"
 				aria-label="Secondary hue"
+			/>
+		</div>
+		<div class="flex items-center gap-3">
+			<div
+				class="relative h-5 w-5 shrink-0 overflow-hidden rounded-full border border-border/60"
+				style:background={`linear-gradient(135deg, oklch(0.55 0 ${primary}), oklch(0.55 ${0.2 * chroma} ${primary}))`}
+				aria-hidden="true"
+			></div>
+			<Label for="theme-chroma" class="min-w-24 text-xs text-muted-foreground">
+				Saturation ({Math.round(chroma * 100)}%)
+			</Label>
+			<input
+				id="theme-chroma"
+				type="range"
+				min="0"
+				max="100"
+				step="1"
+				value={Math.round(chroma * 100)}
+				oninput={(e) => onChromaChange(clamp01(Number((e.target as HTMLInputElement).value) / 100))}
+				class="chroma-slider flex-1"
+				aria-label="Saturation"
 			/>
 		</div>
 	</div>
 
 	<p class="text-xs text-muted-foreground">
-		Click a swatch for a full color picker, or drag the slider for hue only. Saturation and
-		lightness are derived per-context — only the hue channel is stored.
+		Click a swatch for an OS colour picker — black or white will switch the theme to a true
+		greyscale mode. The saturation slider goes from full HT chroma to neutral grey.
 	</p>
 </div>
 
@@ -246,6 +359,34 @@
 	}
 
 	.hue-slider::-moz-range-thumb {
+		height: 1rem;
+		width: 1rem;
+		border-radius: 9999px;
+		background: var(--background);
+		border: 2px solid var(--foreground);
+		cursor: pointer;
+	}
+
+	.chroma-slider {
+		appearance: none;
+		height: 0.5rem;
+		border-radius: 9999px;
+		/* Greyscale at the left → most-saturated mid hue at the right. */
+		background: linear-gradient(to right, oklch(0.6 0 0), oklch(0.6 0.25 295));
+		cursor: pointer;
+	}
+
+	.chroma-slider::-webkit-slider-thumb {
+		appearance: none;
+		height: 1rem;
+		width: 1rem;
+		border-radius: 9999px;
+		background: var(--background);
+		border: 2px solid var(--foreground);
+		cursor: pointer;
+	}
+
+	.chroma-slider::-moz-range-thumb {
 		height: 1rem;
 		width: 1rem;
 		border-radius: 9999px;

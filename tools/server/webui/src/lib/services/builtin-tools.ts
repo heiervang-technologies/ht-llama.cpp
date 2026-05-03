@@ -564,13 +564,121 @@ function resolveImagesApiKey(): string {
 }
 
 /**
- * Strip a `data:image/...;base64,` prefix if present so the proxy
- * receives only the raw base64 payload. Returning unchanged input is
- * fine when the caller already passed clean base64.
+ * Cheap magic-byte sniff so we can fail loud *before* shipping junk to
+ * the images proxy. Covers the formats ComfyUI/PIL actually accept on
+ * the edit path (PNG/JPEG/WEBP/GIF). Anything else — HTML error
+ * pages, S3 XML access-denied bodies, plain text — gets rejected here
+ * with a useful message instead of bubbling up as an opaque
+ * UnidentifiedImageError 502 from ComfyUI.
  */
-function stripDataUrlPrefix(input: string): string {
-	const m = /^data:[a-z0-9.+/-]+;base64,(.+)$/i.exec(input);
-	return m ? m[1] : input;
+function isImageMagic(b: Uint8Array): boolean {
+	if (b.length < 12) return false;
+	if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true; // PNG
+	if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true; // JPEG
+	if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return true; // GIF8
+	if (
+		b[0] === 0x52 &&
+		b[1] === 0x49 &&
+		b[2] === 0x46 &&
+		b[3] === 0x46 &&
+		b[8] === 0x57 &&
+		b[9] === 0x45 &&
+		b[10] === 0x42 &&
+		b[11] === 0x50
+	)
+		return true; // WEBP
+	return false;
+}
+
+function bytesToBase64(buf: ArrayBuffer): string {
+	const bytes = new Uint8Array(buf);
+	let binary = '';
+	const chunkSize = 0x8000;
+	for (let i = 0; i < bytes.length; i += chunkSize) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+	}
+	return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array | null {
+	try {
+		const bin = atob(b64);
+		const out = new Uint8Array(bin.length);
+		for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+		return out;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Normalize whatever the caller passed for `image` into raw base64
+ * bytes the proxy will accept. Three paths:
+ *
+ * - `data:image/...;base64,<payload>` → strip prefix, validate magic.
+ * - `https://...` → fetch on the client, validate magic, encode.
+ * - bare base64 → validate magic.
+ *
+ * Background: `base64.b64decode(url, validate=False)` on the proxy
+ * silently produced garbage bytes when given a URL string, which
+ * ComfyUI then opened as an image. Reject up-front with a real error
+ * so the user sees "URL expired" instead of a ComfyUI stack trace.
+ */
+async function normalizeImageInput(raw: string, signal?: AbortSignal): Promise<string> {
+	const trimmed = raw.trim();
+	if (!trimmed) throw new Error('image is required (base64 string, data URL, or https URL)');
+
+	const dataUrlMatch = /^data:[a-z0-9.+/-]+;base64,(.+)$/i.exec(trimmed);
+	if (dataUrlMatch) {
+		const payload = dataUrlMatch[1];
+		const bytes = base64ToBytes(payload);
+		if (!bytes) throw new Error('image data URL is malformed (not valid base64).');
+		if (!isImageMagic(bytes)) {
+			throw new Error(
+				'image data URL does not contain a recognised image (PNG, JPEG, WEBP, or GIF).'
+			);
+		}
+		return payload;
+	}
+
+	if (/^https?:\/\//i.test(trimmed)) {
+		let res: Response;
+		try {
+			res = await fetch(trimmed, { signal, mode: 'cors' });
+		} catch (e) {
+			const m = e instanceof Error ? e.message : String(e);
+			throw new Error(
+				`Could not fetch image URL — ${m}. The link may be expired, behind auth, or blocked by CORS. Pass a base64 / data URL instead.`
+			);
+		}
+		if (!res.ok) {
+			throw new Error(
+				`Image URL returned HTTP ${res.status}. The link may be expired or behind auth — pass a base64 / data URL instead.`
+			);
+		}
+		const buf = await res.arrayBuffer();
+		const bytes = new Uint8Array(buf);
+		if (!isImageMagic(bytes)) {
+			const ct = res.headers.get('content-type') ?? 'unknown';
+			throw new Error(
+				`Image URL responded with non-image content (content-type: ${ct}). Likely an expired-link error page — pass a base64 / data URL.`
+			);
+		}
+		return bytesToBase64(buf);
+	}
+
+	const bytes = base64ToBytes(trimmed);
+	if (!bytes) {
+		throw new Error(
+			'image is not base64, a data URL, or an https URL. Pass one of those three forms.'
+		);
+	}
+	if (!isImageMagic(bytes)) {
+		throw new Error(
+			'image bytes are not a recognised image (PNG, JPEG, WEBP, or GIF). If you meant to reference a remote image, pass the full https URL.'
+		);
+	}
+	return trimmed;
 }
 
 /**
@@ -863,7 +971,7 @@ register({
 					image: {
 						type: 'string',
 						description:
-							'The source image. Either a raw base64 string OR a `data:image/...;base64,...` data URL. Required. Use `get_artifact` to fetch an existing gallery artifact as a data URL.'
+							'The source image. Accepts a raw base64 string, a `data:image/...;base64,...` data URL, or an `https://...` URL pointing at a real image (PNG/JPEG/WEBP/GIF). Required. To edit an existing gallery artifact, call `get_artifact` first to fetch it as a data URL — that is the most reliable path because it never depends on the image URL still being live or CORS-allowed.'
 					},
 					model: {
 						type: 'string',
@@ -972,14 +1080,11 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	// The proxy on this fork accepts JSON with `image` as a base64
 	// string — multipart/form-data is the OpenAI canonical shape but
 	// snoop's images-proxy doesn't speak it (request dies as a generic
-	// WebKit "Load failed"). The previous JSON path was almost right;
-	// the bug was that we sent the full `data:image/...;base64,...`
-	// data URL when the user picked a source from gallery / file
-	// upload. The proxy then either preserved the `data:` prefix in
-	// the file it wrote, or naively base64-decoded the whole string,
-	// either way producing bytes PIL couldn't parse. Strip the prefix
-	// here so the proxy always receives pure base64.
-	const cleanImage = stripDataUrlPrefix(rawImage);
+	// WebKit "Load failed"). Validate + normalize on the client so a
+	// junk input (URL string, malformed base64, plain text) fails here
+	// with a real error message instead of going on to ComfyUI as
+	// garbage bytes that surface as an opaque 502.
+	const cleanImage = await normalizeImageInput(rawImage, opts.signal);
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
