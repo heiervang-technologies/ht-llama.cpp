@@ -1354,12 +1354,7 @@
 						aria-label="Open video in gallery"
 					>
 						<!-- svelte-ignore a11y_media_has_caption -->
-						<video
-							src={lastResult.dataUrls[0]}
-							preload="none"
-							controls
-							loop
-							class="h-auto w-full"
+						<video src={lastResult.dataUrls[0]} preload="none" controls loop class="h-auto w-full"
 						></video>
 					</a>
 					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">

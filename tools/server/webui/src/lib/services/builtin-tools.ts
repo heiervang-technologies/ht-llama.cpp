@@ -590,6 +590,22 @@ function isImageMagic(b: Uint8Array): boolean {
 	return false;
 }
 
+/**
+ * Audio magic-byte sniff. Same intent as `isImageMagic`: catch a
+ * URL string or HTML error page before it reaches the proxy and ends
+ * up as garbage on disk. Covers what the comfy-openai proxy's
+ * `upload_audio` accepts (WAV/MP3/OGG/FLAC).
+ */
+function isAudioMagic(b: Uint8Array): boolean {
+	if (b.length < 4) return false;
+	if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return true; // 'RIFF' (WAV)
+	if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return true; // 'ID3' (MP3)
+	if (b[0] === 0xff && (b[1] === 0xfb || b[1] === 0xf3 || b[1] === 0xf2)) return true; // MPEG sync
+	if (b[0] === 0x4f && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return true; // 'OggS'
+	if (b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43) return true; // 'fLaC'
+	return false;
+}
+
 function bytesToBase64(buf: ArrayBuffer): string {
 	const bytes = new Uint8Array(buf);
 	let binary = '';
@@ -612,31 +628,37 @@ function base64ToBytes(b64: string): Uint8Array | null {
 }
 
 /**
- * Normalize whatever the caller passed for `image` into raw base64
- * bytes the proxy will accept. Three paths:
+ * Normalize whatever the caller passed for a media field into raw
+ * base64 bytes the proxy will accept. Three paths:
  *
- * - `data:image/...;base64,<payload>` → strip prefix, validate magic.
+ * - `data:<media>/...;base64,<payload>` → strip prefix, validate magic.
  * - `https://...` → fetch on the client, validate magic, encode.
  * - bare base64 → validate magic.
  *
  * Background: `base64.b64decode(url, validate=False)` on the proxy
  * silently produced garbage bytes when given a URL string, which
- * ComfyUI then opened as an image. Reject up-front with a real error
- * so the user sees "URL expired" instead of a ComfyUI stack trace.
+ * ComfyUI then opened as an image / audio. Reject up-front with a
+ * real error so the user sees "URL expired" instead of a 502 stack
+ * trace or a video job that 400s with "upstream error".
  */
-async function normalizeImageInput(raw: string, signal?: AbortSignal): Promise<string> {
+async function normalizeMediaInput(
+	raw: string,
+	kind: 'image' | 'audio',
+	signal?: AbortSignal
+): Promise<string> {
 	const trimmed = raw.trim();
-	if (!trimmed) throw new Error('image is required (base64 string, data URL, or https URL)');
+	const accepted = kind === 'image' ? 'PNG, JPEG, WEBP, or GIF' : 'WAV, MP3, OGG, or FLAC';
+	const sniff = kind === 'image' ? isImageMagic : isAudioMagic;
+	if (!trimmed)
+		throw new Error(`${kind} is required (base64 string, data URL, or https URL)`);
 
 	const dataUrlMatch = /^data:[a-z0-9.+/-]+;base64,(.+)$/i.exec(trimmed);
 	if (dataUrlMatch) {
 		const payload = dataUrlMatch[1];
 		const bytes = base64ToBytes(payload);
-		if (!bytes) throw new Error('image data URL is malformed (not valid base64).');
-		if (!isImageMagic(bytes)) {
-			throw new Error(
-				'image data URL does not contain a recognised image (PNG, JPEG, WEBP, or GIF).'
-			);
+		if (!bytes) throw new Error(`${kind} data URL is malformed (not valid base64).`);
+		if (!sniff(bytes)) {
+			throw new Error(`${kind} data URL does not contain a recognised ${kind} (${accepted}).`);
 		}
 		return payload;
 	}
@@ -648,20 +670,20 @@ async function normalizeImageInput(raw: string, signal?: AbortSignal): Promise<s
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			throw new Error(
-				`Could not fetch image URL — ${m}. The link may be expired, behind auth, or blocked by CORS. Pass a base64 / data URL instead.`
+				`Could not fetch ${kind} URL — ${m}. The link may be expired, behind auth, or blocked by CORS. Pass a base64 / data URL instead.`
 			);
 		}
 		if (!res.ok) {
 			throw new Error(
-				`Image URL returned HTTP ${res.status}. The link may be expired or behind auth — pass a base64 / data URL instead.`
+				`${kind[0].toUpperCase()}${kind.slice(1)} URL returned HTTP ${res.status}. The link may be expired or behind auth — pass a base64 / data URL instead.`
 			);
 		}
 		const buf = await res.arrayBuffer();
 		const bytes = new Uint8Array(buf);
-		if (!isImageMagic(bytes)) {
+		if (!sniff(bytes)) {
 			const ct = res.headers.get('content-type') ?? 'unknown';
 			throw new Error(
-				`Image URL responded with non-image content (content-type: ${ct}). Likely an expired-link error page — pass a base64 / data URL.`
+				`${kind[0].toUpperCase()}${kind.slice(1)} URL responded with non-${kind} content (content-type: ${ct}). Likely an expired-link error page — pass a base64 / data URL.`
 			);
 		}
 		return bytesToBase64(buf);
@@ -670,15 +692,23 @@ async function normalizeImageInput(raw: string, signal?: AbortSignal): Promise<s
 	const bytes = base64ToBytes(trimmed);
 	if (!bytes) {
 		throw new Error(
-			'image is not base64, a data URL, or an https URL. Pass one of those three forms.'
+			`${kind} is not base64, a data URL, or an https URL. Pass one of those three forms.`
 		);
 	}
-	if (!isImageMagic(bytes)) {
+	if (!sniff(bytes)) {
 		throw new Error(
-			'image bytes are not a recognised image (PNG, JPEG, WEBP, or GIF). If you meant to reference a remote image, pass the full https URL.'
+			`${kind} bytes are not a recognised ${kind} (${accepted}). If you meant to reference a remote file, pass the full https URL.`
 		);
 	}
 	return trimmed;
+}
+
+async function normalizeImageInput(raw: string, signal?: AbortSignal): Promise<string> {
+	return normalizeMediaInput(raw, 'image', signal);
+}
+
+async function normalizeAudioInput(raw: string, signal?: AbortSignal): Promise<string> {
+	return normalizeMediaInput(raw, 'audio', signal);
 }
 
 /**
@@ -1395,18 +1425,30 @@ export async function runVideoGeneration(
 		Authorization: `Bearer ${apiKey || 'no-auth'}`
 	};
 
+	// Validate + normalize every media input client-side. Same rationale
+	// as runImageEdit: a remote URL or malformed base64 used to silently
+	// reach the proxy, which decoded it to garbage bytes and the job
+	// then 400'd with a masked "upstream error". Surfacing the real
+	// reason here means the user sees "Audio URL returned HTTP 403"
+	// instead of staring at a generic failure.
+	const cleanImage = await normalizeImageInput(image, opts.signal);
+	const cleanAudio = audio ? await normalizeAudioInput(audio, opts.signal) : undefined;
+	const cleanLastFrame = lastFrame
+		? await normalizeImageInput(lastFrame, opts.signal)
+		: undefined;
+
 	const body: Record<string, unknown> = {
 		prompt: effectivePrompt,
 		model,
 		size,
 		frames,
-		image
+		image: cleanImage
 	};
-	if (audio) body.audio = audio;
+	if (cleanAudio) body.audio = cleanAudio;
 	// FLF second-frame field. The ComfyUI proxy spells this
 	// `image_end` (verified against /openapi.json — VideoGenRequest
 	// schema). Earlier guesses of `last_frame` got silently dropped.
-	if (lastFrame) body.image_end = lastFrame;
+	if (cleanLastFrame) body.image_end = cleanLastFrame;
 
 	let submitRes: Response;
 	try {
