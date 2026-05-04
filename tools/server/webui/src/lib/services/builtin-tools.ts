@@ -576,6 +576,7 @@ function isImageMagic(b: Uint8Array): boolean {
 	if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return true; // PNG
 	if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return true; // JPEG
 	if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return true; // GIF8
+	if (b[0] === 0x42 && b[1] === 0x4d) return true; // BMP — proxy accepts it too
 	if (
 		b[0] === 0x52 &&
 		b[1] === 0x49 &&
@@ -647,7 +648,8 @@ async function normalizeMediaInput(
 	signal?: AbortSignal
 ): Promise<string> {
 	const trimmed = raw.trim();
-	const accepted = kind === 'image' ? 'PNG, JPEG, WEBP, or GIF' : 'WAV, MP3, OGG, or FLAC';
+	const accepted =
+		kind === 'image' ? 'PNG, JPEG, WEBP, GIF, or BMP' : 'WAV, MP3, OGG, or FLAC';
 	const sniff = kind === 'image' ? isImageMagic : isAudioMagic;
 	if (!trimmed) throw new Error(`${kind} is required (base64 string, data URL, or https URL)`);
 
