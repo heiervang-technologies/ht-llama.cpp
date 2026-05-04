@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Settings, PanelRight, Wrench, Eye, EyeOff } from '@lucide/svelte';
+	import { Settings, PanelRight, Wrench, Eye, EyeOff, TerminalSquare } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
 	import { getChatSettingsDialogContext } from '$lib/contexts';
@@ -8,6 +8,10 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { DialogAvailableTools } from '$lib/components/app/dialogs';
+	import { chatTerminalAttachment } from '$lib/stores/chat-terminal-attachment.svelte';
+	import { terminalsStore } from '$lib/stores/terminals.svelte';
+	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	const sidebar = useSidebar();
 	const chatSettingsDialog = getChatSettingsDialogContext();
@@ -42,6 +46,74 @@
 			? '1 artifact · click to toggle drawer'
 			: `${artifactCount} artifacts · click to toggle drawer`
 	);
+
+	// Terminal button — shown only when ht-termd is reachable. Refresh
+	// the live list once on mount so we know whether to spawn or attach
+	// when the button is pressed; subsequent attaches use the cached
+	// list to avoid a network round-trip per click.
+	let termdAvailable = $derived(terminalsStore.available);
+	let liveTerminals = $derived(terminalsStore.terminals);
+	let attachedId = $derived(chatTerminalAttachment.terminalId);
+	let drawerVisible = $derived(chatTerminalAttachment.visible);
+	let needsSetup = $derived(terminalsStore.needsSetup);
+	let creatingTerminal = $derived(terminalsStore.creating);
+	let terminalCount = $derived(liveTerminals.length);
+
+	let terminalTooltip = $derived(
+		!termdAvailable
+			? 'Terminal sandbox not configured — set Settings → Terminals → Base URL'
+			: needsSetup
+				? 'Sandbox prerequisites missing — run `unleash sandbox setup`'
+				: drawerVisible
+					? 'Hide terminal drawer'
+					: terminalCount === 0
+						? 'Spawn a sandbox terminal'
+						: attachedId
+							? 'Show terminal drawer'
+							: `Attach most recent terminal (${terminalCount} available)`
+	);
+
+	onMount(() => {
+		// Best-effort discovery; failures are surfaced via the badge
+		// state, not a toast. Refresh is cheap enough to run on every
+		// chat-screen mount so a sandbox spawned in another tab shows
+		// up the moment the user comes back.
+		if (terminalsStore.available) terminalsStore.refresh();
+	});
+
+	async function handleTerminalClick() {
+		if (!termdAvailable) {
+			toast.error('Terminal sandbox not configured.');
+			chatSettingsDialog.open();
+			return;
+		}
+		if (drawerVisible) {
+			chatTerminalAttachment.dismiss();
+			return;
+		}
+		if (attachedId) {
+			// Drawer was dismissed but we still know which terminal —
+			// re-attach the same id rather than picking a "fresh" one.
+			chatTerminalAttachment.attach(attachedId);
+			return;
+		}
+		// No attached terminal. Prefer reusing an existing sandbox to
+		// keep the user's container count manageable; only spawn fresh
+		// when the list is empty.
+		if (liveTerminals.length > 0) {
+			chatTerminalAttachment.attach(liveTerminals[0].id);
+			return;
+		}
+		if (needsSetup) {
+			toast.error('Sandbox prerequisites missing — run `unleash sandbox setup` on the host first.');
+			return;
+		}
+		const t = await terminalsStore.create({});
+		if (t) {
+			chatTerminalAttachment.attach(t.id);
+			toast.success(`Spawned sandbox "${t.name}"`);
+		}
+	}
 </script>
 
 <header
@@ -109,6 +181,29 @@
 				</span>
 			{/if}
 		</Button>
+
+		{#if termdAvailable}
+			<Button
+				variant="ghost"
+				size="icon-lg"
+				onclick={handleTerminalClick}
+				disabled={creatingTerminal}
+				class="relative rounded-full backdrop-blur-lg {drawerVisible ? 'text-primary' : ''}"
+				title={terminalTooltip}
+				aria-label={terminalTooltip}
+				aria-pressed={drawerVisible}
+			>
+				<TerminalSquare class="h-4 w-4" />
+				{#if terminalCount > 0}
+					<span
+						class="absolute -top-1 -right-1 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
+						aria-hidden="true"
+					>
+						{terminalCount > 9 ? '9+' : terminalCount}
+					</span>
+				{/if}
+			</Button>
+		{/if}
 
 		<Button
 			variant="ghost"
