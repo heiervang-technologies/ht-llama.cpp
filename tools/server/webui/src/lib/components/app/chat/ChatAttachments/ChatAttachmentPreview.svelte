@@ -265,7 +265,12 @@
 		{:else if isVideo && videoSrc}
 			<div class="flex items-center justify-center p-4">
 				<div class="w-full max-w-3xl">
-					<video controls class="mx-auto max-h-[70vh] w-full rounded-md bg-black" src={videoSrc}>
+					<video
+						controls
+						preload="none"
+						class="mx-auto max-h-[70vh] w-full rounded-md bg-black"
+						src={videoSrc}
+					>
 						<track kind="captions" />
 						Your browser does not support the video element.
 					</video>

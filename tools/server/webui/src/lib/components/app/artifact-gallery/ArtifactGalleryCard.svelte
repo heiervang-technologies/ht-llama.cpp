@@ -132,9 +132,12 @@
 			{#if thumb?.kind === 'image'}
 				<img src={thumb.url} alt={artifact.title} class="h-full w-full object-cover" />
 			{:else if thumb?.kind === 'video'}
-				<!-- preload=metadata + no controls: we only want the poster frame here;
-				   the detail page ships the full player. -->
-				<video src={thumb.url} preload="metadata" muted class="h-full w-full object-cover"></video>
+				<!-- preload="none": webkit2gtk's GStreamer pipeline crashes
+				   the WebProcess on metadata probing for some clips. The
+				   gallery card loses its poster frame on cold load, but
+				   the detail page ships a full player so the user still
+				   has a way to see the content. -->
+				<video src={thumb.url} preload="none" muted class="h-full w-full object-cover"></video>
 			{:else if thumb?.kind === 'audio'}
 				<div class="flex flex-col items-center gap-2">
 					<Icon class="h-8 w-8" />

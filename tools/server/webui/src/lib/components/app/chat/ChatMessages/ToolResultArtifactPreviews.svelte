@@ -118,7 +118,7 @@
 							title={ref.title ?? ref.artifactId}
 						>
 							<!-- svelte-ignore a11y_media_has_caption -->
-							<video src={dataUrl} controls class="h-auto w-full"></video>
+							<video src={dataUrl} preload="none" controls class="h-auto w-full"></video>
 							<a
 								href="#/artifacts/{ref.artifactId}"
 								class="block px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
