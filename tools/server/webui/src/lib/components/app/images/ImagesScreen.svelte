@@ -1354,7 +1354,13 @@
 						aria-label="Open video in gallery"
 					>
 						<!-- svelte-ignore a11y_media_has_caption -->
-						<video src={lastResult.dataUrls[0]} controls loop class="h-auto w-full"></video>
+						<video
+							src={lastResult.dataUrls[0]}
+							preload="none"
+							controls
+							loop
+							class="h-auto w-full"
+						></video>
 					</a>
 					<div class="flex flex-col gap-1 rounded-md bg-muted/40 p-3 text-xs">
 						<p class="text-foreground"><strong>{videoResult.prompt}</strong></p>
@@ -1416,16 +1422,21 @@
 							>
 								{#if dataUrl}
 									{#if artifact.kind === 'video'}
-										<!-- preload="metadata" gives us the poster frame without
-										     downloading the whole clip. Hover plays muted, leave
-										     pauses and rewinds so the next hover starts clean. -->
+										<!-- preload="none" — webkit2gtk's GStreamer pipeline
+										     trips a `gst_value_collect_int_range` assertion on
+										     metadata probing for some clips, which crashes the
+										     entire WebProcess. Holding pipeline construction
+										     until the user actually hovers (which calls
+										     `play()`) keeps the gallery view stable, at the
+										     cost of no poster frame on cold load — the empty
+										     box fills in the moment the user reaches for it. -->
 										<video
 											src={dataUrl}
-											preload="metadata"
+											preload="none"
 											muted
 											playsinline
 											loop
-											class="aspect-square w-full object-cover"
+											class="aspect-square w-full bg-muted/30 object-cover"
 											onmouseenter={(ev) => {
 												const v = ev.currentTarget as HTMLVideoElement;
 												v.play().catch(() => {});

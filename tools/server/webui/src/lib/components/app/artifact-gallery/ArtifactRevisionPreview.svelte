@@ -35,7 +35,7 @@
 		<img src={objectUrl} alt={artifact.title} class="h-full w-full object-contain" loading="lazy" />
 	{:else if artifact.kind === 'video' && objectUrl}
 		<!-- svelte-ignore a11y_media_has_caption -->
-		<video src={objectUrl} controls class="h-full w-full bg-black" preload="metadata"></video>
+		<video src={objectUrl} controls class="h-full w-full bg-black" preload="none"></video>
 	{:else if artifact.kind === 'audio' && objectUrl}
 		<div class="flex h-full w-full items-center justify-center p-6">
 			<audio src={objectUrl} controls class="w-full max-w-lg"></audio>

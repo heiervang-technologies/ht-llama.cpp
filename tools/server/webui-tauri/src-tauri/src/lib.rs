@@ -12,6 +12,20 @@ const RELEASE_PORT: u16 = 5173;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+	// Force webkit2gtk's media pipeline onto the legacy `playbin` rather
+	// than `playbin3`. On Arch with GStreamer 1.28 + webkit2gtk-4.1
+	// 2.50, playbin3's caps registration trips a
+	// `gst_value_collect_int_range` assertion when probing some
+	// fragmented MP4s and the WebProcess crashes — taking down the
+	// entire shell. The fallback path is slightly less efficient but
+	// stable. Setting this in the Rust entry-point (rather than only
+	// in the .desktop launcher) means a `cargo run` / direct binary
+	// invocation also picks up the workaround.
+	#[cfg(target_os = "linux")]
+	if std::env::var_os("WEBKIT_GST_USE_PLAYBIN3").is_none() {
+		std::env::set_var("WEBKIT_GST_USE_PLAYBIN3", "0");
+	}
+
 	tauri::Builder::default()
 		// Pin the embedded server to 127.0.0.1 — left to its default
 		// "localhost" the plugin's tiny-http binds to whichever IP

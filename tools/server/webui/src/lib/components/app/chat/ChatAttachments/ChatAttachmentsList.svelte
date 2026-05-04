@@ -167,7 +167,12 @@
 								: ''}"
 						>
 							<!-- svelte-ignore a11y_media_has_caption -->
-							<video controls playsinline class="h-full w-full object-contain" src={item.preview}
+							<video
+								controls
+								preload="none"
+								playsinline
+								class="h-full w-full object-contain"
+								src={item.preview}
 							></video>
 						</div>
 					{:else}
@@ -253,7 +258,12 @@
 							class="relative overflow-hidden rounded-md border border-border/60 bg-black {imageHeight}"
 						>
 							<!-- svelte-ignore a11y_media_has_caption -->
-							<video controls playsinline class="h-full w-full object-contain" src={item.preview}
+							<video
+								controls
+								preload="none"
+								playsinline
+								class="h-full w-full object-contain"
+								src={item.preview}
 							></video>
 						</div>
 					{:else}

@@ -4,7 +4,7 @@ Version=1.0
 Name=ht-llama.cpp WebUI
 GenericName=LLM Chat
 Comment=Native desktop shell for the ht-llama.cpp WebUI
-Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 GTK_CSD=0 ht-llama-webui
+Exec=env WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_GST_USE_PLAYBIN3=0 GTK_CSD=0 ht-llama-webui
 Icon=ht-llama-webui
 Categories=Development;Network;Chat;Utility;
 Keywords=llama;llm;ai;chat;inference;ggml;
