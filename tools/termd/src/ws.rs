@@ -21,6 +21,13 @@ use crate::state::AppState;
 #[serde(tag = "t", rename_all = "snake_case")]
 enum ControlFrame {
     Resize { cols: u16, rows: u16 },
+    /// Application-level keepalive. Browsers can't emit raw WS Ping
+    /// frames so the JS side sends `{"t":"ping"}` periodically; we
+    /// drop it on the floor here. Without this, an idle WebSocket
+    /// gets axed by webkit2gtk's throttler when the host workspace
+    /// is backgrounded, which is exactly the "terminal goes flaky"
+    /// symptom users see.
+    Ping,
 }
 
 pub async fn bridge(state: AppState, terminal_id: String, socket: WebSocket) {
@@ -77,6 +84,7 @@ async fn run_bridge(
                                 ControlFrame::Resize { cols, rows } => {
                                     let _ = session.resize(state.docker(), cols, rows).await;
                                 }
+                                ControlFrame::Ping => { /* keepalive — no-op */ }
                             }
                         } else {
                             session.send_input(Bytes::from(text.into_bytes())).await.ok();

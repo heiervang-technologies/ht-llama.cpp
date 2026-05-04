@@ -25,6 +25,7 @@
 	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { setChatSettingsDialogContext } from '$lib/contexts';
+	import { isTauri, restoreZoom, zoomIn, zoomOut, zoomReset } from '$lib/utils/tauri-window';
 
 	let { children } = $props();
 
@@ -34,6 +35,11 @@
 	// can't intercept clicks. This closes the "green-black blank
 	// screen" window cold-boot used to spend on bundle parse.
 	onMount(() => {
+		// Reapply persisted webview zoom on cold boot — Tauri's webkit2gtk
+		// resets to 1.0× across launches, so we re-call setZoom with the
+		// last value the user picked. No-op in browser tabs.
+		restoreZoom();
+
 		if (typeof document === 'undefined') return;
 		const splash = document.getElementById('boot-splash');
 		if (!splash) return;
@@ -98,6 +104,29 @@
 
 			if (chatSidebar?.editActiveConversation) {
 				chatSidebar.editActiveConversation();
+			}
+		}
+
+		// Webview zoom — webkit2gtk inside Tauri doesn't bind Ctrl+= /
+		// Ctrl+- / Ctrl+0 by default, so the desktop shell silently
+		// ignored them. Hook them up to the shared zoom helper, which
+		// persists in localStorage and reapplies after reload. In a
+		// browser the chrome handles its own zoom so we let the event
+		// bubble and only intervene in Tauri.
+		if (isCtrlOrCmd && (event.key === '+' || event.key === '=')) {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomIn();
+			}
+		} else if (isCtrlOrCmd && event.key === '-') {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomOut();
+			}
+		} else if (isCtrlOrCmd && event.key === '0') {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomReset();
 			}
 		}
 	}

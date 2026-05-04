@@ -17,6 +17,75 @@ export function isTauri(): boolean {
 }
 
 /**
+ * Persisted zoom factor for the Tauri webview. Browsers handle their
+ * own zoom (Ctrl+= / Ctrl+- maps to the chrome zoom UI), but
+ * webkit2gtk doesn't bind those keys by default — so the desktop
+ * shell needs to forward them to `setZoom()` on the active webview.
+ */
+const ZOOM_STORAGE_KEY = 'ht-llama:webview-zoom';
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 3;
+const ZOOM_DEFAULT = 1;
+const ZOOM_STEP = 0.1;
+
+function clampZoom(z: number): number {
+	if (!Number.isFinite(z)) return ZOOM_DEFAULT;
+	return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+}
+
+export function getStoredZoom(): number {
+	if (typeof localStorage === 'undefined') return ZOOM_DEFAULT;
+	const raw = localStorage.getItem(ZOOM_STORAGE_KEY);
+	if (!raw) return ZOOM_DEFAULT;
+	const n = Number(raw);
+	return clampZoom(n);
+}
+
+async function applyZoom(level: number): Promise<void> {
+	const clamped = clampZoom(level);
+	if (typeof localStorage !== 'undefined') {
+		localStorage.setItem(ZOOM_STORAGE_KEY, String(clamped));
+	}
+	if (isTauri()) {
+		try {
+			const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+			await getCurrentWebview().setZoom(clamped);
+		} catch (err) {
+			console.warn('[tauri] setZoom failed', err);
+		}
+	} else {
+		// Browser path — best-effort. Some Chromium builds expose
+		// `document.body.style.zoom`; everywhere else this is a no-op
+		// and the browser's own Ctrl+= handler runs first anyway.
+		if (typeof document !== 'undefined') {
+			const body = document.body as HTMLBodyElement & { style: CSSStyleDeclaration };
+			body.style.zoom = String(clamped);
+		}
+	}
+}
+
+export async function zoomIn(): Promise<void> {
+	await applyZoom(getStoredZoom() + ZOOM_STEP);
+}
+
+export async function zoomOut(): Promise<void> {
+	await applyZoom(getStoredZoom() - ZOOM_STEP);
+}
+
+export async function zoomReset(): Promise<void> {
+	await applyZoom(ZOOM_DEFAULT);
+}
+
+/**
+ * Reapply the persisted zoom on app boot so a reload doesn't snap
+ * back to 1.0×. Safe to call before mount; bails on SSR.
+ */
+export async function restoreZoom(): Promise<void> {
+	if (typeof window === 'undefined') return;
+	await applyZoom(getStoredZoom());
+}
+
+/**
  * Open `route` (e.g. `#/terminals/<id>`) in a separate Tauri window if
  * available, otherwise a new browser tab. The Tauri label needs to be
  * unique per spawn — the optional `label` arg lets the caller pin it

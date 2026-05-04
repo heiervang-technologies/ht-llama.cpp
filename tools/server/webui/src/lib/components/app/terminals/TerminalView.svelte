@@ -23,11 +23,20 @@
 	let ws: WebSocket | undefined;
 	let ro: ResizeObserver | undefined;
 	let webglAddon: WebglAddon | undefined;
+	let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
+	let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	let reconnectAttempt = 0;
+	let unmounted = false;
 
 	let connected = $state(false);
 	let everOpened = $state(false);
 
 	let theme = $derived(resolveTheme(themeId));
+
+	// Hoisted encoder — reusing the same instance avoids a fresh
+	// allocation on every keystroke. Trivial savings in a single sense
+	// but `term.onData` fires hot when the user pastes a paragraph.
+	const inputEncoder = new TextEncoder();
 
 	function sendResize() {
 		if (!term || !fit || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -98,33 +107,11 @@
 
 		fit.fit();
 
-		const url = TermdService.wsUrl(terminalId);
-		ws = new WebSocket(url);
-		ws.binaryType = 'arraybuffer';
-		ws.onopen = () => {
-			connected = true;
-			everOpened = true;
-			sendResize();
-			term?.focus();
-		};
-		ws.onmessage = (ev) => {
-			if (typeof ev.data === 'string') {
-				term?.write(ev.data);
-			} else if (ev.data instanceof ArrayBuffer) {
-				term?.write(new Uint8Array(ev.data));
-			}
-		};
-		ws.onclose = (ev) => {
-			connected = false;
-			onDisconnect?.(ev.wasClean);
-		};
-		ws.onerror = () => {
-			connected = false;
-		};
+		connect();
 
 		term.onData((data) => {
 			if (ws && ws.readyState === WebSocket.OPEN) {
-				ws.send(new TextEncoder().encode(data));
+				ws.send(inputEncoder.encode(data));
 			}
 		});
 
@@ -132,9 +119,103 @@
 		ro.observe(hostEl);
 	});
 
+	// Open (or re-open) the WebSocket. Auto-reconnect kicks in on
+	// non-clean closures: webkit2gtk silently drops idle WSes when its
+	// host workspace gets backgrounded, and the original session lives
+	// server-side so a fresh socket gets the backlog and resumes
+	// without losing PTY state. Backoff caps at 5 s so flaky links
+	// don't lose more than a couple of frames per drop.
+	function connect() {
+		if (unmounted) return;
+		clearKeepalive();
+		const url = TermdService.wsUrl(terminalId);
+		const sock = new WebSocket(url);
+		ws = sock;
+		sock.binaryType = 'arraybuffer';
+		sock.onopen = () => {
+			connected = true;
+			everOpened = true;
+			reconnectAttempt = 0;
+			sendResize();
+			term?.focus();
+			startKeepalive();
+		};
+		sock.onmessage = (ev) => {
+			if (typeof ev.data === 'string') {
+				term?.write(ev.data);
+			} else if (ev.data instanceof ArrayBuffer) {
+				term?.write(new Uint8Array(ev.data));
+			}
+		};
+		sock.onclose = (ev) => {
+			connected = false;
+			clearKeepalive();
+			if (unmounted) {
+				onDisconnect?.(ev.wasClean);
+				return;
+			}
+			// 1000 / 1001 / 1005 are the "clean shutdown" buckets — if
+			// the user navigated away or termd torn the session down,
+			// don't fight it. Anything else is treated as transient.
+			const transient = ev.code !== 1000 && ev.code !== 1001 && ev.code !== 1005;
+			if (transient) {
+				scheduleReconnect();
+			} else {
+				onDisconnect?.(ev.wasClean);
+			}
+		};
+		sock.onerror = () => {
+			connected = false;
+			// `onerror` always fires before `onclose` for failed
+			// handshakes; let `onclose` decide whether to reconnect so
+			// we don't double-schedule.
+		};
+	}
+
+	function scheduleReconnect() {
+		if (unmounted) return;
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		const attempt = ++reconnectAttempt;
+		// Exponential-ish backoff: 250ms, 500ms, 1s, 2s, 4s, capped at 5s.
+		const delay = Math.min(5000, 250 * Math.pow(2, attempt - 1));
+		reconnectTimer = setTimeout(() => {
+			reconnectTimer = undefined;
+			connect();
+		}, delay);
+	}
+
+	// Send a no-op control frame periodically so an intermediate proxy
+	// or the webview's own throttler doesn't decide the connection is
+	// idle and drop it. The server tolerates unknown text as stdin
+	// passthrough, so we use a JSON shape the control parser will
+	// reject silently — bash doesn't see it because the parser handles
+	// the `t` field before forwarding.
+	function startKeepalive() {
+		clearKeepalive();
+		keepaliveTimer = setInterval(() => {
+			if (ws && ws.readyState === WebSocket.OPEN) {
+				try {
+					ws.send(JSON.stringify({ t: 'ping' }));
+				} catch {
+					/* ignore — onclose will fire and reconnect */
+				}
+			}
+		}, 25_000);
+	}
+
+	function clearKeepalive() {
+		if (keepaliveTimer) {
+			clearInterval(keepaliveTimer);
+			keepaliveTimer = undefined;
+		}
+	}
+
 	onDestroy(() => {
+		unmounted = true;
 		ro?.disconnect();
-		ws?.close();
+		clearKeepalive();
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		ws?.close(1000, 'unmount');
 		webglAddon?.dispose();
 		term?.dispose();
 	});
