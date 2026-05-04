@@ -30,6 +30,11 @@
 
 	let connected = $state(false);
 	let everOpened = $state(false);
+	// True while a reconnect is queued or in-flight — distinct from
+	// `!connected` so the UI can say "Reconnecting…" instead of leaving
+	// the user staring at "Disconnected." while exponential backoff
+	// chews through ~5 s windows.
+	let reconnecting = $state(false);
 
 	let theme = $derived(resolveTheme(themeId));
 
@@ -141,6 +146,7 @@
 		sock.binaryType = 'arraybuffer';
 		sock.onopen = () => {
 			connected = true;
+			reconnecting = false;
 			everOpened = true;
 			reconnectAttempt = 0;
 			sendResize();
@@ -182,6 +188,7 @@
 	function scheduleReconnect() {
 		if (unmounted) return;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
+		reconnecting = true;
 		const attempt = ++reconnectAttempt;
 		// Exponential-ish backoff: 250ms, 500ms, 1s, 2s, 4s, capped at 5s.
 		const delay = Math.min(5000, 250 * Math.pow(2, attempt - 1));
@@ -248,7 +255,7 @@
 		<div
 			class="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2 text-xs text-muted-foreground"
 		>
-			{everOpened ? 'Disconnected.' : 'Connecting…'}
+			{!everOpened ? 'Connecting…' : reconnecting ? 'Reconnecting…' : 'Disconnected.'}
 		</div>
 	{/if}
 </div>
