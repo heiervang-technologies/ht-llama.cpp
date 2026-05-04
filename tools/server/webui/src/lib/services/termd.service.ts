@@ -9,6 +9,7 @@
  */
 
 import { config } from '$lib/stores/settings.svelte';
+import { getFetch } from '$lib/utils/tauri-fetch';
 
 /** Raw sandbox readiness flags — mirrors the `SandboxStatus` struct
  *  in `tools/termd/src/sandbox_guard.rs`. */
@@ -111,23 +112,8 @@ function baseOrThrow(): string {
  *  by webview throttling but still benefits from a deadline. */
 const REQUEST_TIMEOUT_MS = 5000;
 
-/** Lazy import of the Tauri-plugin-http `fetch`. Falls back to
- *  `window.fetch` in the browser / dev mode. We use the plugin in the
- *  desktop shell to side-step WebKit2GTK's resource-loader stall when
- *  the Tauri window sits on a non-active Hyprland workspace — reqwest
- *  on the Rust runtime is not subject to page throttling, so HTTP
- *  requests proceed even when JS is suspended-ish. */
-async function getFetch(): Promise<typeof fetch> {
-	if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-		try {
-			const mod = await import('@tauri-apps/plugin-http');
-			return mod.fetch as unknown as typeof fetch;
-		} catch {
-			/* plugin missing (dev w/o tauri context) — fall through */
-		}
-	}
-	return fetch;
-}
+// Tauri-aware fetch lives in $lib/utils/tauri-fetch so the
+// builtin-tools image / audio URL paths share the same shim.
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
 	const token = resolveTermdToken();

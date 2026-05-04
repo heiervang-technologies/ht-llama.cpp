@@ -29,6 +29,7 @@
 import { DatabaseService } from './database.service';
 import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { getFetch } from '$lib/utils/tauri-fetch';
 import type { DatabaseArtifactKind } from '$lib/types/database';
 import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$lib/types/mcp';
 
@@ -648,8 +649,7 @@ async function normalizeMediaInput(
 	signal?: AbortSignal
 ): Promise<string> {
 	const trimmed = raw.trim();
-	const accepted =
-		kind === 'image' ? 'PNG, JPEG, WEBP, GIF, or BMP' : 'WAV, MP3, OGG, or FLAC';
+	const accepted = kind === 'image' ? 'PNG, JPEG, WEBP, GIF, or BMP' : 'WAV, MP3, OGG, or FLAC';
 	const sniff = kind === 'image' ? isImageMagic : isAudioMagic;
 	if (!trimmed) throw new Error(`${kind} is required (base64 string, data URL, or https URL)`);
 
@@ -666,8 +666,14 @@ async function normalizeMediaInput(
 
 	if (/^https?:\/\//i.test(trimmed)) {
 		let res: Response;
+		// In the Tauri shell, route the fetch through tauri-plugin-http
+		// (reqwest on the Rust runtime). That sidesteps both webkit2gtk's
+		// resource-loader throttling on backgrounded workspaces and the
+		// CORS preflight that would otherwise reject most cross-origin
+		// image / audio URLs the LLM might pass.
+		const doFetch = await getFetch();
 		try {
-			res = await fetch(trimmed, { signal, mode: 'cors' });
+			res = await doFetch(trimmed, { signal, mode: 'cors' });
 		} catch (e) {
 			const m = e instanceof Error ? e.message : String(e);
 			throw new Error(
