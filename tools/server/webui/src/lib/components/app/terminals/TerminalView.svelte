@@ -129,6 +129,15 @@
 
 		ro = new ResizeObserver(() => sendResize());
 		ro.observe(hostEl);
+
+		// Visibility / focus → wake-up triggers. The matching
+		// `removeEventListener` calls live in onDestroy.
+		if (typeof document !== 'undefined') {
+			document.addEventListener('visibilitychange', onVisibilityChange);
+		}
+		if (typeof window !== 'undefined') {
+			window.addEventListener('focus', onWindowFocus);
+		}
 	});
 
 	// Open (or re-open) the WebSocket. Auto-reconnect kicks in on
@@ -200,21 +209,21 @@
 
 	// Send a no-op control frame periodically so an intermediate proxy
 	// or the webview's own throttler doesn't decide the connection is
-	// idle and drop it. The server tolerates unknown text as stdin
-	// passthrough, so we use a JSON shape the control parser will
-	// reject silently — bash doesn't see it because the parser handles
-	// the `t` field before forwarding.
+	// idle and drop it. `ControlFrame::Ping` on ht-termd drops it on
+	// the floor; bash never sees it.
 	function startKeepalive() {
 		clearKeepalive();
-		keepaliveTimer = setInterval(() => {
-			if (ws && ws.readyState === WebSocket.OPEN) {
-				try {
-					ws.send(JSON.stringify({ t: 'ping' }));
-				} catch {
-					/* ignore — onclose will fire and reconnect */
-				}
+		keepaliveTimer = setInterval(sendKeepalive, 25_000);
+	}
+
+	function sendKeepalive() {
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			try {
+				ws.send(JSON.stringify({ t: 'ping' }));
+			} catch {
+				/* ignore — onclose will fire and reconnect */
 			}
-		}, 25_000);
+		}
 	}
 
 	function clearKeepalive() {
@@ -224,11 +233,44 @@
 		}
 	}
 
+	// Webkit2gtk on Hyprland throttles JS timers (including
+	// setInterval) when the host workspace is backgrounded, so the 25 s
+	// keepalive can miss several firings before the user returns. To
+	// close that window: when the page becomes visible again — or the
+	// window regains focus, which fires on workspace switch in
+	// Hyprland — fire a keepalive immediately, and if the socket is in
+	// a non-OPEN state with no reconnect already queued, force a
+	// reconnect.
+	function handleVisible() {
+		if (unmounted) return;
+		if (ws && ws.readyState === WebSocket.OPEN) {
+			sendKeepalive();
+			return;
+		}
+		if (!reconnectTimer && (!ws || ws.readyState >= WebSocket.CLOSING)) {
+			scheduleReconnect();
+		}
+	}
+
+	function onVisibilityChange() {
+		if (typeof document !== 'undefined' && !document.hidden) handleVisible();
+	}
+
+	function onWindowFocus() {
+		handleVisible();
+	}
+
 	onDestroy(() => {
 		unmounted = true;
 		ro?.disconnect();
 		clearKeepalive();
 		if (reconnectTimer) clearTimeout(reconnectTimer);
+		if (typeof document !== 'undefined') {
+			document.removeEventListener('visibilitychange', onVisibilityChange);
+		}
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('focus', onWindowFocus);
+		}
 		ws?.close(1000, 'unmount');
 		webglAddon?.dispose();
 		term?.dispose();
