@@ -40,9 +40,16 @@
 
 	function sendResize() {
 		if (!term || !fit || !ws || ws.readyState !== WebSocket.OPEN) return;
+		// Skip resize when the host is collapsed/hidden — fit() on a 0x0
+		// container can yield (cols=0, rows=0) which the server-side
+		// `docker exec` resize then rejects, and we'd lose the previous
+		// good geometry. The next ResizeObserver tick after the host is
+		// shown again will catch up with real dimensions.
+		if (!hostEl || hostEl.clientWidth === 0 || hostEl.clientHeight === 0) return;
 		try {
 			fit.fit();
 			const { cols, rows } = term;
+			if (cols < 1 || rows < 1) return;
 			ws.send(JSON.stringify({ t: 'resize', cols, rows }));
 		} catch (err) {
 			console.warn('[terminal] resize failed', err);

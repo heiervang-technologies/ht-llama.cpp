@@ -49,9 +49,17 @@
 	}
 </script>
 
-{#if visible && id}
+<!-- Once an `id` is set we keep the drawer markup mounted across dismiss / re-attach
+     cycles, hiding it via `display: none` instead of unmounting. The TerminalView
+     therefore retains its WebSocket and xterm state — closing and re-opening the
+     drawer (or hammering the header terminal button) no longer triggers a fresh
+     handshake + backlog repaint every time. We still remount on `id` change via
+     `{#key id}` because that's a different sandbox and the WS has to point
+     somewhere else. -->
+{#if id}
 	<div
 		class="mx-auto mt-2 w-full max-w-[48rem] overflow-hidden rounded-lg border border-border/40 bg-muted/30"
+		class:hidden={!visible}
 	>
 		<header class="flex items-center gap-2 border-b border-border/30 bg-muted/40 px-3 py-1.5">
 			<TerminalSquare class="h-3.5 w-3.5 flex-shrink-0 text-primary" aria-hidden="true" />
@@ -97,15 +105,13 @@
 			</Button>
 		</header>
 
-		{#if !collapsed}
-			<!-- Fixed-height pane so the chat composer stays anchored.
-			     Tall enough for ~16 lines + a couple of chrome rows; if
-			     the user wants more they can hit "Open full". -->
-			{#key id}
-				<div class="h-64 w-full">
-					<TerminalView terminalId={id} />
-				</div>
-			{/key}
-		{/if}
+		<!-- Collapse hides the pane visually but keeps the WS alive,
+		     same rationale as the dismiss case above. Fixed-height
+		     pane so the chat composer stays anchored. -->
+		{#key id}
+			<div class="h-64 w-full" class:hidden={collapsed}>
+				<TerminalView terminalId={id} />
+			</div>
+		{/key}
 	</div>
 {/if}

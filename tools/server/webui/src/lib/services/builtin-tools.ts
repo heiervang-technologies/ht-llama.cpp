@@ -649,8 +649,7 @@ async function normalizeMediaInput(
 	const trimmed = raw.trim();
 	const accepted = kind === 'image' ? 'PNG, JPEG, WEBP, or GIF' : 'WAV, MP3, OGG, or FLAC';
 	const sniff = kind === 'image' ? isImageMagic : isAudioMagic;
-	if (!trimmed)
-		throw new Error(`${kind} is required (base64 string, data URL, or https URL)`);
+	if (!trimmed) throw new Error(`${kind} is required (base64 string, data URL, or https URL)`);
 
 	const dataUrlMatch = /^data:[a-z0-9.+/-]+;base64,(.+)$/i.exec(trimmed);
 	if (dataUrlMatch) {
@@ -1433,9 +1432,7 @@ export async function runVideoGeneration(
 	// instead of staring at a generic failure.
 	const cleanImage = await normalizeImageInput(image, opts.signal);
 	const cleanAudio = audio ? await normalizeAudioInput(audio, opts.signal) : undefined;
-	const cleanLastFrame = lastFrame
-		? await normalizeImageInput(lastFrame, opts.signal)
-		: undefined;
+	const cleanLastFrame = lastFrame ? await normalizeImageInput(lastFrame, opts.signal) : undefined;
 
 	const body: Record<string, unknown> = {
 		prompt: effectivePrompt,
