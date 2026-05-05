@@ -25,6 +25,9 @@ export interface ChatAttachmentDisplayItem {
 	size?: number;
 	preview?: string;
 	isImage: boolean;
+	isVideo?: boolean;
+	isMcpPrompt?: boolean;
+	isMcpResource?: boolean;
 	isLoading?: boolean;
 	loadError?: string;
 	uploadedFile?: ChatUploadedFile;

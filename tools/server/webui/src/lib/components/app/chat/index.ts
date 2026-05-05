@@ -22,7 +22,7 @@
  * **Architecture:**
  * - Delegates rendering to specialized thumbnail components based on attachment type
  * - Manages scroll state and navigation arrows for horizontal overflow
- * - Integrates with DialogChatAttachmentsPreview for full-size gallery/single viewing
+ * - Integrates with DialogChatAttachmentPreview for full-size viewing
  * - Validates vision modality support via `activeModelId` prop
  *
  * **Features:**
@@ -49,53 +49,55 @@
  * />
  * ```
  */
-export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsList.svelte';
-
-/**
- * Renders a single attachment item based on its type (image, file, MCP prompt, or MCP resource).
- * Delegates to specialized sub-components: ChatAttachmentsListItemThumbnailImage, ChatAttachmentsListItemThumbnailFile,
- * ChatAttachmentsListItemMcpPrompt, or ChatAttachmentsListItemMcpResource.
- */
-export { default as ChatAttachmentsListItem } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItem.svelte';
+export { default as ChatAttachmentsList } from './ChatAttachments/ChatAttachmentsList.svelte';
 
 /**
  * Displays MCP Prompt attachment with expandable content preview.
  * Shows server name, prompt name, and allows expanding to view full prompt arguments
- * and content. Used when user selects a prompt from ChatFormPickerMcpPrompts.
+ * and content. Used when user selects a prompt from ChatFormPromptPicker.
  */
-export { default as ChatAttachmentsListItemMcpPrompt } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpPrompt.svelte';
+export { default as ChatAttachmentMcpPrompt } from './ChatAttachments/ChatAttachmentMcpPrompt.svelte';
 
 /**
  * Displays a single MCP Resource attachment with icon, name, and server info.
  * Shows loading/error states and supports remove action.
  * Used within ChatAttachmentMcpResources for individual resource display.
  */
-export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemMcpResource.svelte';
+export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAttachmentMcpResource.svelte';
+
+/**
+ * Full-size attachment preview component for dialog display. Handles different file types:
+ * images (full-size display), text files (syntax highlighted), PDFs (text extraction or image preview),
+ * audio (placeholder with download), and generic files (download option).
+ */
+export { default as ChatAttachmentPreview } from './ChatAttachments/ChatAttachmentPreview.svelte';
+
+/**
+ * Displays MCP Resource attachments as a horizontal carousel.
+ * Shows resource name, URI, and allows clicking to view resource content.
+ */
+export { default as ChatAttachmentMcpResources } from './ChatAttachments/ChatAttachmentMcpResources.svelte';
 
 /**
  * Thumbnail for non-image file attachments. Displays file type icon based on extension,
  * file name (truncated), and file size.
  * Handles text files, PDFs, audio, and other document types.
  */
-export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
+export { default as ChatAttachmentThumbnailFile } from './ChatAttachments/ChatAttachmentThumbnailFile.svelte';
 
 /**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.
  */
-export { default as ChatAttachmentsListItemThumbnailImage } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailImage.svelte';
+export { default as ChatAttachmentThumbnailImage } from './ChatAttachments/ChatAttachmentThumbnailImage.svelte';
 
 /**
- * Unified attachment preview component for dialog display. Shows a single file
- * preview without carousel, or a gallery/carousel view when multiple items exist.
- * Uses ChatAttachmentPreviewSingle internally for each item's content.
+ * Grid view of all attachments for "View All" dialog. Displays all attachments
+ * in a responsive grid layout when there are too many to show inline.
+ * Triggered by "+X more" button in ChatAttachmentsList.
  */
-export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
-export { default as ChatAttachmentsPreviewNavButtons } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewNavButtons.svelte';
-export { default as ChatAttachmentsPreviewFileInfo } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewFileInfo.svelte';
-export { default as ChatAttachmentsPreviewThumbnailStrip } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewThumbnailStrip.svelte';
-export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreviewCurrentItem/ChatAttachmentsPreviewCurrentItem.svelte';
+export { default as ChatAttachmentsViewAll } from './ChatAttachments/ChatAttachmentsViewAll.svelte';
 
 /**
  *
@@ -120,9 +122,9 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormTextarea, ChatFormActions, and ChatFormPickerMcpPrompts
+ * - Composes ChatFormTextarea, ChatFormActions, and ChatFormPromptPicker
  * - Manages file upload state via `uploadedFiles` bindable prop
- * - Integrates with ModelsSelectorDropdown for model selection in router mode
+ * - Integrates with ModelsSelector for model selection in router mode
  * - Communicates with parent via callbacks (onSubmit, onFilesAdd, onStop, etc.)
  *
  * **Input Handling:**
@@ -162,12 +164,18 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
 export { default as ChatForm } from './ChatForm/ChatForm.svelte';
 
 /**
- * Wrapper component for the "add to chat" button (Plus icon).
- * Exposes a `button` snippet that can be used inside DropdownMenu.Trigger (desktop)
- * or Sheet.Root (mobile) to maintain consistent styling while allowing
- * platform-specific trigger wrappers.
+ * Dropdown button for file attachment selection. Opens a menu with options for
+ * Images, Text Files, and PDF Files. Each option filters the file picker to
+ * appropriate types. Images option is disabled when model lacks vision modality.
  */
-export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionsAdd.svelte';
+export { default as ChatFormActionAttachmentsDropdown } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsDropdown.svelte';
+
+/**
+ * Mobile sheet variant of the file attachment selector. Renders a bottom sheet
+ * with the same options as ChatFormActionAttachmentsDropdown, optimized for
+ * touch interaction on mobile devices.
+ */
+export { default as ChatFormActionAttachmentsSheet } from './ChatForm/ChatFormActions/ChatFormActionAttachmentsSheet.svelte';
 
 /**
  * Audio recording button with real-time recording indicator. Records audio
@@ -175,6 +183,15 @@ export { default as ChatFormActionsAdd } from './ChatForm/ChatFormActions/ChatFo
  * supports audio modality and setting for automatic audio input is enabled. Shows recording duration while active.
  */
 export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
+
+/**
+ * Composer chip that flips the imageGenEnabled flag in one click.
+ * Mirrors the reasoning toggle pattern — one-shot affordance for
+ * something otherwise buried in Settings → Images. When on, the
+ * model sees generate_image / edit_image and the /image slash
+ * command works; when off all three are gated.
+ */
+export { default as ChatFormActionImageGen } from './ChatForm/ChatFormActions/ChatFormActionImageGen.svelte';
 
 /**
  * Container for chat form action buttons. Arranges file attachment, audio record,
@@ -191,65 +208,14 @@ export { default as ChatFormActions } from './ChatForm/ChatFormActions/ChatFormA
 export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/ChatFormActionSubmit.svelte';
 
 /**
- * Model selector component for the chat form action bar. Renders either a dropdown
- * (desktop) or bottom sheet (mobile) for selecting the conversation model in router mode.
- * Exposes an `open` method for programmatically opening the selector.
- */
-export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
-
-/**
- * Dropdown submenu for managing tool permissions in the chat form.
- *
- * Displays a collapsible list of available tools organized by group (Built-in / JSON Schema).
- * Each group can be expanded to show individual tools with checkboxes for enabling/disabling.
- * Provides bulk enable/disable controls per group and shows enabled/total tool counts.
- * Opens the tools panel on the server when the menu opens.
- *
- * Features:
- * - Grouped tools with collapsible sections
- * - Group favicon display (MCP server icons)
- * - Per-group and per-tool toggle checkboxes
- * - Loading/error states for tool discovery
- * - Integration with toolsPanel for state management
- *
- * @example
- * ```svelte
- * <ChatFormActionAddToolsSubmenu />
- * ```
- */
-export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
-
-/**
- * Dropdown submenu for managing MCP servers in the chat form.
- *
- * Displays a searchable list of enabled MCP servers with toggle switches
- * to enable/disable each server for chat. Shows server favicon, health status,
- * and a "Manage MCP Servers" settings link.
- *
- * Features:
- * - Search/filter servers by name or URL
- * - Per-server toggle to enable/disable for chat
- * - Health check indicator (shows "Error" badge for failed servers)
- * - Server favicon display
- * - Settings link to manage MCP server configuration
- *
- * @example
- * ```svelte
- * <ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
- * ```
- */
-export { default as ChatFormActionAddMcpServersSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpServersSubmenu.svelte';
-
-/**
  * Hidden file input element for programmatic file selection.
  */
 export { default as ChatFormFileInputInvisible } from './ChatForm/ChatFormFileInputInvisible.svelte';
 
 /**
- * Displays MCP Resource attachments as a horizontal carousel.
- * Shows resource name, URI, and allows clicking to view resource content.
+ * Helper text display below chat.
  */
-export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
+export { default as ChatFormHelperText } from './ChatForm/ChatFormHelperText.svelte';
 
 /**
  * Auto-resizing textarea with IME composition support. Automatically adjusts
@@ -259,10 +225,10 @@ export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResou
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
 /**
- * **ChatFormPickerMcpPrompts** - MCP prompt selection interface
+ * **ChatFormPromptPicker** - MCP prompt selection interface
  *
  * Floating picker for browsing and selecting MCP Server Prompts.
- * Triggered by typing `/` in the chat input or choosing `MCP Prompt` option in ChatFormActionAddDropdown.
+ * Triggered by typing `/` in the chat input or choosing `MCP Prompt` option in ChatFormActionAttachmentsDropdown.
  * Loads prompts from connected MCP servers and allows users to select and configure them.
  *
  * **Architecture:**
@@ -290,7 +256,7 @@ export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte'
  *
  * @example
  * ```svelte
- * <ChatFormPickerMcpPrompts
+ * <ChatFormPromptPicker
  *   bind:this={pickerRef}
  *   isOpen={showPicker}
  *   searchQuery={promptQuery}
@@ -301,58 +267,58 @@ export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte'
  * />
  * ```
  */
-export { default as ChatFormPickerMcpPrompts } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
+export { default as ChatFormPromptPicker } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPicker.svelte';
 
 /**
  * Form for entering MCP prompt arguments. Displays input fields for each
  * required argument defined by the prompt. Validates input and submits
  * when all required fields are filled. Shows argument descriptions as hints.
  */
-export { default as ChatFormPromptPickerArgumentForm } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentForm.svelte';
+export { default as ChatFormPromptPickerArgumentForm } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerArgumentForm.svelte';
 
 /**
  * Single argument input field with autocomplete suggestions. Fetches suggestions
  * from MCP server based on argument type. Supports keyboard navigation through
  * suggestions list. Used within ChatFormPromptPickerArgumentForm.
  */
-export { default as ChatFormPromptPickerArgumentInput } from './ChatForm/ChatFormPickers/ChatFormPickerMcpPrompts/ChatFormPromptPickerArgumentInput.svelte';
+export { default as ChatFormPromptPickerArgumentInput } from './ChatForm/ChatFormPromptPicker/ChatFormPromptPickerArgumentInput.svelte';
 
 /**
  * Shared popover wrapper for inline picker popovers (prompts, resources).
  * Provides consistent positioning, styling, and open/close behavior.
  */
-export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerPopover.svelte';
+export { default as ChatFormPickerPopover } from './ChatForm/ChatFormPickerPopover.svelte';
 
 /**
  * Generic scrollable list for picker popovers. Provides search input,
  * scroll-into-view for keyboard navigation, loading skeletons, empty state,
  * and optional footer. Uses Svelte 5 snippets for item/skeleton/footer rendering.
- * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMcpResources.
+ * Shared by ChatFormPromptPicker and ChatFormResourcePicker.
  */
-export { default as ChatFormPickerList } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerList.svelte';
+export { default as ChatFormPickerList } from './ChatForm/ChatFormPicker/ChatFormPickerList.svelte';
 
 /**
  * Generic button wrapper for picker list items. Provides consistent styling,
  * hover/selected states, and data-picker-index attribute for scroll-into-view.
- * Shared by ChatFormPickerMcpPrompts and ChatFormPickerMcpResources.
+ * Shared by ChatFormPromptPicker and ChatFormResourcePicker.
  */
-export { default as ChatFormPickerListItem } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItem.svelte';
+export { default as ChatFormPickerListItem } from './ChatForm/ChatFormPicker/ChatFormPickerListItem.svelte';
 
 /**
  * Generic header for picker items displaying server favicon, label, item title,
  * and optional description. Accepts `titleExtra` and `subtitle` snippets for
  * custom content like badges or URIs. Shared by both pickers.
  */
-export { default as ChatFormPickerItemHeader } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerItemHeader.svelte';
+export { default as ChatFormPickerItemHeader } from './ChatForm/ChatFormPicker/ChatFormPickerItemHeader.svelte';
 
 /**
  * Generic skeleton loading placeholder for picker list items. Configurable
  * title width and optional badge skeleton. Shared by both pickers.
  */
-export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPickers/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
+export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPicker/ChatFormPickerListItemSkeleton.svelte';
 
 /**
- * **ChatFormPickerMcpResources** - MCP resource selection interface
+ * **ChatFormResourcePicker** - MCP resource selection interface
  *
  * Floating picker for browsing and attaching MCP Server Resources.
  * Triggered by typing `@` in the chat input.
@@ -368,16 +334,7 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
  * **Exported API:**
  * - `handleKeydown(event): boolean` - Process keyboard events, returns true if handled
  */
-export { default as ChatFormPickerMcpResources } from './ChatForm/ChatFormPickers/ChatFormPickerMcpResources.svelte';
-
-/**
- * **ChatFormPickers** - Chat input picker container
- *
- * Container component that hosts both MCP prompt and MCP resource pickers.
- * Manages shared state, keyboard navigation, and coordination between the two
- * picker interfaces. Used within ChatForm for `@`-triggered pickers.
- */
-export { default as ChatFormPickers } from './ChatForm/ChatFormPickers/ChatFormPickers.svelte';
+export { default as ChatFormResourcePicker } from './ChatForm/ChatFormResourcePicker/ChatFormResourcePicker.svelte';
 
 /**
  *
@@ -444,7 +401,7 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
  * - Displays branching controls when message has siblings
  *
  * **User Messages:**
- * - Shows attachments via ChatAttachments
+ * - Shows attachments via ChatAttachmentsList
  * - Displays MCP prompts if present
  * - Edit creates new branch or preserves responses
  *
@@ -472,7 +429,7 @@ export { default as ChatMessages } from './ChatMessages/ChatMessages.svelte';
  * />
  * ```
  */
-export { default as ChatMessage } from './ChatMessages/ChatMessage/ChatMessage.svelte';
+export { default as ChatMessage } from './ChatMessages/ChatMessage.svelte';
 
 /**
  * **ChatMessageAgenticContent** - Agentic workflow output display
@@ -508,9 +465,6 @@ export { default as ChatMessage } from './ChatMessages/ChatMessage/ChatMessage.s
  * ```
  */
 export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessageAgenticContent.svelte';
-export { default as ChatMessageActionCardPermissionRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
-export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
-export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardContinueRequest.svelte';
 
 /**
  * Action buttons toolbar for messages. Displays copy, edit, delete, and regenerate
@@ -518,7 +472,7 @@ export { default as ChatMessageActionCardContinueRequest } from './ChatMessages/
  * Shows delete confirmation dialog with cascade delete count. Handles raw output toggle
  * for assistant messages.
  */
-export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
+export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions.svelte';
 
 /**
  * Navigation controls for message siblings (conversation branches). Displays
@@ -526,29 +480,55 @@ export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageAct
  * to navigate between alternative versions of a message created by editing
  * or regenerating. Uses `conversationsStore.navigateToSibling()` for navigation.
  */
-export { default as ChatMessageActionIconsBranchingControls } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIconsBranchingControls.svelte';
+export { default as ChatMessageBranchingControls } from './ChatMessages/ChatMessageBranchingControls.svelte';
 
 /**
  * Statistics display for assistant messages. Shows token counts (prompt/completion),
  * generation timing, tokens per second, and model name (when enabled in settings).
  * Data sourced from message.timings stored during generation.
  */
-export { default as ChatMessageStatistics } from './ChatMessages/ChatMessageStatistics/ChatMessageStatistics.svelte';
-export { default as ChatMessageStatisticsBadge } from './ChatMessages/ChatMessageStatistics/ChatMessageStatisticsBadge.svelte';
+export { default as ChatMessageStatistics } from './ChatMessages/ChatMessageStatistics.svelte';
 
 /**
  * MCP prompt display in user messages. Shows when user selected an MCP prompt
- * via ChatFormPickerMcpPrompts. Displays server name, prompt name, and expandable
+ * via ChatFormPromptPicker. Displays server name, prompt name, and expandable
  * content preview. Stored in message.extra as DatabaseMessageExtraMcpPrompt.
  */
-export { default as ChatMessageMcpPrompt } from './ChatMessages/ChatMessage/ChatMessageMcpPrompt/ChatMessageMcpPrompt.svelte';
+export { default as ChatMessageMcpPrompt } from './ChatMessages/ChatMessageMcpPrompt.svelte';
 
 /**
  * Formatted content display for MCP prompt messages. Renders the full prompt
  * content with arguments in a readable format. Used within ChatMessageMcpPrompt
  * for the expanded view.
  */
-export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessage/ChatMessageMcpPrompt/ChatMessageMcpPromptContent.svelte';
+export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessageMcpPromptContent.svelte';
+
+/**
+ * System message display component. Renders system messages with distinct styling.
+ * Visibility controlled by `showSystemMessage` config setting.
+ */
+export { default as ChatMessageSystem } from './ChatMessages/ChatMessageSystem.svelte';
+
+/**
+ * Tool message display component. Renders a role=tool result as a dim
+ * dashed-border card when `showToolMessagesAsStandalone` is on.
+ */
+export { default as ChatMessageTool } from './ChatMessages/ChatMessageTool.svelte';
+
+/**
+ * Phantom context card. Rendered above the first message when
+ * `showToolMessagesAsStandalone` is on, showing the system prompt and
+ * every tool definition the model will see on the next turn — handy
+ * for eyeballing prompt context before sending.
+ */
+export { default as ChatMessagePhantomContext } from './ChatMessages/ChatMessagePhantomContext.svelte';
+
+/**
+ * User message display component. Renders user messages with right-aligned bubble styling.
+ * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
+ * Supports inline editing mode with ChatMessageEditForm integration.
+ */
+export { default as ChatMessageUser } from './ChatMessages/ChatMessageUser.svelte';
 
 /**
  * Assistant message display component. Renders assistant responses with left-aligned styling.
@@ -556,7 +536,7 @@ export { default as ChatMessageMcpPromptContent } from './ChatMessages/ChatMessa
  * (via ChatMessageAgenticContent). Shows model info badge, statistics, and action buttons.
  * Handles streaming state with real-time content updates.
  */
-export { default as ChatMessageAssistant } from './ChatMessages/ChatMessage/ChatMessageAssistant/ChatMessageAssistant.svelte';
+export { default as ChatMessageAssistant } from './ChatMessages/ChatMessageAssistant.svelte';
 
 /**
  * Inline message editing form. Provides textarea for editing message content with
@@ -565,21 +545,6 @@ export { default as ChatMessageAssistant } from './ChatMessages/ChatMessage/Chat
  * when user enters edit mode.
  */
 export { default as ChatMessageEditForm } from './ChatMessages/ChatMessageEditForm.svelte';
-
-/**
- * User message display component. Renders user messages with right-aligned bubble styling.
- * Shows message content, attachments via ChatAttachmentsList, and MCP prompts if present.
- * Supports inline editing mode with ChatMessageEditForm integration.
- */
-export { default as ChatMessageUser } from './ChatMessages/ChatMessage/ChatMessageUser/ChatMessageUser.svelte';
-export { default as ChatMessageUserBubble } from './ChatMessages/ChatMessage/ChatMessageUser/ChatMessageUserBubble.svelte';
-export { default as ChatMessageUserPending } from './ChatMessages/ChatMessage/ChatMessageUser/ChatMessageUserPending.svelte';
-
-/**
- * System message display component. Renders system messages with distinct styling.
- * Visibility controlled by `showSystemMessage` config setting.
- */
-export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMessageSystem/ChatMessageSystem.svelte';
 
 /**
  *
@@ -605,7 +570,7 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
  * and server state. Used as the main content area in chat routes.
  *
  * **Architecture:**
- * - Composes ChatMessages, ChatScreenForm, and dialogs
+ * - Composes ChatMessages, ChatScreenForm, ChatScreenHeader, and dialogs
  * - Manages auto-scroll via `createAutoScrollController()` hook
  * - Handles file upload pipeline (validation → processing → state update)
  * - Integrates with serverStore for loading/error/warning states
@@ -654,11 +619,25 @@ export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
 export { default as ChatScreenDragOverlay } from './ChatScreen/ChatScreenDragOverlay.svelte';
 
 /**
+ * Right-side slide-out drawer for rendering HTML/SVG artifacts extracted from
+ * assistant messages. Reads from artifactsStore and opens automatically the
+ * first time an artifact is registered (unless the user explicitly closed it).
+ */
+export { default as ArtifactDrawer } from './ChatScreen/ArtifactDrawer.svelte';
+
+/**
  * Chat form wrapper within ChatScreen. Positions the ChatForm component at the
  * bottom of the screen with proper padding and max-width constraints. Handles
  * the visual container styling for the input area.
  */
 export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
+
+/**
+ * Header bar for chat screen. Displays conversation title (or "New Chat"),
+ * model selector (in router mode), and action buttons (delete conversation).
+ * Sticky positioned at the top of the chat area.
+ */
+export { default as ChatScreenHeader } from './ChatScreen/ChatScreenHeader.svelte';
 
 /**
  * Processing info display during generation. Shows real-time statistics:
@@ -667,3 +646,184 @@ export { default as ChatScreenForm } from './ChatScreen/ChatScreenForm.svelte';
  * Only visible when `isCurrentConversationLoading` is true.
  */
 export { default as ChatScreenProcessingInfo } from './ChatScreen/ChatScreenProcessingInfo.svelte';
+
+/**
+ *
+ * SETTINGS
+ *
+ * Application settings components. Settings are persisted to localStorage via
+ * the config store and synchronized with server `/props` endpoint for sampling
+ * parameters. The settings panel uses a tabbed interface with mobile-responsive
+ * horizontal scrolling tabs.
+ *
+ * **Parameter Sync System:**
+ * Sampling parameters (temperature, top_p, etc.) can come from three sources:
+ * 1. **Server Props**: Default values from `/props` endpoint
+ * 2. **User Custom**: Values explicitly set by user (overrides server)
+ * 3. **App Default**: Fallback when server props unavailable
+ *
+ * The `ChatSettingsParameterSourceIndicator` badge shows which source is active.
+ *
+ */
+
+/**
+ * **ChatSettings** - Application settings panel
+ *
+ * Comprehensive settings interface with categorized sections. Manages all
+ * user preferences and sampling parameters. Integrates with config store
+ * for persistence and ParameterSyncService for server synchronization.
+ *
+ * **Architecture:**
+ * - Uses tabbed navigation with category sections
+ * - Maintains local form state, commits on save
+ * - Tracks user overrides vs server defaults for sampling params
+ * - Exposes reset() method for dialog close without save
+ *
+ * **Categories:**
+ * - **General**: API key, system message, show system messages toggle
+ * - **Display**: Theme selection, message actions visibility, model info badge
+ * - **Sampling**: Temperature, top_p, top_k, min_p, repeat_penalty, etc.
+ * - **Penalties**: Frequency penalty, presence penalty, repeat last N
+ * - **Import/Export**: Conversation backup and restore
+ * - **MCP**: MCP server management (opens DialogChatSettings with MCP tab)
+ * - **Developer**: Debug options, disable auto-scroll
+ *
+ * **Parameter Sync:**
+ * - Fetches defaults from server `/props` endpoint
+ * - Shows source indicator badge (Custom/Server Props/Default)
+ * - Real-time badge updates as user types
+ * - Tracks which parameters user has explicitly overridden
+ *
+ * **Features:**
+ * - Mobile-responsive layout with horizontal scrolling tabs
+ * - Form validation with error messages
+ * - Secure API key storage (masked input)
+ * - Import/export conversations as JSON
+ * - Reset to defaults option per parameter
+ *
+ * **Exported API:**
+ * - `reset()` - Reset form fields to currently saved values (for cancel action)
+ *
+ * @example
+ * ```svelte
+ * <ChatSettings
+ *   bind:this={settingsRef}
+ *   onSave={() => dialogOpen = false}
+ *   onCancel={() => { settingsRef.reset(); dialogOpen = false; }}
+ * />
+ * ```
+ */
+export { default as ChatSettings } from './ChatSettings/ChatSettings.svelte';
+
+/**
+ * Footer with save/cancel buttons for settings panel. Positioned at bottom
+ * of settings dialog. Save button commits form state to config store,
+ * cancel button triggers reset and close.
+ */
+export { default as ChatSettingsFooter } from './ChatSettings/ChatSettingsFooter.svelte';
+
+/**
+ * Form fields renderer for individual settings. Generates appropriate input
+ * components based on field type (text, number, select, checkbox, textarea).
+ * Handles validation, help text display, and parameter source indicators.
+ */
+export { default as ChatSettingsFields } from './ChatSettings/ChatSettingsFields.svelte';
+
+/**
+ * Import/export tab content for conversation data management. Provides buttons
+ * to export all conversations as JSON file and import from JSON file.
+ * Handles file download/upload and data validation.
+ */
+export { default as ChatSettingsImportExportTab } from './ChatSettings/ChatSettingsImportExportTab.svelte';
+
+/**
+ * Badge indicating parameter source for sampling settings. Shows one of:
+ * - **Custom**: User has explicitly set this value (orange badge)
+ * - **Server Props**: Using default from `/props` endpoint (blue badge)
+ * - **Default**: Using app default, server props unavailable (gray badge)
+ * Updates in real-time as user types to show immediate feedback.
+ */
+export { default as ChatSettingsParameterSourceIndicator } from './ChatSettings/ChatSettingsParameterSourceIndicator.svelte';
+
+/**
+ *
+ * SIDEBAR
+ *
+ * The sidebar integrates with ShadCN's sidebar component system
+ * for consistent styling and mobile responsiveness.
+ * Conversations are loaded from conversationsStore and displayed in reverse
+ * chronological order (most recent first).
+ *
+ */
+
+/**
+ * **ChatSidebar** - Chat Sidebar with actions menu and conversation list
+ *
+ * Collapsible sidebar displaying conversation history with search and
+ * management actions. Integrates with ShadCN sidebar component for
+ * consistent styling and mobile responsiveness.
+ *
+ * **Architecture:**
+ * - Uses ShadCN Sidebar.* components for structure
+ * - Fetches conversations from conversationsStore
+ * - Manages search state and filtered results locally
+ * - Handles conversation CRUD operations via conversationsStore
+ *
+ * **Navigation:**
+ * - Click conversation to navigate to `/chat/[id]`
+ * - New chat button navigates to `/` (root)
+ * - Active conversation highlighted based on route params
+ *
+ * **Conversation Management:**
+ * - Right-click or menu button for context menu
+ * - Rename: Opens inline edit dialog
+ * - Delete: Shows confirmation with conversation preview
+ * - Delete All: Removes all conversations with confirmation
+ *
+ * **Features:**
+ * - Search/filter conversations by title
+ * - Conversation list with message previews (first message truncated)
+ * - Active conversation highlighting
+ * - Mobile-responsive collapse/expand via ShadCN sidebar
+ * - New chat button in header
+ * - Settings button opens DialogChatSettings
+ *
+ * **Exported API:**
+ * - `handleMobileSidebarItemClick()` - Close sidebar on mobile after item selection
+ * - `activateSearchMode()` - Focus search input programmatically
+ * - `editActiveConversation()` - Open rename dialog for current conversation
+ *
+ * @example
+ * ```svelte
+ * <ChatSidebar bind:this={sidebarRef} />
+ * ```
+ */
+export { default as ChatSidebar } from './ChatSidebar/ChatSidebar.svelte';
+
+/**
+ * Action buttons for sidebar header. Contains new chat button, settings button,
+ * and delete all conversations button. Manages dialog states for settings and
+ * delete confirmation.
+ */
+export { default as ChatSidebarActions } from './ChatSidebar/ChatSidebarActions.svelte';
+
+/**
+ * Single conversation item in sidebar. Displays conversation title (truncated),
+ * last message preview, and timestamp. Shows context menu on right-click with
+ * rename and delete options. Highlights when active (matches current route).
+ * Handles click to navigate and keyboard accessibility.
+ */
+export { default as ChatSidebarConversationItem } from './ChatSidebar/ChatSidebarConversationItem.svelte';
+
+/**
+ * Single document item in sidebar. Mirrors ChatSidebarConversationItem for docs:
+ * cursor-pointer row, tooltip, hover-revealed dropdown with Rename/Delete actions.
+ */
+export { default as ChatSidebarDocItem } from './ChatSidebar/ChatSidebarDocItem.svelte';
+
+/**
+ * Search input for filtering conversations in sidebar. Filters conversation
+ * list by title as user types. Shows clear button when query is not empty.
+ * Integrated into sidebar header with proper styling.
+ */
+export { default as ChatSidebarSearch } from './ChatSidebar/ChatSidebarSearch.svelte';

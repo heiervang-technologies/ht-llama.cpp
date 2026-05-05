@@ -968,6 +968,10 @@ json oaicompat_chat_params_parse(
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
+        if (opt.remap_developer_role && role == "developer") {
+            msg["role"] = "system";
+            role = "system";
+        }
         if (role != "assistant" && !msg.contains("content")) {
             throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }

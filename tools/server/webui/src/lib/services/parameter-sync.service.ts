@@ -149,12 +149,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		canSync: true
 	},
 	{
-		key: 'autoMicOnEmpty',
-		serverKey: 'autoMicOnEmpty',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
 		key: 'pyInterpreterEnabled',
 		serverKey: 'pyInterpreterEnabled',
 		type: SyncableParameterType.BOOLEAN,

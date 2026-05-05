@@ -1,13 +1,14 @@
 <script lang="ts">
 	import {
 		ChatAttachmentsList,
+		ChatAttachmentMcpResources,
 		ChatFormActions,
 		ChatFormFileInputInvisible,
-		ChatFormMcpResourcesList,
-		ChatFormPickers,
-		ChatFormTextarea,
-		DialogMcpResourcesBrowser
+		ChatFormPromptPicker,
+		ChatFormResourcePicker,
+		ChatFormTextarea
 	} from '$lib/components/app';
+	import { DialogMcpResources } from '$lib/components/app/dialogs';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		INPUT_CLASSES,
@@ -39,6 +40,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
+	import { SttService } from '$lib/services/stt.service';
+	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -53,8 +56,6 @@
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
-		showAddButton?: boolean;
-		showModelSelector?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -74,8 +75,6 @@
 		isLoading = false,
 		placeholder = 'Type a message...',
 		showMcpPromptButton = false,
-		showAddButton = true,
-		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -88,21 +87,36 @@
 		onValueChange
 	}: Props = $props();
 
+	/**
+	 *
+	 *
+	 * STATE
+	 *
+	 *
+	 */
+
 	// Component References
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
-	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
-		$state(undefined);
+	let promptPickerRef: ChatFormPromptPicker | undefined = $state(undefined);
+	let resourcePickerRef: ChatFormResourcePicker | undefined = $state(undefined);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
 	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
+	let isTranscribing = $state(false);
+	// Held while an STT request is in flight so a second mic click can cancel it,
+	// mirroring the doc-editor mic. Without this, a hung STT server would strand
+	// the user in the spinner state.
+	let transcribeAbort: AbortController | null = null;
 
-	// Picker State
+	// Prompt Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
+
+	// Inline Resource Picker State (triggered by @)
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
@@ -110,12 +124,22 @@
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
+	/**
+	 *
+	 *
+	 * DERIVED STATE
+	 *
+	 *
+	 */
+
+	// Configuration
 	let currentConfig = $derived(config());
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
+	// Model Selection Logic
 	let isRouter = $derived(isRouterMode());
 	let conversationModel = $derived(
 		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
@@ -141,6 +165,7 @@
 		return null;
 	});
 
+	// Form Validation State
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
@@ -148,10 +173,26 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
+	/**
+	 *
+	 *
+	 * LIFECYCLE
+	 *
+	 *
+	 */
+
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
+
+	/**
+	 *
+	 *
+	 * PUBLIC API
+	 *
+	 *
+	 */
 
 	export function focus() {
 		textareaRef?.focus();
@@ -165,6 +206,10 @@
 		chatFormActionsRef?.openModelSelector();
 	}
 
+	/**
+	 * Check if a model is selected, open selector if not
+	 * @returns true if model is selected, false otherwise
+	 */
 	export function checkModelSelected(): boolean {
 		if (!hasModelSelected) {
 			chatFormActionsRef?.openModelSelector();
@@ -172,6 +217,14 @@
 		}
 		return true;
 	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - File Management
+	 *
+	 *
+	 */
 
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
@@ -191,6 +244,14 @@
 			onUploadedFileRemove?.(fileId);
 		}
 	}
+
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Input & Keyboard
+	 *
+	 *
+	 */
 
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -219,7 +280,11 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		if (pickersRef?.handleKeydown(event)) {
+		if (isPromptPickerOpen && promptPickerRef?.handleKeydown(event)) {
+			return;
+		}
+
+		if (isInlineResourcePickerOpen && resourcePickerRef?.handleKeydown(event)) {
 			return;
 		}
 
@@ -242,7 +307,7 @@
 			if (sendOnEnter || isModifier) {
 				event.preventDefault();
 
-				if (!canSubmit || disabled || hasLoadingAttachments) return;
+				if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
 
 				onSubmit?.();
 			}
@@ -330,6 +395,14 @@
 		}
 	}
 
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Prompt Picker
+	 *
+	 *
+	 */
+
 	function handlePromptLoadStart(
 		placeholderId: string,
 		promptInfo: MCPPromptInfo,
@@ -408,6 +481,14 @@
 		textareaRef?.focus();
 	}
 
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Inline Resource Picker
+	 *
+	 *
+	 */
+
 	function handleInlineResourcePickerClose() {
 		isInlineResourcePickerOpen = false;
 		resourceSearchQuery = '';
@@ -415,6 +496,7 @@
 	}
 
 	function handleInlineResourceSelect() {
+		// Clear the @query from input after resource is attached
 		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
 			value = '';
 			onValueChange?.('');
@@ -437,22 +519,83 @@
 		isResourceDialogOpen = true;
 	}
 
+	/**
+	 *
+	 *
+	 * EVENT HANDLERS - Audio Recording
+	 *
+	 *
+	 */
+
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
+			toast.error(
+				'Audio recording is not supported in this browser. Try Chrome, Firefox, or Edge.'
+			);
+			return;
+		}
+
+		// Clicking while transcribing cancels the in-flight STT request so a slow
+		// or hung server doesn't leave the composer frozen.
+		if (isTranscribing) {
+			transcribeAbort?.abort();
+			transcribeAbort = null;
+			isTranscribing = false;
 			return;
 		}
 
 		if (isRecording) {
-			isRecording = false;
 			try {
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
+				isRecording = false;
 
-				onFilesAdd?.([audioFile]);
+				const sttOn =
+					Boolean(currentConfig.sttEnabled) &&
+					Boolean(currentConfig.sttAutoTranscribe) &&
+					SttService.isConfigured();
+
+				if (sttOn) {
+					isTranscribing = true;
+					const controller = new AbortController();
+					transcribeAbort = controller;
+					try {
+						const text = await SttService.transcribe(audioFile, {
+							signal: controller.signal
+						});
+						if (text) {
+							const current = value ?? '';
+							const needsSpace = current.length > 0 && !/\s$/.test(current);
+							value = current + (needsSpace ? ' ' : '') + text;
+							onValueChange?.(value);
+							// Give the textarea a tick to render, then focus + resize.
+							queueMicrotask(() => textareaRef?.focus());
+							// Voice-only flow: submit automatically when the user has opted
+							// in. Skip when a model response is already streaming so we don't
+							// fire a second request mid-stream.
+							if (currentConfig.sttAutoSend && !isLoading && !disabled) {
+								queueMicrotask(() => onSubmit?.());
+							}
+						}
+					} catch (err) {
+						// Silent on user-initiated aborts — state is already reset above.
+						if ((err as { name?: string })?.name === 'AbortError') return;
+						console.error('STT transcription failed, falling back to file attach:', err);
+						const msg = err instanceof Error ? err.message : String(err);
+						toast.error(`Transcription failed: ${msg}. Attached the recording instead.`);
+						onFilesAdd?.([audioFile]);
+					} finally {
+						if (transcribeAbort === controller) transcribeAbort = null;
+						isTranscribing = false;
+					}
+				} else {
+					onFilesAdd?.([audioFile]);
+				}
 			} catch (error) {
 				console.error('Failed to stop recording:', error);
+				isRecording = false;
+				isTranscribing = false;
 			}
 		} else {
 			try {
@@ -460,6 +603,19 @@
 				isRecording = true;
 			} catch (error) {
 				console.error('Failed to start recording:', error);
+				const name = (error as { name?: string })?.name;
+				const msg = error instanceof Error ? error.message : String(error);
+				if (name === 'NotAllowedError' || name === 'SecurityError') {
+					toast.error(
+						'Microphone permission denied. Enable mic access for this site in your browser settings and try again.'
+					);
+				} else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+					toast.error('No microphone detected. Plug one in or check your system audio settings.');
+				} else if (name === 'NotReadableError') {
+					toast.error('Microphone is busy. Close other apps using the mic and try again.');
+				} else {
+					toast.error(`Could not start recording: ${msg}`);
+				}
 			}
 		}
 	}
@@ -469,27 +625,29 @@
 
 <form
 	class="relative {className}"
-	onsubmit={(event) => {
-		event.preventDefault();
-
-		if (!canSubmit || disabled || hasLoadingAttachments) return;
-
+	onsubmit={(e) => {
+		e.preventDefault();
+		if (!canSubmit || disabled || isLoading || hasLoadingAttachments) return;
 		onSubmit?.();
 	}}
 >
-	<ChatFormPickers
-		bind:this={pickersRef}
-		{isPromptPickerOpen}
-		{promptSearchQuery}
-		{isInlineResourcePickerOpen}
-		{resourceSearchQuery}
-		onPromptPickerClose={handlePromptPickerClose}
-		onInlineResourcePickerClose={handleInlineResourcePickerClose}
-		onInlineResourceSelect={handleInlineResourceSelect}
+	<ChatFormPromptPicker
+		bind:this={promptPickerRef}
+		isOpen={isPromptPickerOpen}
+		searchQuery={promptSearchQuery}
+		onClose={handlePromptPickerClose}
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
-		onInlineResourceBrowse={handleBrowseResources}
+	/>
+
+	<ChatFormResourcePicker
+		bind:this={resourcePickerRef}
+		isOpen={isInlineResourcePickerOpen}
+		searchQuery={resourceSearchQuery}
+		onClose={handleInlineResourcePickerClose}
+		onResourceSelect={handleInlineResourceSelect}
+		onBrowse={handleBrowseResources}
 	/>
 
 	<div
@@ -526,7 +684,7 @@
 			/>
 
 			{#if mcpHasResourceAttachments()}
-				<ChatFormMcpResourcesList
+				<ChatAttachmentMcpResources
 					class="mb-3"
 					onResourceClick={(uri) => {
 						preSelectedResourceUri = uri;
@@ -542,8 +700,7 @@
 				{disabled}
 				{isLoading}
 				{isRecording}
-				{showAddButton}
-				{showModelSelector}
+				{isTranscribing}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
@@ -556,7 +713,7 @@
 	</div>
 </form>
 
-<DialogMcpResourcesBrowser
+<DialogMcpResources
 	bind:open={isResourceDialogOpen}
 	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource: MCPResourceInfo) => {

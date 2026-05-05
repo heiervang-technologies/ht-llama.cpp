@@ -11,12 +11,30 @@
  */
 
 /**
- * **DialogMcpServerAddNew** - Add new MCP server dialog
  *
- * Modal dialog for adding a new MCP server with URL and optional headers.
- * Validates URL format and integrates with mcpStore and conversationsStore.
+ * SETTINGS DIALOGS
+ *
+ * Dialogs for application and server configuration.
+ *
  */
-export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
+
+/**
+ * **DialogChatSettings** - Settings dialog wrapper
+ *
+ * Modal dialog containing ChatSettings component with proper
+ * open/close state management and automatic form reset on open.
+ *
+ * **Architecture:**
+ * - Wraps ChatSettings component in ShadCN Dialog
+ * - Manages open/close state via bindable `open` prop
+ * - Resets form state when dialog opens to discard unsaved changes
+ *
+ * @example
+ * ```svelte
+ * <DialogChatSettings bind:open={showSettings} />
+ * ```
+ */
+export { default as DialogChatSettings } from './DialogChatSettings.svelte';
 
 /**
  *
@@ -137,36 +155,72 @@ export { default as DialogCodePreview } from './DialogCodePreview.svelte';
  */
 
 /**
- * **DialogChatAttachmentsPreview** - Unified attachment preview dialog
+ * **DialogChatAttachmentPreview** - Full-size attachment preview
  *
- * Modal dialog for previewing file attachments. Automatically adapts to the
- * number of items: shows a single file preview without carousel for one item,
- * or a gallery with carousel navigation for multiple items.
+ * Modal dialog for viewing file attachments at full size. Supports different
+ * file types with appropriate preview modes: images, text files, PDFs, and audio.
  *
  * **Architecture:**
- * - Wraps ChatAttachmentsPreview component in ShadCN Dialog
- * - Accepts uploadedFiles and attachments arrays as data sources
- * - Filters out MCP prompts and MCP resources from display
+ * - Wraps ChatAttachmentPreview component in ShadCN Dialog
+ * - Accepts either uploaded file or stored attachment as data source
+ * - Resets preview state when dialog opens
  *
  * **Features:**
- * - Single item mode: direct preview without navigation controls
- * - Multi-item mode: gallery with left/right arrows and thumbnail strip
- * - File type aware preview (images, text, PDFs, audio)
- * - File name and size/count display in header
+ * - Full-size image display with proper scaling
+ * - Text file content with syntax highlighting
+ * - PDF preview with text/image view toggle
+ * - Audio file placeholder with download option
+ * - File name and size display in header
+ * - Download button for all file types
+ * - Vision modality check for image attachments
  *
  * @example
  * ```svelte
- * <!-- Gallery with focus on 2nd item -->
- * <DialogChatAttachmentsPreview
+ * <!-- Preview uploaded file -->
+ * <DialogChatAttachmentPreview
  *   bind:open={showPreview}
- *   uploadedFiles={pendingFiles}
- *   attachments={message.extra}
+ *   uploadedFile={selectedFile}
  *   activeModelId={currentModel}
- *   previewFocusIndex={1}
+ * />
+ *
+ * <!-- Preview stored attachment -->
+ * <DialogChatAttachmentPreview
+ *   bind:open={showPreview}
+ *   attachment={selectedAttachment}
  * />
  * ```
  */
-export { default as DialogChatAttachmentsPreview } from './DialogChatAttachmentsPreview.svelte';
+export { default as DialogChatAttachmentPreview } from './DialogChatAttachmentPreview.svelte';
+
+/**
+ * **DialogChatAttachmentsViewAll** - Grid view of all attachments
+ *
+ * Dialog showing all attachments in a responsive grid layout. Triggered by
+ * "+X more" button in ChatAttachmentsList when there are too many attachments
+ * to display inline.
+ *
+ * **Architecture:**
+ * - Wraps ChatAttachmentsViewAll component in ShadCN Dialog
+ * - Supports both readonly (message view) and editable (form) modes
+ * - Displays total attachment count in header
+ *
+ * **Features:**
+ * - Responsive grid layout for all attachments
+ * - Thumbnail previews with click-to-expand
+ * - Remove button in editable mode
+ * - Configurable thumbnail dimensions
+ * - Vision modality validation for images
+ *
+ * @example
+ * ```svelte
+ * <DialogChatAttachmentsViewAll
+ *   bind:open={showAllAttachments}
+ *   attachments={message.extra}
+ *   readonly
+ * />
+ * ```
+ */
+export { default as DialogChatAttachmentsViewAll } from './DialogChatAttachmentsViewAll.svelte';
 
 /**
  *
@@ -238,35 +292,6 @@ export { default as DialogChatError } from './DialogChatError.svelte';
  * ```
  */
 export { default as DialogEmptyFileAlert } from './DialogEmptyFileAlert.svelte';
-
-/**
- * **DialogFileUploadError** - File upload compatibility error
- *
- * Alert dialog shown when files cannot be uploaded due to type incompatibility
- * or model modality restrictions. Displays a categorized list of problematic
- * files with explanations and shows which file types the current model supports.
- *
- * **Architecture:**
- * - Uses ShadCN AlertDialog for modal display
- * - Receives structured file error data from ChatScreen
- * - Triggered during file upload validation in processFiles()
- *
- * **Features:**
- * - Categorized display: unsupported types vs modality restrictions
- * - File name in monospace with contextual error messages
- * - Summary of supported file types for the current model
- * - Scrollable content area for large error lists
- * - Single "Got it" dismiss button
- *
- * @example
- * ```svelte
- * <DialogFileUploadError
- *   bind:open={showFileError}
- *   fileErrorData={errorData}
- * />
- * ```
- */
-export { default as DialogFileUploadError } from './DialogFileUploadError.svelte';
 
 /**
  * **DialogModelNotAvailable** - Model unavailable error
@@ -391,7 +416,7 @@ export { default as DialogConversationSelection } from './DialogConversationSele
 export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 
 /**
- * **DialogMcpResourcesBrowser** - MCP resources browser dialog
+ * **DialogMcpResources** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.
  * Displays resources from connected MCP servers in a tree structure
@@ -399,7 +424,7 @@ export { default as DialogModelInformation } from './DialogModelInformation.svel
  *
  * **Architecture:**
  * - Uses ShadCN Dialog with two-panel layout
- * - Left panel: McpResourcesBrowser with tree navigation
+ * - Left panel: McpResourceBrowser with tree navigation
  * - Right panel: McpResourcePreview for selected resource
  * - Integrates with mcpStore for resource fetching and attachment
  *
@@ -412,13 +437,13 @@ export { default as DialogModelInformation } from './DialogModelInformation.svel
  *
  * @example
  * ```svelte
- * <DialogMcpResourcesBrowser
+ * <DialogMcpResources
  *   bind:open={showResources}
  *   onAttach={handleResourceAttach}
  * />
  * ```
  */
-export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowser.svelte';
+export { default as DialogMcpResources } from './DialogMcpResources.svelte';
 
 /**
  * **DialogMcpResourcePreview** - MCP resource content preview
@@ -443,3 +468,21 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
  * ```
  */
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
+
+/**
+ * **DialogAvailableTools** - Model tool-surface inspector
+ *
+ * Shows exactly what the model sees on the next chat turn: MCP tools that
+ * will be serialised into the `tools[]` request array (with expandable
+ * JSON schemas + one-click copy), built-in features active at the
+ * prompt/pipeline layer (reasoning parsing, python interpreter, continue
+ * generation, inline completions), and user-defined AI commands local to
+ * the doc editor. Everything derives off the live stores so the dialog
+ * mirrors the real pipeline state at open time.
+ *
+ * @example
+ * ```svelte
+ * <DialogAvailableTools bind:open={showToolsDialog} />
+ * ```
+ */
+export { default as DialogAvailableTools } from './DialogAvailableTools.svelte';

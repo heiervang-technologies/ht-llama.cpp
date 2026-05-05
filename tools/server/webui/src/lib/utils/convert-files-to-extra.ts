@@ -6,6 +6,7 @@ import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
 import { readFileAsText, isLikelyTextFile } from './text-files';
+import { decomposeVideo } from '$lib/services/video-decompose.service';
 import { toast } from 'svelte-sonner';
 import type { FileProcessingResult, ChatUploadedFile, DatabaseMessageExtra } from '$lib/types';
 
@@ -87,6 +88,42 @@ export async function parseFilesToMessageExtras(
 				});
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
+			}
+		} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+			// Store the whole video as a data URL so the chat history can
+			// render it directly, and also pre-compute the frames+audio
+			// decomposition so models without native video input can still
+			// consume the message without us re-decoding on every send.
+			try {
+				const base64Data = await readFileAsBase64(file.file);
+				const decomposed = await decomposeVideo(file.file).catch((err) => {
+					console.warn(`Video decompose failed for ${file.name}:`, err);
+					return null;
+				});
+				let fallbackAudioBase64: string | undefined;
+				if (decomposed?.audio) {
+					try {
+						fallbackAudioBase64 = await readFileAsBase64(
+							new File([decomposed.audio], `${file.name}.wav`, { type: 'audio/wav' })
+						);
+					} catch (err) {
+						console.warn(`Video audio encode failed for ${file.name}:`, err);
+					}
+				}
+				extras.push({
+					type: AttachmentType.VIDEO,
+					name: file.name,
+					base64Url: `data:${file.type};base64,${base64Data}`,
+					mimeType: file.type,
+					posterDataUrl: decomposed?.frames[0]?.dataUrl ?? file.preview,
+					durationSec: decomposed?.durationSec,
+					widthPx: decomposed?.widthPx,
+					heightPx: decomposed?.heightPx,
+					fallbackFrames: decomposed?.frames.map((f) => f.dataUrl),
+					fallbackAudioBase64
+				});
+			} catch (error) {
+				console.error(`Failed to process video file ${file.name}:`, error);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 			try {

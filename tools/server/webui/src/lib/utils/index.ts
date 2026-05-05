@@ -13,7 +13,7 @@ export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './a
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
-export { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from './attachment-display';
+export { getAttachmentDisplayItems } from './attachment-display';
 export { isTextFile, isImageFile, isPdfFile, isAudioFile } from './attachment-type';
 
 // Textarea utilities
@@ -190,6 +190,3 @@ export {
 // Cryptography utilities
 
 export { uuid } from './uuid';
-
-// CSS utilities
-export { remToPx } from './css';

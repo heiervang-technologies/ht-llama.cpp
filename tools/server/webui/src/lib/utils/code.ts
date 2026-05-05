@@ -1,4 +1,11 @@
-import hljs from 'highlight.js';
+// `highlight.js/lib/common` ships 36 hand-picked languages instead of
+// the default entry's 192 (~290 KB of language source vs ~1.48 MB).
+// That alone shaves ~1.2 MB off the webui bundle (~350 KB gzipped),
+// which is the single biggest cold-boot win we have without code-
+// splitting the app. If a user ever fences a code block with an
+// esoteric language tag, `hljs.highlightAuto()` still falls back
+// cleanly — it only auto-detects against registered languages.
+import hljs from 'highlight.js/lib/common';
 import {
 	NEWLINE,
 	DEFAULT_LANGUAGE,

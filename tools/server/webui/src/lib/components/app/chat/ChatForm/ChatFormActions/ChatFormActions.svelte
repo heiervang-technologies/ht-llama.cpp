@@ -2,27 +2,34 @@
 	import { Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import {
-		ChatFormActionsAdd,
-		ChatFormActionModels,
+		ChatFormActionAttachmentsDropdown,
+		ChatFormActionAttachmentsSheet,
+		ChatFormActionImageGen,
 		ChatFormActionRecord,
-		ChatFormActionSubmit
+		ChatFormActionSubmit,
+		McpServersSelector
 	} from '$lib/components/app';
-	import { FileTypeCategory } from '$lib/enums';
+	import ChainPicker from './ChainPicker.svelte';
+	import { SETTINGS_SECTION_TITLES } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { getChatSettingsDialogContext } from '$lib/contexts';
+	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
+	import { SttService } from '$lib/services/stt.service';
+	import { config } from '$lib/stores/settings.svelte';
+	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
+	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
 	interface Props {
 		canSend?: boolean;
-		canSubmit?: boolean;
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
-		showAddButton?: boolean;
-		showModelSelector?: boolean;
+		isTranscribing?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -34,13 +41,11 @@
 
 	let {
 		canSend = false,
-		canSubmit = false,
 		class: className = '',
 		disabled = false,
 		isLoading = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
+		isTranscribing = false,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -51,6 +56,131 @@
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
+	let isRouter = $derived(isRouterMode());
+	let isOffline = $derived(!!serverError());
+
+	let conversationModel = $derived(
+		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+	);
+
+	let lastSyncedConversationModel: string | null = null;
+
+	$effect(() => {
+		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
+			lastSyncedConversationModel = conversationModel;
+			modelsStore.selectModelByName(conversationModel);
+		} else if (isRouter && !modelsStore.selectedModelId && modelsStore.loadedModelIds.length > 0) {
+			lastSyncedConversationModel = null;
+			// auto-select the first loaded model only when nothing is selected yet
+			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			if (first) modelsStore.selectModelById(first.id);
+		}
+	});
+
+	let activeModelId = $derived.by(() => {
+		const options = modelOptions();
+
+		if (!isRouter) {
+			return options.length > 0 ? options[0].model : null;
+		}
+
+		const selectedId = selectedModelId();
+		if (selectedId) {
+			const model = options.find((m) => m.id === selectedId);
+			if (model) return model.model;
+		}
+
+		if (conversationModel) {
+			const model = options.find((m) => m.model === conversationModel);
+			if (model) return model.model;
+		}
+
+		return null;
+	});
+
+	let modelPropsVersion = $state(0); // Used to trigger reactivity after fetch
+
+	$effect(() => {
+		if (activeModelId) {
+			const cached = modelsStore.getModelProps(activeModelId);
+
+			if (!cached) {
+				modelsStore.fetchModelProps(activeModelId).then(() => {
+					modelPropsVersion++;
+				});
+			}
+		}
+	});
+
+	let hasAudioModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion;
+
+			return modelsStore.modelSupportsAudio(activeModelId);
+		}
+
+		return false;
+	});
+
+	let hasVisionModality = $derived.by(() => {
+		if (activeModelId) {
+			void modelPropsVersion;
+
+			return modelsStore.modelSupportsVision(activeModelId);
+		}
+
+		return false;
+	});
+
+	let hasAudioAttachments = $derived(
+		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
+	);
+	// Whether the active LLM accepts audio natively, or STT is configured, is
+	// passed through to the record button for its tooltip copy. Recording
+	// itself only requires mic permission; if neither path is set up we still
+	// attach the .wav so the user never hits a silent no-op.
+	let sttReady = $derived(Boolean(currentConfig.sttEnabled) && SttService.isConfigured());
+	// Mic is always visible alongside the send button (conversation-first UX).
+	// Hide only while a reply is streaming or when there's already an audio
+	// attachment queued.
+	let shouldShowRecordButton = $derived(!isLoading && !hasAudioAttachments);
+
+	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+
+	let isSelectedModelInCache = $derived.by(() => {
+		if (!isRouter) return true;
+
+		if (conversationModel) {
+			return modelOptions().some((option) => option.model === conversationModel);
+		}
+
+		const currentModelId = selectedModelId();
+		if (!currentModelId) return false;
+
+		return modelOptions().some((option) => option.id === currentModelId);
+	});
+
+	let submitTooltip = $derived.by(() => {
+		if (!hasModelSelected) {
+			return 'Please select a model first';
+		}
+
+		if (!isSelectedModelInCache) {
+			return 'Selected model is not available, please select another';
+		}
+
+		return '';
+	});
+
+	let chainPickerRef: ChainPicker | undefined = $state(undefined);
+
+	let isMobile = new IsMobile();
+
+	export function openModelSelector() {
+		chainPickerRef?.openModelSelector();
+	}
+
+	const chatSettingsDialog = getChatSettingsDialogContext();
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -63,34 +193,12 @@
 
 		return mcpStore.hasResourcesCapability(perChatOverrides);
 	});
-
-	let hasAudioModality = $state(false);
-	let hasVisionModality = $state(false);
-	let hasModelSelected = $state(false);
-	let isSelectedModelInCache = $state(true);
-	let submitTooltip = $state('');
-
-	let hasAudioAttachments = $derived(
-		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
-	);
-	let shouldShowRecordButton = $derived(
-		hasAudioModality && !canSubmit && !hasAudioAttachments && currentConfig.autoMicOnEmpty
-	);
-
-	let selectorModelRef: ChatFormActionModels | undefined = $state(undefined);
-
-	export function openModelSelector() {
-		selectorModelRef?.open();
-	}
 </script>
 
-<div
-	class="flex w-full items-center gap-3 {className} {showAddButton ? '' : 'justify-end'}"
-	style="container-type: inline-size"
->
-	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-2">
-			<ChatFormActionsAdd
+<div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
+	<div class="mr-auto flex items-center gap-2">
+		{#if isMobile.current}
+			<ChatFormActionAttachmentsSheet
 				{disabled}
 				{hasAudioModality}
 				{hasVisionModality}
@@ -100,26 +208,43 @@
 				{onSystemPromptClick}
 				{onMcpPromptClick}
 				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto('#/settings/mcp')}
+				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 			/>
-		</div>
-	{/if}
+		{:else}
+			<ChatFormActionAttachmentsDropdown
+				{disabled}
+				{hasAudioModality}
+				{hasVisionModality}
+				{hasMcpPromptsSupport}
+				{hasMcpResourcesSupport}
+				{onFileUpload}
+				{onSystemPromptClick}
+				{onMcpPromptClick}
+				{onMcpResourcesClick}
+				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
+			/>
+		{/if}
 
-	{#if showModelSelector}
-		<ChatFormActionModels
+		<McpServersSelector
 			{disabled}
-			bind:this={selectorModelRef}
-			bind:hasAudioModality
-			bind:hasVisionModality
-			bind:hasModelSelected
-			bind:isSelectedModelInCache
-			bind:submitTooltip
-			forceForegroundText
-			useGlobalSelection
+			onSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
 		/>
-	{/if}
 
-	{#if isLoading && !canSubmit}
+		<ChatFormActionImageGen {disabled} />
+	</div>
+
+	<div class="ml-auto flex items-center gap-1.5">
+		<ChainPicker
+			bind:this={chainPickerRef}
+			{disabled}
+			{isOffline}
+			{activeModelId}
+			{conversationModel}
+			{isRouter}
+		/>
+	</div>
+
+	{#if isLoading}
 		<Button
 			type="button"
 			variant="secondary"
@@ -132,14 +257,25 @@
 				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
-	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
 	{:else}
+		{#if shouldShowRecordButton}
+			<ChatFormActionRecord
+				{disabled}
+				{hasAudioModality}
+				{sttReady}
+				{isLoading}
+				{isRecording}
+				{isTranscribing}
+				{onMicClick}
+			/>
+		{/if}
+
 		<ChatFormActionSubmit
-			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
+			canSend={canSend && hasModelSelected && isSelectedModelInCache}
 			{disabled}
+			{isLoading}
 			tooltipLabel={submitTooltip}
-			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			showErrorState={hasModelSelected && !isSelectedModelInCache}
 		/>
 	{/if}
 </div>

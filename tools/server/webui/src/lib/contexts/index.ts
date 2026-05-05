@@ -13,13 +13,7 @@ export {
 } from './chat-actions.context';
 
 export {
-	getChatSettingsConfigContext,
-	setChatSettingsConfigContext,
-	type ChatSettingsConfigContext
-} from './chat-settings-config.context';
-
-export {
-	getProcessingInfoContext,
-	setProcessingInfoContext,
-	type ProcessingInfoContext
-} from './processing-info.context';
+	getChatSettingsDialogContext,
+	setChatSettingsDialogContext,
+	type ChatSettingsDialogContext
+} from './chat-settings-dialog.context';

@@ -5,10 +5,21 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
+	backendBaseUrl: '',
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
-	showThoughtInProgress: true,
+	// 'colorful' — hue-driven OKLCH ramps (default). 'pure-black' /
+	// 'pure-white' — flatten everything to a true greyscale palette so
+	// the user can opt out of the chromatic theme entirely.
+	themeMode: 'colorful',
+	themePrimaryHue: 295,
+	themeSecondaryHue: 190,
+	// 0 = monochrome (chroma = 0 everywhere), 1 = full HT chroma. Lets
+	// the OS colour picker round-trip both hue *and* saturation; without
+	// this, picking a faded colour visually snapped back to full saturation.
+	themeChromaScale: 1,
+	showThoughtInProgress: false,
 	disableReasoningParsing: false,
 	excludeReasoningFromContext: false,
 	showRawOutputSwitch: false,
@@ -20,11 +31,10 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	copyTextAttachmentsAsPlainText: false,
 	pdfAsImage: false,
 	disableAutoScroll: false,
-	renderUserContentAsMarkdown: false,
+	renderUserContentAsMarkdown: true,
 	alwaysShowSidebarOnDesktop: false,
 	autoShowSidebarOnNewChat: true,
 	sendOnEnter: true,
-	autoMicOnEmpty: false,
 	fullHeightCodeBlocks: false,
 	showRawModelNames: false,
 	mcpServers: '[]',
@@ -61,11 +71,103 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	preEncodeConversation: false,
 	// experimental features
 	pyInterpreterEnabled: false,
-	enableContinueGeneration: false
+	enableContinueGeneration: false,
+	// tts
+	ttsEnabled: false,
+	ttsAutoplay: true,
+	ttsBaseUrl: '',
+	ttsApiKey: '',
+	ttsModel: '',
+	ttsVoice: '',
+	ttsFormat: 'wav',
+	ttsRefAudio: '',
+	ttsRefAudioName: '',
+	showVoicePicker: true,
+	// stt
+	sttEnabled: false,
+	sttAutoTranscribe: true,
+	sttAutoSend: false,
+	sttBaseUrl: '',
+	sttApiKey: '',
+	sttModel: '',
+	sttLanguage: '',
+	// inline AI completions (ghost text in the doc editor)
+	inlineCompletionEnabled: false,
+	inlineCompletionDelay: 800,
+	inlineCompletionMaxTokens: 48,
+	// user-defined AI commands invoked from the doc editor header
+	// (stored as JSON string; empty string = use built-in defaults)
+	aiCommands: '',
+	// model name (not id) to pre-select when opening a new chat / empty
+	// conversation. Empty means "no preference — let the first available
+	// model win." When set, the routes bootstrap selectModelByName on
+	// mount if the model is currently available; a missing default is
+	// silently ignored.
+	defaultModel: '',
+	// When true, `role: 'tool'` messages render as their own standalone
+	// cards in the chat log instead of being folded into the preceding
+	// assistant turn's agentic section. Combines well with
+	// `showSystemMessage` + `alwaysShowAgenticTurns` for a full
+	// prompt-transparency view.
+	showToolMessagesAsStandalone: false,
+	// Override for the `ht-termd` sidecar URL. Empty = Tauri auto-spawn
+	// or llama-server `/props.terminals.url` take precedence. Set for
+	// web deployments that point at a remote termd instance (rare).
+	terminalsBaseUrl: '',
+	// Bearer token paired with `terminalsBaseUrl`. Required when the
+	// termd daemon is launched with `--token`; ignored otherwise.
+	// Sent as `Authorization: Bearer <token>` on HTTP and `?token=<t>`
+	// on the WS upgrade (browsers can't set WS headers).
+	terminalsToken: '',
+	// Base URL of the OpenAI-compatible image-generation proxy (e.g.
+	// `http://images.ht.local`). Used by the `generate_image` built-in
+	// tool. Empty string = feature disabled; the tool returns a clean
+	// "not configured" error instead of trying a default URL.
+	imagesBaseUrl: '',
+	// Optional API key forwarded as `Authorization: Bearer <key>` to
+	// the images proxy. Typical deployments on a trusted LAN leave
+	// this empty.
+	imagesApiKey: '',
+	// Media generation toggles — default OFF so the model never picks
+	// a ~60 s image-gen tool unless the user explicitly opts in. When
+	// true, the corresponding builtin tool (`generate_image` /
+	// `generate_video`) is advertised in the model's tool list and
+	// dispatchable; when false it is hidden and a stale tool_call in
+	// conversation history returns a "disabled in Settings" error to
+	// the model. See `builtin-tools.ts`.
+	imageGenEnabled: false,
+	videoGenEnabled: false,
+	// Nextcloud / WebDAV connection. The user fills these in via
+	// Settings → Connections → Nextcloud. Empty `nextcloudUrl` means
+	// the connection is unconfigured — the gallery hides the sync UI
+	// and the upload hook is a no-op.
+	//
+	// Auth note: the URL + username live here in localStorage; the app
+	// password lives in IndexedDB (see DatabaseService.getSecret /
+	// setSecret with key `nextcloud-app-password`). Same threat model
+	// as plain localStorage on a trusted device, but signals "treat
+	// this differently" to anyone reading the code or auditing
+	// storage.
+	nextcloudUrl: '',
+	nextcloudUsername: '',
+	// Friendly base path; we resolve to /remote.php/dav/files/<user>/<this>/
+	// at request time so users only need to think in normal folder
+	// terms. Trailing slash optional — the WebDAV client normalises.
+	nextcloudRemoteRoot: '/AI/',
+	// Default true so once a user finishes the Test Connection flow
+	// they don't have to flip a second toggle. The auto-upload hook
+	// short-circuits when `nextcloudUrl` is empty so this preference
+	// is harmless until configured.
+	nextcloudAutoUpload: true,
+	// Default false. Mirroring deletes is destructive on the remote;
+	// users opt in deliberately.
+	nextcloudMirrorDeletes: false
 };
 
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
+	backendBaseUrl:
+		'Base URL of the llama-server backend (e.g. <code>http://192.168.8.158:30184</code>). Leave empty to use the same origin as the webui. When set, a pill in the header shows the active hostname.',
 	systemMessage: 'The starting message that defines how model should behave.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:
@@ -132,8 +234,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show sidebar when starting a new chat. Disable to keep the sidebar hidden until you click on it.',
 	sendOnEnter:
 		'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
-	autoMicOnEmpty:
-		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	fullHeightCodeBlocks:
 		'Always display code blocks at their full natural height, overriding any height limits.',
 	showRawModelNames:
@@ -153,7 +253,58 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	preEncodeConversation:
 		'After each response, re-submit the conversation to pre-fill the server KV cache. Makes the next turn faster since the prompt is already encoded while you read the response.',
 	enableContinueGeneration:
-		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.'
+		'Enable "Continue" button for assistant messages. Currently works only with non-reasoning models.',
+	ttsEnabled: 'Enable text-to-speech for assistant messages.',
+	ttsAutoplay: 'Automatically speak assistant messages when generation completes.',
+	ttsBaseUrl:
+		'Base URL of an OpenAI-compatible TTS server (e.g. <code>http://192.168.8.123:30384</code>). Must implement <code>POST /v1/audio/speech</code>.',
+	ttsApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the TTS server.',
+	ttsModel:
+		'TTS model identifier (e.g. <code>qwen3-tts</code>, <code>tts-1</code>, <code>kokoro</code>).',
+	ttsVoice:
+		'Voice name passed to the TTS server (e.g. <code>Chelsie</code>, <code>alloy</code>, <code>af_bella</code>).',
+	ttsFormat:
+		'Audio format requested from the TTS server (<code>wav</code>, <code>mp3</code>, <code>opus</code>, <code>flac</code>).',
+	ttsRefAudio:
+		'Reference audio clip for voice cloning (Qwen3-TTS). Stored as a <code>data:</code> URI. Upload a short sample of the target voice; the server will use x-vector extraction to match it.',
+	ttsRefAudioName: 'Original filename of the uploaded reference audio (for display only).',
+	showVoicePicker:
+		'Show the voice picker as a block in the chat composer chain. Lets you swap voices without opening settings. Disable to keep the chain to LoRA + model only.',
+	sttEnabled: 'Enable speech-to-text for mic recordings.',
+	sttAutoTranscribe:
+		'Automatically transcribe recordings into the textarea instead of attaching them as audio files.',
+	sttAutoSend:
+		'After transcription finishes, automatically submit the message. Enables a heads-down voice-only flow.',
+	sttBaseUrl:
+		'Base URL of an OpenAI-compatible STT server (e.g. <code>http://192.168.8.123:30189</code>). Must implement <code>POST /v1/audio/transcriptions</code>.',
+	sttApiKey:
+		'Optional API key sent as <code>Authorization: Bearer &lt;key&gt;</code> to the STT server.',
+	sttModel: 'STT model identifier (e.g. <code>Qwen/Qwen3-ASR-1.7B</code>, <code>whisper-1</code>).',
+	sttLanguage:
+		'Optional ISO 639-1 language hint (e.g. <code>en</code>, <code>no</code>). Leave blank for auto-detection.',
+	inlineCompletionEnabled:
+		'Show AI ghost-text suggestions in the doc editor while you type. Tab accepts, Esc dismisses.',
+	inlineCompletionDelay:
+		'Milliseconds of idle time before an inline completion is requested (min 200).',
+	inlineCompletionMaxTokens:
+		'Max tokens requested per inline completion. Smaller values feel snappier.',
+	defaultModel:
+		'Preferred model name pre-selected when opening a new chat (e.g. <code>gemma-4-e4b</code>). Leave empty to let the first available model win. Ignored silently when the named model is unavailable at load time.',
+	showToolMessagesAsStandalone:
+		'Render each tool call + tool result as its own card in the chat log, before the next user message. Off by default (tool exchanges stay folded inside the assistant turn).',
+	terminalsBaseUrl:
+		'Base URL of the <code>ht-termd</code> sidecar (e.g. <code>http://127.0.0.1:43127</code>). Leave empty in the Tauri app (the sidecar is auto-spawned). Only set this for web deployments pointing at a remote daemon.',
+	terminalsToken:
+		"Bearer token for the <code>ht-termd</code> sidecar. Only needed when the daemon was started with <code>--token</code>; required for Tailscale-reachable deployments so random peers can't spawn shells.",
+	imagesBaseUrl:
+		'OpenAI-compatible image-generation proxy URL (e.g. <code>http://images.ht.local</code> or <code>http://192.168.8.170:30385</code>). Enables the <code>generate_image</code> tool so the model can create images; each returned image lands in the artifact gallery automatically.',
+	imagesApiKey:
+		"Optional bearer token for the images proxy. Leave empty for trusted-LAN deployments that don't require auth.",
+	imageGenEnabled:
+		'Let the model invoke the <code>generate_image</code> tool when replying. Requires <em>Images base URL</em> to be set. Off by default — enable when you want a turn to be able to produce an image. Expected wait: ~60 s with <code>z-image-turbo</code>.',
+	videoGenEnabled:
+		'Let the model invoke the <code>generate_video</code> tool when replying. Backend is async (202 + poll) and currently experimental (wan22-i2v latent-channel fixes still landing). Off by default.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

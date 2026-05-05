@@ -1,21 +1,13 @@
-export {
-	AttachmentType,
-	AttachmentMenuItemId,
-	AttachmentItemEnabledWhen,
-	AttachmentAction,
-	AttachmentItemVisibleWhen
-} from './attachment';
+export { AttachmentType } from './attachment';
 
 export { AgenticSectionType, ToolCallType } from './agentic';
 
 export {
 	ChatMessageStatsView,
 	ContentPartType,
-	ConversationSelectionMode,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
-	PdfViewMode,
 	ReasoningFormat
 } from './chat';
 
@@ -23,10 +15,12 @@ export {
 	FileTypeCategory,
 	FileTypeImage,
 	FileTypeAudio,
+	FileTypeVideo,
 	FileTypePdf,
 	FileTypeText,
 	FileExtensionImage,
 	FileExtensionAudio,
+	FileExtensionVideo,
 	FileExtensionPdf,
 	FileExtensionText,
 	MimeTypePrefix,
@@ -36,6 +30,7 @@ export {
 	MimeTypeAudio,
 	MimeTypeImage,
 	MimeTypeText,
+	MimeTypeVideo,
 	SpecialFileType
 } from './files';
 
@@ -55,8 +50,6 @@ export { ServerRole, ServerModelStatus } from './server';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings';
 
-export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui';
+export { ColorMode, McpPromptVariant, UrlProtocol } from './ui';
 
 export { KeyboardKey } from './keyboard';
-
-export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools';

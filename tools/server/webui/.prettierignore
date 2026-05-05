@@ -7,3 +7,6 @@ bun.lockb
 
 # Miscellaneous
 /static/
+
+# Bundle analyzer output (opt-in via ANALYZE=1 npm run build)
+/dist/
