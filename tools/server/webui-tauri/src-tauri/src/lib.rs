@@ -26,6 +26,24 @@ pub fn run() {
 		std::env::set_var("WEBKIT_GST_USE_PLAYBIN3", "0");
 	}
 
+	// Defuse webkit2gtk's DMABUF renderer + accelerated compositing under
+	// Wayland on Arch. WPEBackend-fdo / DMABUF combine badly with several
+	// driver/compositor stacks (NVIDIA proprietary, but also AMD on
+	// wlroots-based compositors like Hyprland 0.5x), producing
+	// "failed to create GBM buffer" errors and intermittent WebProcess
+	// crashes on launch or resize (tauri-apps/tauri#9394, #13493). The
+	// .desktop launchers already set these, but a `cargo run` / direct
+	// binary invocation skips the launcher — set them in the Rust entry
+	// so they always apply.
+	#[cfg(target_os = "linux")]
+	if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+		std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+	}
+	#[cfg(target_os = "linux")]
+	if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+		std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+	}
+
 	tauri::Builder::default()
 		// Pin the embedded server to 127.0.0.1 — left to its default
 		// "localhost" the plugin's tiny-http binds to whichever IP
