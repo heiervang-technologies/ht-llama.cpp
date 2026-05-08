@@ -28,6 +28,16 @@
 	let reconnectAttempt = 0;
 	let unmounted = false;
 
+	// Cap on auto-reconnect attempts before we stop and wait for the
+	// user. With the backoff schedule below, 20 attempts ≈ 83 s of
+	// retries — plenty for a transient drop, but well short of the
+	// "termd is down for the night" case where indefinite reconnects
+	// would just waste battery and keep waking the laptop. After the
+	// cap, the banner becomes a clickable Retry; refocusing the
+	// window (visibilitychange / focus) also resets the counter so
+	// coming back to the tab after a real outage just works.
+	const MAX_RECONNECT_ATTEMPTS = 20;
+
 	let connected = $state(false);
 	let everOpened = $state(false);
 	// True while a reconnect is queued or in-flight — distinct from
@@ -35,6 +45,8 @@
 	// the user staring at "Disconnected." while exponential backoff
 	// chews through ~5 s windows.
 	let reconnecting = $state(false);
+	// Latched after MAX_RECONNECT_ATTEMPTS — surfaces a manual Retry.
+	let gaveUp = $state(false);
 
 	let theme = $derived(resolveTheme(themeId));
 
@@ -156,6 +168,7 @@
 		sock.onopen = () => {
 			connected = true;
 			reconnecting = false;
+			gaveUp = false;
 			everOpened = true;
 			reconnectAttempt = 0;
 			sendResize();
@@ -197,6 +210,11 @@
 	function scheduleReconnect() {
 		if (unmounted) return;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
+		if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+			reconnecting = false;
+			gaveUp = true;
+			return;
+		}
 		reconnecting = true;
 		const attempt = ++reconnectAttempt;
 		// Exponential-ish backoff: 250ms, 500ms, 1s, 2s, 4s, capped at 5s.
@@ -205,6 +223,15 @@
 			reconnectTimer = undefined;
 			connect();
 		}, delay);
+	}
+
+	function manualReconnect() {
+		if (unmounted) return;
+		if (reconnectTimer) clearTimeout(reconnectTimer);
+		reconnectTimer = undefined;
+		reconnectAttempt = 0;
+		gaveUp = false;
+		scheduleReconnect();
 	}
 
 	// Send a no-op control frame periodically so an intermediate proxy
@@ -247,7 +274,13 @@
 			sendKeepalive();
 			return;
 		}
+		// Returning to the tab is a strong "user is back, please retry"
+		// signal — reset both the backoff counter and the gave-up latch
+		// so a fresh batch of attempts kicks off even if we'd previously
+		// burned through the cap while the tab was hidden.
 		if (!reconnectTimer && (!ws || ws.readyState >= WebSocket.CLOSING)) {
+			reconnectAttempt = 0;
+			gaveUp = false;
 			scheduleReconnect();
 		}
 	}
@@ -295,9 +328,24 @@
 
 	{#if !connected}
 		<div
-			class="pointer-events-none absolute inset-x-0 top-0 flex justify-center p-2 text-xs text-muted-foreground"
+			class="absolute inset-x-0 top-0 flex justify-center p-2 text-xs text-muted-foreground"
+			class:pointer-events-none={!gaveUp}
 		>
-			{!everOpened ? 'Connecting…' : reconnecting ? 'Reconnecting…' : 'Disconnected.'}
+			{#if gaveUp}
+				<button
+					type="button"
+					onclick={manualReconnect}
+					class="rounded border border-border/50 bg-background/80 px-2 py-0.5 text-foreground hover:bg-background"
+				>
+					Disconnected. Click to retry.
+				</button>
+			{:else if !everOpened}
+				Connecting…
+			{:else if reconnecting}
+				Reconnecting…
+			{:else}
+				Disconnected.
+			{/if}
 		</div>
 	{/if}
 </div>
