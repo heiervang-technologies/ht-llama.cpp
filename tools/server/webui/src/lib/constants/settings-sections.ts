@@ -9,6 +9,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DISPLAY: 'Display',
 	TTS: 'Speech',
 	IMAGES: 'Images',
+	SEARCH: 'Search',
 	AI_COMMANDS: 'AI Commands',
 	SAMPLING: 'Sampling',
 	PENALTIES: 'Penalties',

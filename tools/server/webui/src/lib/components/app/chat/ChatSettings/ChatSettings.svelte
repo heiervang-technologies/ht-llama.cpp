@@ -11,7 +11,8 @@
 		Database,
 		Image as ImageIcon,
 		Volume2,
-		Wand2
+		Wand2,
+		Search as SearchIcon
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -283,6 +284,27 @@
 					label: 'Enable video generation (experimental)',
 					type: SettingsFieldType.CHECKBOX,
 					isExperimental: true
+				}
+			]
+		},
+		{
+			title: SETTINGS_SECTION_TITLES.SEARCH,
+			icon: SearchIcon,
+			fields: [
+				{
+					key: SETTINGS_KEYS.WEB_SEARCH_ENABLED,
+					label: 'Enable web search',
+					type: SettingsFieldType.CHECKBOX
+				},
+				{
+					key: SETTINGS_KEYS.WEB_SEARCH_BASE_URL,
+					label: 'Web search base URL',
+					type: SettingsFieldType.INPUT
+				},
+				{
+					key: SETTINGS_KEYS.WEB_SEARCH_MAX_RESULTS,
+					label: 'Max results per query',
+					type: SettingsFieldType.INPUT
 				}
 			]
 		},

@@ -83,6 +83,10 @@ export const SETTINGS_KEYS = {
 	IMAGES_API_KEY: 'imagesApiKey',
 	IMAGE_GEN_ENABLED: 'imageGenEnabled',
 	VIDEO_GEN_ENABLED: 'videoGenEnabled',
+	// Web search (SearXNG metasearch)
+	WEB_SEARCH_ENABLED: 'webSearchEnabled',
+	WEB_SEARCH_BASE_URL: 'webSearchBaseUrl',
+	WEB_SEARCH_MAX_RESULTS: 'webSearchMaxResults',
 	// MCP
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',

@@ -137,6 +137,16 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// the model. See `builtin-tools.ts`.
 	imageGenEnabled: false,
 	videoGenEnabled: false,
+	// Web search via SearXNG (FOSS metasearch). Default OFF so the model
+	// only sees the `web_search` tool when the user has explicitly opted
+	// in. Empty `webSearchBaseUrl` falls back to the bundle-time default
+	// (`window.__HT_DEFAULT_WEB_SEARCH_URL__`, set by the Tauri shell on
+	// the cluster build) and ultimately to "feature unconfigured" — the
+	// tool returns a clear "set Settings → Search" error rather than
+	// guessing a URL.
+	webSearchEnabled: false,
+	webSearchBaseUrl: '',
+	webSearchMaxResults: 8,
 	// Nextcloud / WebDAV connection. The user fills these in via
 	// Settings → Connections → Nextcloud. Empty `nextcloudUrl` means
 	// the connection is unconfigured — the gallery hides the sync UI
@@ -304,7 +314,13 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	imageGenEnabled:
 		'Let the model invoke the <code>generate_image</code> tool when replying. Requires <em>Images base URL</em> to be set. Off by default — enable when you want a turn to be able to produce an image. Expected wait: ~60 s with <code>z-image-turbo</code>.',
 	videoGenEnabled:
-		'Let the model invoke the <code>generate_video</code> tool when replying. Backend is async (202 + poll) and currently experimental (wan22-i2v latent-channel fixes still landing). Off by default.'
+		'Let the model invoke the <code>generate_video</code> tool when replying. Backend is async (202 + poll) and currently experimental (wan22-i2v latent-channel fixes still landing). Off by default.',
+	webSearchEnabled:
+		'Let the model invoke the <code>web_search</code> tool when replying. Requires <em>Web search base URL</em> to be set. Off by default — enable when you want the model to look things up against live sources (DuckDuckGo, Brave, Wikipedia, GitHub, arXiv, HN, StackOverflow via SearXNG).',
+	webSearchBaseUrl:
+		'Base URL of the SearXNG instance (e.g. <code>http://search.ht.local</code> or <code>http://192.168.8.170:30502</code>). Used by the <code>web_search</code> tool. The frontend hits <code>GET /search?q=…&format=json</code> directly; the SearXNG host must allow CORS from the webui origin (or the Tauri shell, which routes via <code>tauri-plugin-http</code>).',
+	webSearchMaxResults:
+		'Max results returned per <code>web_search</code> call (1–30, default 8). Lower values keep tool-call payloads tighter inside the model context window.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [

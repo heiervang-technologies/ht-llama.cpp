@@ -20,6 +20,9 @@
  *                      new artifact, never overwrites the source
  *   - generate_video — text/image/sound-driven video clips via the
  *                      same proxy; async with per-model poll budget
+ *   - web_search     — SearXNG metasearch (FOSS) at a configurable
+ *                      base URL; returns title/url/snippet/engine
+ *                      per result, gated on the user opt-in
  *
  * All tools read and write through the same DatabaseService / gallery
  * store the UI uses, so anything the model does shows up in the
@@ -1616,5 +1619,205 @@ register({
 		} catch (e) {
 			return err(e instanceof Error ? e.message : String(e));
 		}
+	}
+});
+
+// ----- web_search ------------------------------------------------------
+//
+// SearXNG metasearch (FOSS) at a user-configurable base URL. We hit
+// `GET /search?q=…&format=json` and reshape the response into a tight
+// {title, url, content, engine} array so the model context window
+// doesn't get blown out by the full SearXNG JSON (which includes
+// per-engine debug fields, raw HTML, infobox HTML, etc.).
+//
+// URL resolution mirrors the images proxy:
+//   1. Settings → Search → Web search base URL
+//   2. Tauri / Android bundle-time default (`__HT_DEFAULT_WEB_SEARCH_URL__`)
+//   3. Empty → tool returns a clean "not configured" error rather
+//      than guessing a URL that won't reach.
+//
+// CORS note: browsers calling `/search?format=json` need the SearXNG
+// host to allow the webui origin. Tauri sidesteps this by routing
+// through `tauri-plugin-http` (the `getFetch` shim), so the desktop /
+// Android shell works against any SearXNG without CORS config.
+
+function resolveWebSearchBaseUrl(): string {
+	const cfg = String(config().webSearchBaseUrl ?? '').trim();
+	if (cfg) return cfg.replace(/\/+$/, '');
+	if (typeof window !== 'undefined') {
+		const fallback = (window as unknown as { __HT_DEFAULT_WEB_SEARCH_URL__?: string })
+			.__HT_DEFAULT_WEB_SEARCH_URL__;
+		if (typeof fallback === 'string' && fallback.trim()) {
+			return fallback.trim().replace(/\/+$/, '');
+		}
+	}
+	return '';
+}
+
+interface SearxngResult {
+	title?: unknown;
+	url?: unknown;
+	content?: unknown;
+	engine?: unknown;
+	score?: unknown;
+	publishedDate?: unknown;
+	published_date?: unknown;
+}
+
+interface SearxngInfobox {
+	infobox?: unknown;
+	content?: unknown;
+	urls?: unknown;
+}
+
+register({
+	gate: () => Boolean(config().webSearchEnabled),
+	gateLabel: 'Web search',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'web_search',
+			description:
+				"Search the live web via SearXNG (FOSS metasearch — queries DuckDuckGo, Brave, Wikipedia, GitHub, arXiv, HackerNews, StackOverflow). Returns each hit's title, URL, snippet, and the upstream engine that surfaced it. Use this when the answer depends on current information (events, releases, prices, recent papers), when you need to check a fact against multiple sources, or when looking for documentation / discussion threads. Each call is one HTTP round-trip; budget your turn accordingly. Tighten or widen the result set with `max_results`. Cite URLs verbatim back to the user — they were just fetched, you didn't make them up.",
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description:
+							'Search query in plain text. SearXNG forwards engine-specific operators (site:, filetype:, "exact phrase") unchanged when the chosen engine supports them.'
+					},
+					category: {
+						type: 'string',
+						enum: [
+							'general',
+							'news',
+							'images',
+							'videos',
+							'map',
+							'music',
+							'it',
+							'science',
+							'files',
+							'social media'
+						],
+						description:
+							'SearXNG result category. Default `general` covers web pages. `news` for current events, `it` for stack overflow / GitHub / man pages, `science` for arxiv / pubmed.'
+					},
+					time_range: {
+						type: 'string',
+						enum: ['day', 'week', 'month', 'year'],
+						description:
+							'Restrict results to the past day / week / month / year. Omit for any time. Use this when the user asks about recent events.'
+					},
+					max_results: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 30,
+						description:
+							'Max results returned. Defaults to the user-configured cap (8). Lower values = tighter context spend.'
+					}
+				},
+				required: ['query']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const base = resolveWebSearchBaseUrl();
+		if (!base) {
+			return err(
+				'Web search is not configured. Ask the user to set Settings → Search → Web search base URL (e.g. http://search.ht.local).'
+			);
+		}
+		const query = String(args.query ?? '').trim();
+		if (!query) return err('query is required');
+
+		const cap = Math.min(
+			30,
+			Math.max(1, Number(args.max_results) || Number(config().webSearchMaxResults) || 8)
+		);
+
+		const url = new URL(`${base}/search`);
+		url.searchParams.set('q', query);
+		url.searchParams.set('format', 'json');
+		if (typeof args.category === 'string' && args.category) {
+			url.searchParams.set('categories', args.category);
+		}
+		if (typeof args.time_range === 'string' && args.time_range) {
+			url.searchParams.set('time_range', args.time_range);
+		}
+
+		const doFetch = await getFetch();
+		let res: Response;
+		try {
+			res = await doFetch(url.toString(), { signal, headers: { Accept: 'application/json' } });
+		} catch (e) {
+			return err(`SearXNG fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+		if (!res.ok) {
+			let detail = '';
+			try {
+				detail = (await res.text()).slice(0, 300);
+			} catch {
+				/* non-text body, fine */
+			}
+			return err(`SearXNG returned HTTP ${res.status}${detail ? `: ${detail}` : ''}`);
+		}
+
+		let data: {
+			results?: SearxngResult[];
+			suggestions?: unknown[];
+			answers?: unknown[];
+			infoboxes?: SearxngInfobox[];
+		};
+		try {
+			data = await res.json();
+		} catch {
+			return err(
+				'SearXNG returned a non-JSON body. Check that the instance has `formats: [json]` enabled.'
+			);
+		}
+
+		const rawResults = Array.isArray(data?.results) ? data.results : [];
+		const results = rawResults.slice(0, cap).map((r) => ({
+			title: typeof r.title === 'string' ? r.title : '',
+			url: typeof r.url === 'string' ? r.url : '',
+			content: typeof r.content === 'string' ? r.content : '',
+			engine: typeof r.engine === 'string' ? r.engine : '',
+			score: typeof r.score === 'number' ? r.score : null,
+			published_date:
+				typeof r.publishedDate === 'string'
+					? r.publishedDate
+					: typeof r.published_date === 'string'
+						? r.published_date
+						: null
+		}));
+
+		const infoboxes = Array.isArray(data?.infoboxes)
+			? data.infoboxes.map((i) => ({
+					infobox: typeof i.infobox === 'string' ? i.infobox : '',
+					content: typeof i.content === 'string' ? i.content : '',
+					urls: Array.isArray(i.urls)
+						? i.urls
+								.map((u: unknown) => {
+									if (typeof u === 'string') return u;
+									if (u && typeof u === 'object' && 'url' in u && typeof u.url === 'string') {
+										return u.url;
+									}
+									return '';
+								})
+								.filter(Boolean)
+						: []
+				}))
+			: [];
+
+		return ok({
+			query,
+			count: results.length,
+			results,
+			suggestions: Array.isArray(data?.suggestions) ? data.suggestions.slice(0, 5) : [],
+			answers: Array.isArray(data?.answers) ? data.answers.slice(0, 3) : [],
+			infoboxes
+		});
 	}
 });
