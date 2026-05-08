@@ -22,29 +22,58 @@ happily start.
 
 ## HTTP surface
 
-| Route                       | Verb      | Purpose                                      |
-|-----------------------------|-----------|----------------------------------------------|
-| `/health`                   | GET       | liveness + sandbox readiness flags           |
-| `/v1/sandbox/status`        | GET       | structured readiness breakdown               |
-| `/v1/terminals`             | GET       | list sandboxes we own                        |
-| `/v1/terminals`             | POST      | create a new sandbox (body: `{name?}`)       |
-| `/v1/terminals/:id`         | DELETE    | destroy a sandbox + wipe its scratch volume  |
-| `/v1/terminals/:id/ws`      | GET (WS)  | attach an xterm.js-style shell               |
+| Route                              | Verb      | Purpose                                      |
+|------------------------------------|-----------|----------------------------------------------|
+| `/health`                          | GET       | liveness + sandbox readiness flags           |
+| `/v1/sandbox/status`               | GET       | structured readiness breakdown               |
+| `/v1/terminals`                    | GET       | list sandboxes we own                        |
+| `/v1/terminals`                    | POST      | create a new sandbox (body below)            |
+| `/v1/terminals/:id`                | DELETE    | destroy a sandbox + wipe its scratch volume  |
+| `/v1/terminals/:id/input`          | POST      | inject keystrokes (text / base64 / auto-Enter) into the shared PTY |
+| `/v1/terminals/:id/bootstrap-log`  | GET       | read the per-terminal bootstrap stdout/stderr |
+| `/v1/terminals/:id/ws`             | GET (WS)  | attach an xterm.js-style shell               |
+
+`POST /v1/terminals` body fields (all optional):
+
+```jsonc
+{
+  "name": "string",        // display name
+  "bootstrap": "string",   // shell snippet that runs once as root after files
+                           // have been written; output captured in the
+                           // bootstrap log
+  "env": { "K": "V" },     // extra env vars for every docker-exec invocation
+  "files": [               // files dropped before the bootstrap runs
+    { "path": "/workspace/foo", "content": "...", "mode": 420 }
+    // prefix `content` with `base64:` for binary payloads
+  ]
+}
+```
 
 WebSocket protocol: **binary** frames are raw container bytes in
-both directions. **Text** frames are JSON control messages — today
-only `{"t":"resize","cols":N,"rows":N}`. Unknown text is forwarded
-to container stdin.
+both directions. **Text** frames are JSON control messages —
+`{"t":"resize","cols":N,"rows":N}` and `{"t":"ping"}` (no-op,
+keepalive). Unknown text is forwarded to container stdin.
+
+## Authentication
+
+If started with `--token <T>` (or `HT_TERMD_TOKEN=…`), every HTTP
+request must carry `Authorization: Bearer <T>` and every WebSocket
+upgrade must include `?token=<T>` in the query (browsers don't
+allow custom headers on `new WebSocket()`). Without `--token` the
+daemon accepts all loopback callers — fine for desktop dev,
+**don't expose to a tailnet without a token**.
 
 ## Build & run
 
 ```bash
 cargo build --release -p ht-termd
-./target/release/ht-termd --bind 127.0.0.1 --port 43127
+./target/release/ht-termd --bind 127.0.0.1 --port 43127 --token "$(openssl rand -hex 32)"
 ```
 
 All flags also read from `HT_TERMD_*` env vars. The binary refuses
 to start with any runtime other than `runsc`.
+
+A reference systemd user unit lives at `tools/termd/ht-termd.service`.
 
 ## Filesystem layout
 
