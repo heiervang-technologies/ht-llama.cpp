@@ -80,6 +80,7 @@ Unlike upstream, we accept contributions from AI agents and assistants. We judge
 | Artifacts drawer in chat | Side panel that extracts HTML / SVG snippets from assistant messages and renders them in a sandboxed preview with source toggle; toolbar button surfaces a live artifact count with an informative tooltip. | No |
 | Markdown image pipeline | Inline `![](data:image/...)` images in user messages are lifted into vision-encoder attachments while still rendering inline in the bubble (dedup prevents duplicate chips); generated images from the `generate_image` tool are auto-saved as gallery artifacts. | No |
 | Built-in artifact tools | `list_artifacts`, `get_artifact`, `fork_artifact` exposed as MCP-style tools the model can call to discover and operate on the user's gallery without having to manually paste URLs back and forth. | No |
+| Web search via SearXNG | Built-in `web_search` tool that hits a configurable SearXNG metasearch instance (`GET /search?q=…&format=json`) and returns title / URL / snippet / engine per hit. Gated on a Settings → Search opt-in (default off, mirrors image-gen surface); URL configurable per-deployment. Browser path needs CORS allow on the SearXNG host; Tauri / Android route through `tauri-plugin-http` and bypass CORS. | No |
 
 ### WebUI — cloud-synced artifacts (Nextcloud)
 

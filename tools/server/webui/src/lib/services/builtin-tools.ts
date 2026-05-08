@@ -1678,7 +1678,7 @@ register({
 		function: {
 			name: 'web_search',
 			description:
-				"Search the live web via SearXNG (FOSS metasearch — queries DuckDuckGo, Brave, Wikipedia, GitHub, arXiv, HackerNews, StackOverflow). Returns each hit's title, URL, snippet, and the upstream engine that surfaced it. Use this when the answer depends on current information (events, releases, prices, recent papers), when you need to check a fact against multiple sources, or when looking for documentation / discussion threads. Each call is one HTTP round-trip; budget your turn accordingly. Tighten or widen the result set with `max_results`. Cite URLs verbatim back to the user — they were just fetched, you didn't make them up.",
+				"Search the live web via SearXNG metasearch. Aggregates hits from a cluster-configured set of upstream engines (typically DuckDuckGo, Brave, Wikipedia, GitHub, arXiv, HackerNews, StackOverflow, plus mainstream search engines depending on the SearXNG instance config). Returns each hit's title, URL, snippet, and the engine that surfaced it. Use this when the answer depends on current information (events, releases, prices, recent papers), when you need to check a fact against multiple sources, or when looking for documentation / discussion threads. Each call is one HTTP round-trip; budget your turn accordingly. Tighten or widen the result set with `max_results`. Cite URLs verbatim back to the user — they were just fetched, you didn't make them up.",
 			parameters: {
 				type: 'object',
 				properties: {
