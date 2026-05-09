@@ -87,6 +87,12 @@ export const SETTINGS_KEYS = {
 	WEB_SEARCH_ENABLED: 'webSearchEnabled',
 	WEB_SEARCH_BASE_URL: 'webSearchBaseUrl',
 	WEB_SEARCH_MAX_RESULTS: 'webSearchMaxResults',
+	// Terminal (sandbox tools — list_terminals / send_keys)
+	TERMINAL_TOOLS_ENABLED: 'terminalToolsEnabled',
+	// Composer Tools dropdown — when off, picking one tool turns the
+	// others off (radio-style); when on, multiple can be active at
+	// once (advanced).
+	ALLOW_MULTIPLE_TOOLS: 'allowMultipleTools',
 	// MCP
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',

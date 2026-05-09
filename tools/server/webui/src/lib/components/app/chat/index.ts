@@ -187,11 +187,13 @@ export { default as ChatFormActionRecord } from './ChatForm/ChatFormActions/Chat
 /**
  * Composer chip that flips the imageGenEnabled flag in one click.
  * Mirrors the reasoning toggle pattern — one-shot affordance for
- * something otherwise buried in Settings → Images. When on, the
- * model sees generate_image / edit_image and the /image slash
- * command works; when off all three are gated.
+ * Composer "Tools" dropdown — one menu that toggles every model-callable
+ * capability (image gen, video gen, web search, terminal, deep
+ * research). Default behaviour is mutually exclusive; the bottom switch
+ * lifts that to allow chaining multiple tools in one turn. Replaces
+ * the older standalone ChatFormActionImageGen pill.
  */
-export { default as ChatFormActionImageGen } from './ChatForm/ChatFormActions/ChatFormActionImageGen.svelte';
+export { default as ChatFormActionTools } from './ChatForm/ChatFormActions/ChatFormActionTools.svelte';
 
 /**
  * Container for chat form action buttons. Arranges file attachment, audio record,

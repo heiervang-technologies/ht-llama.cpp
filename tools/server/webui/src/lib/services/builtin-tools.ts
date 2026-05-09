@@ -282,6 +282,8 @@ register({
 });
 
 register({
+	gate: () => Boolean(config().terminalToolsEnabled),
+	gateLabel: 'Terminal tools',
 	definition: {
 		type: 'function',
 		function: {
@@ -316,6 +318,8 @@ register({
 });
 
 register({
+	gate: () => Boolean(config().terminalToolsEnabled),
+	gateLabel: 'Terminal tools',
 	definition: {
 		type: 'function',
 		function: {

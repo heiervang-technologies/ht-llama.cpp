@@ -147,6 +147,19 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	webSearchEnabled: false,
 	webSearchBaseUrl: '',
 	webSearchMaxResults: 8,
+	// Terminal tools (sandbox `list_terminals` + `send_keys`). Default
+	// ON because the tools self-disable cleanly when no terminal exists,
+	// so there's no model-confusion cost to leaving them advertised. Off
+	// hides them entirely — useful when a session shouldn't touch the
+	// sandbox at all.
+	terminalToolsEnabled: true,
+	// Composer Tools dropdown — default OFF means the dropdown behaves
+	// like a radio: enabling one tool disables the others. ON lets
+	// multiple tools be active simultaneously (e.g. web_search +
+	// terminal in the same turn so the model can search-then-execute).
+	// The composer surfaces this as the "Allow multiple at once" toggle
+	// at the bottom of the Tools menu.
+	allowMultipleTools: false,
 	// Nextcloud / WebDAV connection. The user fills these in via
 	// Settings → Connections → Nextcloud. Empty `nextcloudUrl` means
 	// the connection is unconfigured — the gallery hides the sync UI
@@ -320,7 +333,11 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	webSearchBaseUrl:
 		'Base URL of the SearXNG instance (e.g. <code>http://search.ht.local</code> or <code>http://192.168.8.170:30502</code>). Used by the <code>web_search</code> tool. The frontend hits <code>GET /search?q=…&format=json</code> directly; the SearXNG host must allow CORS from the webui origin (or the Tauri shell, which routes via <code>tauri-plugin-http</code>).',
 	webSearchMaxResults:
-		'Max results returned per <code>web_search</code> call (1–30, default 8). Lower values keep tool-call payloads tighter inside the model context window.'
+		'Max results returned per <code>web_search</code> call (1–30, default 8). Lower values keep tool-call payloads tighter inside the model context window.',
+	terminalToolsEnabled:
+		'Let the model invoke <code>list_terminals</code> / <code>send_keys</code> against the sandbox sidecar. On by default — the tools self-disable when no terminal is open, so leaving them advertised costs nothing. Off hides them entirely.',
+	allowMultipleTools:
+		'Composer Tools menu: by default, picking one tool (image gen, web search, terminal, …) disables the others (radio-style). Turn this on to allow multiple tools to be active in the same turn — useful when chaining capabilities (web_search → terminal → generate_image) but increases the chance the model picks the wrong one for a given step.'
 };
 
 export const SETTINGS_COLOR_MODES_CONFIG = [
