@@ -37,6 +37,9 @@
  *   - fetch_image    — pull a single image URL into the gallery as
  *                      an `image` artifact (magic-byte validated).
  *                      Pairs with search_images. Same shared gate.
+ *   - compose_collage — composite N image artifacts into one collage
+ *                      via Canvas2D. Always available (no proxy
+ *                      needed); object-cover per cell.
  *
  * All tools read and write through the same DatabaseService / gallery
  * store the UI uses, so anything the model does shows up in the
@@ -2355,6 +2358,242 @@ register({
 			mimeType,
 			bytes: blob.size,
 			url: finalUrl
+		});
+	}
+});
+
+// ----- compose_collage -------------------------------------------------
+//
+// Compose a single collage image from N existing image artifacts in
+// the gallery. Browser-only — we draw each image onto an offscreen
+// canvas with an auto-balanced grid layout and export the result as
+// PNG, then persist as a new `image` artifact. No external service;
+// no extra deps beyond the browser Canvas2D / Image / Blob APIs.
+//
+// Pairs with: list_artifacts (model finds candidate image artifacts in
+// the conversation context) + get_artifact (model verifies the chosen
+// ones) + compose_collage (model composes a final grid). Output lands
+// in the gallery and renders inline like any other image artifact.
+//
+// Always available (no gate) — purely client-side, no proxy needed.
+
+const COLLAGE_MAX_INPUTS = 16;
+const COLLAGE_DEFAULT_SIZE = 1024;
+
+interface CollageInput {
+	artifactId: string;
+	blob: Blob;
+	title: string;
+}
+
+async function loadImageBlob(b: Blob): Promise<HTMLImageElement> {
+	const url = URL.createObjectURL(b);
+	try {
+		const img = new Image();
+		img.crossOrigin = 'anonymous';
+		await new Promise<void>((resolve, reject) => {
+			img.onload = () => resolve();
+			img.onerror = () => reject(new Error('image decode failed'));
+			img.src = url;
+		});
+		return img;
+	} finally {
+		// Revoke after load — the HTMLImageElement keeps a decoded
+		// reference, so canvas.drawImage still works.
+		URL.revokeObjectURL(url);
+	}
+}
+
+register({
+	definition: {
+		type: 'function',
+		function: {
+			name: 'compose_collage',
+			description:
+				"Compose a single collage image from existing image artifacts in the gallery. Loads each artifact, draws them onto a canvas in an auto-balanced grid, and saves the result as a NEW `image` artifact (the sources are never modified). Use when the user asks to combine multiple images into one — a contact sheet, a moodboard, a side-by-side comparison, a 2x2 grid of variations, etc. Call `list_artifacts(kind='image')` first to discover candidate ids if the user hasn't already named them. Defaults to a square grid sized to fit the input count; pass `columns` to override (e.g. `columns: 1` for a vertical strip, `columns: N` for a horizontal strip). Each cell renders the source with object-cover semantics (fill the cell, crop overflow) so mixed aspect ratios still tile cleanly.",
+			parameters: {
+				type: 'object',
+				properties: {
+					artifactIds: {
+						type: 'array',
+						items: { type: 'string' },
+						minItems: 2,
+						maxItems: COLLAGE_MAX_INPUTS,
+						description: `Ordered list of image artifact ids to include (2–${COLLAGE_MAX_INPUTS}). Order determines placement: left-to-right, top-to-bottom. Non-image artifacts are rejected with a clean error.`
+					},
+					columns: {
+						type: 'integer',
+						minimum: 1,
+						maximum: COLLAGE_MAX_INPUTS,
+						description:
+							'Override the column count. Default is auto-balanced (close to square: ceil(sqrt(n))). Use 1 for a vertical strip, N for a horizontal strip.'
+					},
+					size: {
+						type: 'string',
+						description: `Output canvas size as 'WxH' in pixels (e.g. '1024x1024' or '1920x1080'). Default '${COLLAGE_DEFAULT_SIZE}x${COLLAGE_DEFAULT_SIZE}'. The grid fills the canvas; each cell is canvas-size / (cols, rows).`
+					},
+					gap: {
+						type: 'integer',
+						minimum: 0,
+						maximum: 128,
+						description: 'Gap in pixels between cells (and around the outer edge). Default 8.'
+					},
+					background: {
+						type: 'string',
+						description:
+							"CSS color string for the canvas background ('white', '#000', 'rgb(20,20,20)', 'transparent'). Default '#ffffff'. Use 'transparent' for a PNG without a backdrop."
+					},
+					title: {
+						type: 'string',
+						description:
+							'Optional title for the saved collage artifact. Defaults to "Collage of N images".'
+					}
+				},
+				required: ['artifactIds']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const ids = Array.isArray(args.artifactIds)
+			? (args.artifactIds.filter((x): x is string => typeof x === 'string' && x.trim() !== ''))
+			: [];
+		if (ids.length < 2) return err('artifactIds must contain at least 2 image ids');
+		if (ids.length > COLLAGE_MAX_INPUTS) {
+			return err(`too many inputs (${ids.length} > ${COLLAGE_MAX_INPUTS} cap)`);
+		}
+
+		// Resolve canvas size from `size` arg.
+		let canvasW = COLLAGE_DEFAULT_SIZE;
+		let canvasH = COLLAGE_DEFAULT_SIZE;
+		if (typeof args.size === 'string') {
+			const m = args.size.match(/^(\d+)\s*[x×]\s*(\d+)$/i);
+			if (m) {
+				canvasW = Math.max(32, Math.min(8192, Number(m[1])));
+				canvasH = Math.max(32, Math.min(8192, Number(m[2])));
+			}
+		}
+
+		const gap = Math.max(0, Math.min(128, Number(args.gap ?? 8)));
+		const background = typeof args.background === 'string' ? args.background : '#ffffff';
+
+		// Auto-balance grid: close to square. ceil(sqrt(n)) cols, then
+		// rows = ceil(n / cols). User override via `columns` wins.
+		const cols = Math.max(
+			1,
+			Math.min(COLLAGE_MAX_INPUTS, Number(args.columns) || Math.ceil(Math.sqrt(ids.length)))
+		);
+		const rows = Math.ceil(ids.length / cols);
+
+		// Load every artifact's blob first; bail early if any aren't
+		// images so the model can correct the call rather than getting
+		// a half-rendered canvas back.
+		const inputs: CollageInput[] = [];
+		for (const id of ids) {
+			if (signal?.aborted) return err('aborted');
+			const art = await DatabaseService.getArtifact(id);
+			if (!art) return err(`artifact ${id} not found`);
+			if (art.kind !== 'image') {
+				return err(`artifact ${id} is kind=${art.kind}; only image artifacts are supported`);
+			}
+			const revs = await DatabaseService.listArtifactRevisions(id);
+			const rev =
+				revs.find((r) => r.id === art.currentRevisionId) ?? revs.at(-1);
+			if (!rev?.blob) return err(`artifact ${id} has no image blob on its current revision`);
+			inputs.push({ artifactId: id, blob: rev.blob, title: art.title });
+		}
+
+		if (typeof document === 'undefined') {
+			return err('compose_collage requires a browser context (document missing).');
+		}
+
+		// Draw onto a regular <canvas> rather than OffscreenCanvas —
+		// browser support is broader and we don't need worker offload.
+		const canvas = document.createElement('canvas');
+		canvas.width = canvasW;
+		canvas.height = canvasH;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return err('2D canvas context unavailable');
+
+		// Background fill (skipped for transparent so the PNG retains
+		// its alpha channel).
+		if (background !== 'transparent' && background !== 'none') {
+			ctx.fillStyle = background;
+			ctx.fillRect(0, 0, canvasW, canvasH);
+		}
+
+		const cellW = (canvasW - gap * (cols + 1)) / cols;
+		const cellH = (canvasH - gap * (rows + 1)) / rows;
+		if (cellW < 1 || cellH < 1) {
+			return err(
+				`gap too large for canvas size — cells would be ${cellW.toFixed(1)}x${cellH.toFixed(1)}. Lower the gap or raise the size.`
+			);
+		}
+
+		for (let i = 0; i < inputs.length; i++) {
+			if (signal?.aborted) return err('aborted');
+			const img = await loadImageBlob(inputs[i].blob);
+			const col = i % cols;
+			const row = Math.floor(i / cols);
+			const x = gap + col * (cellW + gap);
+			const y = gap + row * (cellH + gap);
+
+			// object-cover: fill the cell, crop the overflow. Pick the
+			// source rect by matching the cell aspect.
+			const srcAspect = img.width / img.height;
+			const cellAspect = cellW / cellH;
+			let sx = 0;
+			let sy = 0;
+			let sw = img.width;
+			let sh = img.height;
+			if (srcAspect > cellAspect) {
+				// source wider than cell — crop sides
+				sw = img.height * cellAspect;
+				sx = (img.width - sw) / 2;
+			} else {
+				// source taller than cell — crop top/bottom
+				sh = img.width / cellAspect;
+				sy = (img.height - sh) / 2;
+			}
+			ctx.drawImage(img, sx, sy, sw, sh, x, y, cellW, cellH);
+		}
+
+		const collageBlob: Blob | null = await new Promise((resolve) => {
+			canvas.toBlob((b) => resolve(b), 'image/png');
+		});
+		if (!collageBlob) return err('canvas.toBlob returned null');
+
+		const title =
+			typeof args.title === 'string' && args.title.trim()
+				? args.title.trim()
+				: `Collage of ${inputs.length} images`;
+
+		const artifact = await artifactGalleryStore.saveManual({
+			kind: 'image' as DatabaseArtifactKind,
+			title,
+			mimeType: 'image/png',
+			blob: collageBlob,
+			tags: ['collage', 'composed'],
+			metadata: {
+				source: 'compose_collage',
+				sources: inputs.map((i) => ({ artifactId: i.artifactId, title: i.title })),
+				grid: { cols, rows },
+				size: { w: canvasW, h: canvasH },
+				gap,
+				background,
+				composedAt: new Date().toISOString()
+			}
+		});
+
+		return ok({
+			artifactId: artifact.id,
+			revisionId: artifact.currentRevisionId,
+			title: artifact.title,
+			grid: { cols, rows },
+			size: { w: canvasW, h: canvasH },
+			inputCount: inputs.length,
+			mimeType: 'image/png',
+			bytes: collageBlob.size,
+			note: "Collage is in the user's gallery; reference by artifactId in follow-ups."
 		});
 	}
 });
