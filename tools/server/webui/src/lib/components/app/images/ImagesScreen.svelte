@@ -1410,40 +1410,46 @@
 							<button
 								type="button"
 								onclick={() => pickFromHistory(artifact)}
-								class="group block overflow-hidden rounded-md border bg-background transition-shadow hover:shadow-sm"
-								title={artifact.kind === 'video'
-									? `${artifact.title} (hover to play)`
-									: artifact.title}
+								class="group relative block overflow-hidden rounded-md border bg-background transition-shadow hover:shadow-sm"
+								title={artifact.title}
 							>
 								{#if dataUrl}
 									{#if artifact.kind === 'video'}
-										<!-- preload="none" — webkit2gtk's GStreamer pipeline
-										     trips a `gst_value_collect_int_range` assertion on
-										     metadata probing for some clips, which crashes the
-										     entire WebProcess. Holding pipeline construction
-										     until the user actually hovers (which calls
-										     `play()`) keeps the gallery view stable, at the
-										     cost of no poster frame on cold load — the empty
-										     box fills in the moment the user reaches for it. -->
-										<video
-											src={dataUrl}
-											preload="none"
-											muted
-											playsinline
-											loop
-											class="aspect-square w-full bg-muted/30 object-cover"
-											onmouseenter={(ev) => {
-												const v = ev.currentTarget as HTMLVideoElement;
-												v.play().catch(() => {});
-											}}
-											onmouseleave={(ev) => {
-												const v = ev.currentTarget as HTMLVideoElement;
-												v.pause();
-												v.currentTime = 0;
-											}}
+										<!-- Static video poster — we deliberately do NOT construct
+										     a <video> element at idle. webkit2gtk's GStreamer
+										     playbin pipeline crashes the WebProcess on hover /
+										     metadata probe for several MP4 codecs, and even
+										     `preload="none"` + a hover-to-play handler isn't
+										     enough on Hyprland: moving the cursor across the grid
+										     fires `play()` on every tile in turn and the failure
+										     mode is fatal-not-recoverable. The artifact detail
+										     page has a full `<video controls>` player; clicking
+										     a tile is the deliberate trigger we want. -->
+										<div
+											class="relative aspect-square w-full bg-gradient-to-br from-muted/40 to-muted/60"
 										>
-											<track kind="captions" />
-										</video>
+											<div class="absolute inset-0 flex items-center justify-center">
+												<div
+													class="flex h-10 w-10 items-center justify-center rounded-full bg-black/55 text-white transition-colors group-hover:bg-black/75"
+												>
+													<!-- play triangle, inline SVG so the gallery
+													     stays self-contained. -->
+													<svg
+														viewBox="0 0 24 24"
+														fill="currentColor"
+														class="ml-0.5 h-5 w-5"
+														aria-hidden="true"
+													>
+														<path d="M8 5v14l11-7z" />
+													</svg>
+												</div>
+											</div>
+											<span
+												class="absolute right-1 bottom-1 rounded bg-black/55 px-1 py-0.5 text-[10px] font-medium text-white"
+											>
+												video
+											</span>
+										</div>
 									{:else}
 										<img
 											src={dataUrl}

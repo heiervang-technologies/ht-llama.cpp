@@ -205,7 +205,7 @@
 	</Tooltip.Root>
 
 	<DropdownMenu.Content align="start" class="w-64">
-		<DropdownMenu.Label class="text-xs uppercase tracking-wide text-muted-foreground">
+		<DropdownMenu.Label class="text-xs tracking-wide text-muted-foreground uppercase">
 			Capabilities
 		</DropdownMenu.Label>
 
@@ -228,7 +228,7 @@
 					<div class="flex min-w-0 flex-col">
 						<span class="truncate text-sm {t.comingSoon ? 'opacity-50' : ''}">{t.label}</span>
 						{#if t.comingSoon}
-							<span class="text-[10px] uppercase tracking-wide text-muted-foreground">
+							<span class="text-[10px] tracking-wide text-muted-foreground uppercase">
 								Coming soon
 							</span>
 						{/if}

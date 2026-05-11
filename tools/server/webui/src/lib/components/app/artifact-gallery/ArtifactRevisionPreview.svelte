@@ -11,18 +11,29 @@
 
 	let objectUrl = $state<string | null>(null);
 
+	// Defer mounting the <video> element until the user explicitly asks
+	// to play. webkit2gtk's GStreamer pipeline can crash the WebProcess
+	// during play / metadata probe for several common MP4 codecs, and
+	// the failure is fatal-not-recoverable — the whole webview dies.
+	// Showing a click-to-play poster keeps the detail page stable; the
+	// user opts into playback intentionally and one crash takes the
+	// player tab down but not the whole gallery view.
+	let videoMounted = $state(false);
+
 	$effect(() => {
 		// Recreate the object URL whenever the revision changes so preview
 		// playback starts from scratch rather than from a cached Blob URL.
 		if (revision.blob) {
 			const url = URL.createObjectURL(revision.blob);
 			objectUrl = url;
+			videoMounted = false; // new revision = fresh click-to-play
 			return () => {
 				URL.revokeObjectURL(url);
 				objectUrl = null;
 			};
 		}
 		objectUrl = null;
+		videoMounted = false;
 	});
 
 	onDestroy(() => {
@@ -34,8 +45,39 @@
 	{#if artifact.kind === 'image' && objectUrl}
 		<img src={objectUrl} alt={artifact.title} class="h-full w-full object-contain" loading="lazy" />
 	{:else if artifact.kind === 'video' && objectUrl}
-		<!-- svelte-ignore a11y_media_has_caption -->
-		<video src={objectUrl} controls class="h-full w-full bg-black" preload="none"></video>
+		{#if videoMounted}
+			<!-- svelte-ignore a11y_media_has_caption -->
+			<video
+				src={objectUrl}
+				controls
+				autoplay
+				class="h-full w-full bg-black"
+				preload="metadata"
+			></video>
+		{:else}
+			<button
+				type="button"
+				onclick={() => (videoMounted = true)}
+				class="group relative flex h-full w-full items-center justify-center bg-gradient-to-br from-black via-zinc-900 to-zinc-800 transition-colors"
+				aria-label="Play {artifact.title}"
+			>
+				<div
+					class="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 text-black transition-transform group-hover:scale-105"
+				>
+					<svg viewBox="0 0 24 24" fill="currentColor" class="ml-1 h-8 w-8" aria-hidden="true">
+						<path d="M8 5v14l11-7z" />
+					</svg>
+				</div>
+				<a
+					href={objectUrl}
+					download={artifact.title}
+					onclick={(e) => e.stopPropagation()}
+					class="absolute right-3 bottom-3 rounded bg-black/60 px-2 py-1 text-xs text-white hover:bg-black/80"
+				>
+					Download
+				</a>
+			</button>
+		{/if}
 	{:else if artifact.kind === 'audio' && objectUrl}
 		<div class="flex h-full w-full items-center justify-center p-6">
 			<audio src={objectUrl} controls class="w-full max-w-lg"></audio>
