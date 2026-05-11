@@ -23,6 +23,20 @@
  *   - web_search     — SearXNG metasearch (FOSS) at a configurable
  *                      base URL; returns title/url/snippet/engine
  *                      per result, gated on the user opt-in
+ *   - search_images  — SearXNG image search; returns img_src /
+ *                      thumbnail / resolution / source per hit so
+ *                      the model can pull visual references without
+ *                      re-marshalling generic web results
+ *   - search_news    — SearXNG news category with a recency tilt
+ *                      (defaults time_range=week); for current events
+ *   - fetch_url      — pull a single URL, extract main content via
+ *                      @mozilla/readability, return as markdown via
+ *                      turndown. Shares the web_search gate so a
+ *                      single toggle gives the model the
+ *                      search → fetch-the-top-result pair
+ *   - fetch_image    — pull a single image URL into the gallery as
+ *                      an `image` artifact (magic-byte validated).
+ *                      Pairs with search_images. Same shared gate.
  *
  * All tools read and write through the same DatabaseService / gallery
  * store the UI uses, so anything the model does shows up in the
@@ -1822,6 +1836,524 @@ register({
 			suggestions: Array.isArray(data?.suggestions) ? data.suggestions.slice(0, 5) : [],
 			answers: Array.isArray(data?.answers) ? data.answers.slice(0, 3) : [],
 			infoboxes
+		});
+	}
+});
+
+// ----- search_images / search_news -------------------------------------
+//
+// Thin wrappers around the same SearXNG instance the `web_search` tool
+// uses. Split out as dedicated tools so the model picks them by intent
+// ("find me a reference photo of X" → search_images) rather than having
+// to remember to pass `category: 'images'` to the generic tool. They
+// also reshape the response to surface the category-specific fields
+// (img_src / thumbnail / resolution for images; publish dates for news).
+// All three share the `webSearchEnabled` gate so a single user toggle
+// gives the model the full SearXNG surface.
+
+interface SearxngImageResult {
+	title?: unknown;
+	url?: unknown;
+	content?: unknown;
+	engine?: unknown;
+	img_src?: unknown;
+	thumbnail_src?: unknown;
+	thumbnail?: unknown;
+	resolution?: unknown;
+	source?: unknown;
+}
+
+interface SearxngNewsResult extends SearxngResult {
+	source?: unknown;
+}
+
+async function callSearxng(opts: {
+	query: string;
+	category?: string;
+	time_range?: string;
+	signal?: AbortSignal;
+}): Promise<{ data: unknown; error?: never } | { error: string; data?: never }> {
+	const base = resolveWebSearchBaseUrl();
+	if (!base) {
+		return {
+			error:
+				'Web search is not configured. Ask the user to set Settings → Search → Web search base URL (e.g. http://192.168.8.170:30502).'
+		};
+	}
+	const url = new URL(`${base}/search`);
+	url.searchParams.set('q', opts.query);
+	url.searchParams.set('format', 'json');
+	if (opts.category) url.searchParams.set('categories', opts.category);
+	if (opts.time_range) url.searchParams.set('time_range', opts.time_range);
+
+	const doFetch = await getFetch();
+	let res: Response;
+	try {
+		res = await doFetch(url.toString(), {
+			signal: opts.signal,
+			headers: { Accept: 'application/json' }
+		});
+	} catch (e) {
+		return { error: `SearXNG fetch failed: ${e instanceof Error ? e.message : String(e)}` };
+	}
+	if (!res.ok) {
+		let detail = '';
+		try {
+			detail = (await res.text()).slice(0, 300);
+		} catch {
+			/* non-text body */
+		}
+		return { error: `SearXNG returned HTTP ${res.status}${detail ? `: ${detail}` : ''}` };
+	}
+	try {
+		return { data: await res.json() };
+	} catch {
+		return { error: 'SearXNG returned a non-JSON body. Enable `formats: [json]` on the instance.' };
+	}
+}
+
+register({
+	gate: () => Boolean(config().webSearchEnabled),
+	gateLabel: 'Web search',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'search_images',
+			description:
+				"Search the web for IMAGES via SearXNG. Returns each hit's `img_src` (the actual full-size image URL), `thumbnail` URL, `resolution` (e.g. '1920x1080'), `source` site, the page `url` the image was found on, and a short `title`. Use when the user asks for a reference photo, a visual example, a meme, a screenshot, or a diagram — anything where the *picture itself* is the answer, not a description of it. Cite both the source page URL and the img_src so the user can verify. Returns the same shape regardless of the underlying SearXNG image engines (DuckDuckGo, Brave, Google Images, etc.).",
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description:
+							'Image search query in plain text. Describe what the image should depict — e.g. "Yorkshire terrier puppy", "Tokyo subway map 2024".'
+					},
+					max_results: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 30,
+						description: 'Max image hits returned. Defaults to the user-configured cap (8).'
+					}
+				},
+				required: ['query']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const query = String(args.query ?? '').trim();
+		if (!query) return err('query is required');
+		const cap = Math.min(
+			30,
+			Math.max(1, Number(args.max_results) || Number(config().webSearchMaxResults) || 8)
+		);
+
+		const r = await callSearxng({ query, category: 'images', signal });
+		if (r.error) return err(r.error);
+		const data = r.data as { results?: SearxngImageResult[] };
+
+		const raw = Array.isArray(data?.results) ? data.results : [];
+		const results = raw.slice(0, cap).map((it) => ({
+			title: typeof it.title === 'string' ? it.title : '',
+			url: typeof it.url === 'string' ? it.url : '',
+			img_src: typeof it.img_src === 'string' ? it.img_src : '',
+			thumbnail:
+				typeof it.thumbnail_src === 'string'
+					? it.thumbnail_src
+					: typeof it.thumbnail === 'string'
+						? it.thumbnail
+						: '',
+			resolution: typeof it.resolution === 'string' ? it.resolution : '',
+			source: typeof it.source === 'string' ? it.source : '',
+			engine: typeof it.engine === 'string' ? it.engine : ''
+		}));
+
+		return ok({ query, count: results.length, results });
+	}
+});
+
+register({
+	gate: () => Boolean(config().webSearchEnabled),
+	gateLabel: 'Web search',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'search_news',
+			description:
+				"Search NEWS via SearXNG. Same backend as `web_search` but pinned to the news category with a recency tilt — defaults to the past week so the model doesn't drag in stale coverage when the user is asking about current events. Returns each hit's `title`, `url`, `content` snippet, `source` (publisher name when SearXNG can extract it), `published_date`, and `engine`. Use when the user asks about something happening now, in the last few days, or in the last few weeks (releases, prices moving, breaking developments). Cite URLs verbatim — never invent a headline.",
+			parameters: {
+				type: 'object',
+				properties: {
+					query: {
+						type: 'string',
+						description:
+							"News search query. Phrase it the way you'd skim a headline — e.g. \"OpenAI GPT-5 release date\", \"USDC depeg August 2025\"."
+					},
+					time_range: {
+						type: 'string',
+						enum: ['day', 'week', 'month', 'year'],
+						description:
+							"Recency window. Defaults to `week`. Use `day` for breaking news, `month` for slow-moving developments, `year` for retrospective queries. Pass an explicit value if the user's question makes the timeframe specific."
+					},
+					max_results: {
+						type: 'integer',
+						minimum: 1,
+						maximum: 30,
+						description: 'Max news hits returned. Defaults to the user-configured cap (8).'
+					}
+				},
+				required: ['query']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const query = String(args.query ?? '').trim();
+		if (!query) return err('query is required');
+		const time_range =
+			typeof args.time_range === 'string' && args.time_range ? args.time_range : 'week';
+		const cap = Math.min(
+			30,
+			Math.max(1, Number(args.max_results) || Number(config().webSearchMaxResults) || 8)
+		);
+
+		const r = await callSearxng({ query, category: 'news', time_range, signal });
+		if (r.error) return err(r.error);
+		const data = r.data as { results?: SearxngNewsResult[] };
+
+		const raw = Array.isArray(data?.results) ? data.results : [];
+		const results = raw.slice(0, cap).map((it) => ({
+			title: typeof it.title === 'string' ? it.title : '',
+			url: typeof it.url === 'string' ? it.url : '',
+			content: typeof it.content === 'string' ? it.content : '',
+			source: typeof it.source === 'string' ? it.source : '',
+			published_date:
+				typeof it.publishedDate === 'string'
+					? it.publishedDate
+					: typeof it.published_date === 'string'
+						? it.published_date
+						: null,
+			engine: typeof it.engine === 'string' ? it.engine : ''
+		}));
+
+		return ok({ query, time_range, count: results.length, results });
+	}
+});
+
+// ----- fetch_url -------------------------------------------------------
+//
+// Fetch a single URL, extract the main article content via Mozilla
+// Readability, and return the result as Markdown via Turndown. Pairs
+// with web_search / search_news: the model picks a URL from search
+// hits, then calls fetch_url to actually read the page. Sharing the
+// webSearchEnabled gate keeps it one toggle for the user.
+//
+// We deliberately do NOT try to render JS-heavy pages — Readability
+// runs against the static HTML the server returns. For SPAs that
+// only render content client-side the result will be sparse; in
+// those cases the model should report that the page didn't return
+// usable static content and ask the user how to proceed (e.g. paste
+// the rendered content, or use a screenshot tool).
+//
+// "newspaper3k for news" is on the roadmap but needs a Python sidecar
+// in the cluster; tracked separately. Readability already covers the
+// 80% news / blog case in pure JS without the extra service hop.
+
+const FETCH_URL_MAX_BYTES = 4 * 1024 * 1024; // 4 MB hard cap on response body
+const FETCH_URL_MAX_MARKDOWN_CHARS = 60_000; // ~15K tokens at the high end
+
+register({
+	gate: () => Boolean(config().webSearchEnabled),
+	gateLabel: 'Web search',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'fetch_url',
+			description:
+				"Fetch a single URL and return the main article content as Markdown. Uses Mozilla Readability to strip nav / footer / ads and extract the article body, then converts to Markdown. Pair with `web_search` / `search_news`: search to find candidate URLs, then `fetch_url` to actually read the most promising one. Returns `title`, `byline`, `excerpt`, `length` (char count), `markdown`, and the resolved `url` (post-redirect). 4 MB body cap and 60K-char Markdown cap so a single page can't blow out the context window. Does NOT execute JavaScript — if the page is a JS-only SPA the returned markdown will be sparse; in that case fall back to asking the user.",
+			parameters: {
+				type: 'object',
+				properties: {
+					url: {
+						type: 'string',
+						description:
+							'Full URL to fetch (http:// or https://). Pick from search results; never invent. Anchors (#fragment) are kept; query strings are forwarded as-is.'
+					},
+					max_chars: {
+						type: 'integer',
+						minimum: 500,
+						maximum: 60000,
+						description:
+							'Cap on returned markdown length. Defaults to 60000. Lower this when you only need the lede / first few paragraphs.'
+					}
+				},
+				required: ['url']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const rawUrl = String(args.url ?? '').trim();
+		if (!rawUrl) return err('url is required');
+		let target: URL;
+		try {
+			target = new URL(rawUrl);
+		} catch {
+			return err(`url is not a valid URL: ${rawUrl}`);
+		}
+		if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+			return err(`only http(s) URLs are supported; got ${target.protocol}`);
+		}
+		const maxChars = Math.min(
+			FETCH_URL_MAX_MARKDOWN_CHARS,
+			Math.max(500, Number(args.max_chars) || FETCH_URL_MAX_MARKDOWN_CHARS)
+		);
+
+		const doFetch = await getFetch();
+		let res: Response;
+		try {
+			res = await doFetch(target.toString(), {
+				signal,
+				headers: {
+					// Lots of sites serve different (cleaner) markup to non-browser
+					// User-Agents; a plain UA gets us a static page more often.
+					'User-Agent': 'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
+					Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+				}
+			});
+		} catch (e) {
+			return err(`fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+		if (!res.ok) {
+			return err(`HTTP ${res.status} ${res.statusText || ''}`.trim());
+		}
+		const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
+		if (
+			contentType &&
+			!contentType.includes('text/html') &&
+			!contentType.includes('application/xhtml')
+		) {
+			return err(
+				`Response is not HTML (content-type: ${contentType}). fetch_url only extracts article content; for raw text or JSON, ask the user to copy/paste the relevant bits.`
+			);
+		}
+		const buf = await res.arrayBuffer();
+		if (buf.byteLength > FETCH_URL_MAX_BYTES) {
+			return err(
+				`Response too large (${buf.byteLength} bytes > ${FETCH_URL_MAX_BYTES} cap). The page is likely a media file or massive static dump.`
+			);
+		}
+		const html = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+		const finalUrl = res.url || target.toString();
+
+		// Mozilla Readability needs a Document. DOMParser is available in
+		// the webview / browser context but not in SSR / Node — guard
+		// defensively so the tool fails clean if executed somewhere
+		// unexpected.
+		if (typeof DOMParser === 'undefined') {
+			return err('fetch_url requires a browser context (DOMParser missing).');
+		}
+		const parser = new DOMParser();
+		const doc = parser.parseFromString(html, 'text/html');
+		// Strip <script> / <style> — Readability mostly handles this but
+		// being explicit avoids edge cases where leftover JS leaks into
+		// markdown.
+		for (const node of Array.from(doc.querySelectorAll('script, style, noscript, iframe'))) {
+			node.remove();
+		}
+
+		const { Readability } = await import('@mozilla/readability');
+		const { default: TurndownService } = await import('turndown');
+
+		const reader = new Readability(doc, { keepClasses: false });
+		const article = reader.parse();
+
+		if (!article || !article.content) {
+			return err(
+				`Readability could not extract article content from ${finalUrl}. The page may be a JS-rendered SPA, a paywalled article, or non-article content (homepage, login screen, etc.).`
+			);
+		}
+
+		const td = new TurndownService({
+			headingStyle: 'atx',
+			codeBlockStyle: 'fenced',
+			bulletListMarker: '-',
+			emDelimiter: '_'
+		});
+		// Drop empty links and image alt-clutter — keeps the markdown
+		// readable for the model without losing the source URLs.
+		td.addRule('drop-empty-anchors', {
+			filter: (node) =>
+				node.nodeName === 'A' && !node.textContent?.trim() && !node.querySelector('img'),
+			replacement: () => ''
+		});
+
+		let markdown = td.turndown(article.content).trim();
+		// Collapse triple+ blank lines down to a single blank — Turndown
+		// can leave a lot of vertical noise on heavy-nested HTML.
+		markdown = markdown.replace(/\n{3,}/g, '\n\n');
+		let truncated = false;
+		if (markdown.length > maxChars) {
+			markdown = markdown.slice(0, maxChars).trimEnd() + '\n\n…[truncated]';
+			truncated = true;
+		}
+
+		return ok({
+			url: finalUrl,
+			title: article.title ?? '',
+			byline: article.byline ?? null,
+			excerpt: article.excerpt ?? '',
+			site_name: article.siteName ?? '',
+			length: article.length ?? markdown.length,
+			markdown,
+			truncated
+		});
+	}
+});
+
+// ----- fetch_image -----------------------------------------------------
+//
+// Pull a single image URL into the artifact gallery. Pairs with
+// search_images: model finds the right `img_src` in a search, then
+// calls fetch_image to actually bring the bytes in so the user can
+// see them inline AND so the model can reference them later via
+// get_artifact for further work (vision-encoder attachment,
+// edit_image, etc.).
+//
+// Magic-byte validated before save — bails out cleanly on HTML error
+// pages, S3 access-denied XML, anything that isn't a known image
+// container. Capped at 20 MB so a single misclicked URL can't blow
+// out the gallery.
+//
+// Gated on the same webSearchEnabled toggle as the other web tools.
+
+const FETCH_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
+register({
+	gate: () => Boolean(config().webSearchEnabled),
+	gateLabel: 'Web search',
+	definition: {
+		type: 'function',
+		function: {
+			name: 'fetch_image',
+			description:
+				"Fetch a single image URL and save it as an `image` artifact in the user's gallery. Pair with `search_images`: pick the most relevant `img_src` from a search hit, then call `fetch_image(url=...)` to bring the bytes in. The artifact is rendered inline in the next assistant turn and can be referenced by `artifactId` in follow-ups (e.g. via `get_artifact`, `edit_image`, or `generate_video`). Magic-byte validated (PNG/JPEG/GIF/BMP/WEBP); rejects HTML error pages or non-image bodies. 20 MB cap. Returns `artifactId`, `revisionId`, `title`, `mimeType`, `bytes`, plus the resolved `url` (after redirects).",
+			parameters: {
+				type: 'object',
+				properties: {
+					url: {
+						type: 'string',
+						description:
+							'Full URL to the image (http:// or https://). Pick from `search_images` results (`img_src` field), never invent.'
+					},
+					title: {
+						type: 'string',
+						description:
+							"Optional title for the saved artifact. If omitted, derives one from the source page or URL filename. Don't pad with extra description — the gallery card has its own metadata field."
+					}
+				},
+				required: ['url']
+			}
+		}
+	},
+	async execute(args, signal) {
+		const rawUrl = String(args.url ?? '').trim();
+		if (!rawUrl) return err('url is required');
+		let target: URL;
+		try {
+			target = new URL(rawUrl);
+		} catch {
+			return err(`url is not a valid URL: ${rawUrl}`);
+		}
+		if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+			return err(`only http(s) URLs are supported; got ${target.protocol}`);
+		}
+
+		const doFetch = await getFetch();
+		let res: Response;
+		try {
+			res = await doFetch(target.toString(), {
+				signal,
+				headers: {
+					'User-Agent':
+						'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_image; +https://github.com/heiervang-technologies/ht-llama.cpp)',
+					Accept: 'image/*,*/*;q=0.5'
+				}
+			});
+		} catch (e) {
+			return err(`image fetch failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+		if (!res.ok) {
+			return err(`HTTP ${res.status} ${res.statusText || ''}`.trim());
+		}
+		const buf = await res.arrayBuffer();
+		if (buf.byteLength > FETCH_IMAGE_MAX_BYTES) {
+			return err(
+				`image too large (${buf.byteLength} bytes > ${FETCH_IMAGE_MAX_BYTES} cap). Pick a smaller variant or thumbnail.`
+			);
+		}
+		const bytes = new Uint8Array(buf);
+		if (!isImageMagic(bytes)) {
+			return err(
+				'response is not a recognised image format (PNG / JPEG / GIF / BMP / WEBP). The URL likely returned an HTML page or access-denied response.'
+			);
+		}
+
+		// Magic-byte sniff to pick the right MIME type — Content-Type
+		// from the upstream can lie (S3 sometimes serves images with
+		// application/octet-stream), so we infer from bytes for the
+		// saved artifact.
+		let mimeType = 'image/png';
+		if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) mimeType = 'image/jpeg';
+		else if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) mimeType = 'image/gif';
+		else if (bytes[0] === 0x42 && bytes[1] === 0x4d) mimeType = 'image/bmp';
+		else if (
+			bytes[0] === 0x52 &&
+			bytes[1] === 0x49 &&
+			bytes[2] === 0x46 &&
+			bytes[3] === 0x46 &&
+			bytes[8] === 0x57 &&
+			bytes[9] === 0x45 &&
+			bytes[10] === 0x42 &&
+			bytes[11] === 0x50
+		)
+			mimeType = 'image/webp';
+
+		const finalUrl = res.url || target.toString();
+		const blob = new Blob([new Uint8Array(buf)], { type: mimeType });
+
+		const fallbackTitle = (() => {
+			try {
+				const pathname = new URL(finalUrl).pathname;
+				const base = pathname.split('/').filter(Boolean).pop();
+				if (base) return decodeURIComponent(base).slice(0, 120);
+			} catch {
+				/* ignore */
+			}
+			return `Fetched image · ${finalUrl.slice(0, 80)}`;
+		})();
+		const title =
+			typeof args.title === 'string' && args.title.trim() ? args.title.trim() : fallbackTitle;
+
+		const artifact = await artifactGalleryStore.saveManual({
+			kind: 'image' as DatabaseArtifactKind,
+			title,
+			mimeType,
+			blob,
+			tags: ['fetched', 'web'],
+			metadata: {
+				source: 'fetch_url',
+				sourceUrl: finalUrl,
+				fetchedAt: new Date().toISOString(),
+				bytes: blob.size
+			}
+		});
+
+		return ok({
+			artifactId: artifact.id,
+			revisionId: artifact.currentRevisionId,
+			title: artifact.title,
+			mimeType,
+			bytes: blob.size,
+			url: finalUrl
 		});
 	}
 });
