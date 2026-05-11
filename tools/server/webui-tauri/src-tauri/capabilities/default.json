@@ -1,7 +1,7 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "Default permissions plus the webview-window creation surface the pop-out buttons need (terminal drawer in chat → term-*; artifact detail → art-*). The globs cover every spawned window without needing per-id capability entries. The http:default allow-list covers loopback (dev), the *.ht.local cluster ingresses (search / images / ai), the 192.168.8.0/24 LAN (titan + NodePort services), and the 100.0.0.0/8 Tailscale range (Android APK reaches the cluster via tailnet). HT is a trusted-LAN product; broad globs prevent 'Command plugin:http|fetch not allowed by ACL' surprises every time a new cluster service comes online.",
+	"description": "Default permissions plus the webview-window creation surface the pop-out buttons need (terminal drawer in chat → term-*; artifact detail → art-*). The globs cover every spawned window without needing per-id capability entries. The http:default allow-list intentionally accepts any HTTP/HTTPS URL — HT is a trusted-LAN product and the cluster surface keeps growing (search.ht.local, images.ht.local, ai.ht.local, NodePort services, Tailscale 100/8 peers, etc.). Narrow per-host allow-lists shaped wrong against the URL Pattern parser have caused 'Command plugin:http|fetch not allowed by ACL' surprises; broad allow + trusted-LAN deployment is the right trade.",
 	"windows": [
 		"main",
 		"term-*",
@@ -16,14 +16,10 @@
 		{
 			"identifier": "http:default",
 			"allow": [
-				{ "url": "http://127.0.0.1:*/*" },
-				{ "url": "http://localhost:*/*" },
-				{ "url": "http://*.ht.local/*" },
-				{ "url": "https://*.ht.local/*" },
-				{ "url": "http://192.168.8.*:*/*" },
-				{ "url": "https://192.168.8.*:*/*" },
-				{ "url": "http://100.*.*.*:*/*" },
-				{ "url": "https://100.*.*.*:*/*" }
+				{ "url": "http://*/*" },
+				{ "url": "http://*:*/*" },
+				{ "url": "https://*/*" },
+				{ "url": "https://*:*/*" }
 			]
 		}
 	]
