@@ -25,6 +25,7 @@ import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { getBuiltinToolDefinitions } from '$lib/services/builtin-tools';
 import { modelsStore } from '$lib/stores/models.svelte';
+import { toolTimings } from '$lib/stores/tool-timings.svelte';
 import { isAbortError } from '$lib/utils';
 import {
 	DEFAULT_AGENTIC_CONFIG,
@@ -530,6 +531,12 @@ class AgenticStore {
 				agenticTimings.toolsMs += Math.round(toolDurationMs);
 				turnStats.toolCalls.push(toolTiming);
 				turnStats.toolsMs += Math.round(toolDurationMs);
+
+				// Feed the rolling-median estimator so the UI's pending
+				// progress bar adapts to actual per-tool latency. Only
+				// successful calls — a failed call's duration says nothing
+				// useful about a successful one.
+				toolTimings.record(toolCall.function.name, toolDurationMs, toolSuccess);
 
 				if (signal?.aborted) {
 					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));

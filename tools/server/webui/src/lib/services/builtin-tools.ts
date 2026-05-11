@@ -2455,7 +2455,7 @@ register({
 	},
 	async execute(args, signal) {
 		const ids = Array.isArray(args.artifactIds)
-			? (args.artifactIds.filter((x): x is string => typeof x === 'string' && x.trim() !== ''))
+			? args.artifactIds.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
 			: [];
 		if (ids.length < 2) return err('artifactIds must contain at least 2 image ids');
 		if (ids.length > COLLAGE_MAX_INPUTS) {
@@ -2496,8 +2496,7 @@ register({
 				return err(`artifact ${id} is kind=${art.kind}; only image artifacts are supported`);
 			}
 			const revs = await DatabaseService.listArtifactRevisions(id);
-			const rev =
-				revs.find((r) => r.id === art.currentRevisionId) ?? revs.at(-1);
+			const rev = revs.find((r) => r.id === art.currentRevisionId) ?? revs.at(-1);
 			if (!rev?.blob) return err(`artifact ${id} has no image blob on its current revision`);
 			inputs.push({ artifactId: id, blob: rev.blob, title: art.title });
 		}

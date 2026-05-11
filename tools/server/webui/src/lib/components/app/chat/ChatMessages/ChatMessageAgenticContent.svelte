@@ -7,6 +7,7 @@
 	} from '$lib/components/app';
 	import ToolResultArtifactPreviews from './ToolResultArtifactPreviews.svelte';
 	import ToolResultRichPreview from './ToolResultRichPreview.svelte';
+	import ToolCallProgressBar from './ToolCallProgressBar.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
@@ -224,6 +225,15 @@
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
+
+		<!-- Live progress bar while the call is in flight. Fills against
+		     the rolling median for this tool name; pegs amber past the
+		     estimate so the user sees "slower than usual" instead of
+		     wondering if the call has hung. Unmounts the moment the
+		     section transitions to TOOL_CALL (completion). -->
+		{#if isPending}
+			<ToolCallProgressBar toolName={section.toolName} />
+		{/if}
 
 		<!-- Gallery artifacts referenced in the tool result rendered
 		     OUTSIDE the collapsible card so the user sees the actual
