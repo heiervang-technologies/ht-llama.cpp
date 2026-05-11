@@ -44,6 +44,24 @@ pub fn run() {
 		std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
 	}
 
+	// Disable GStreamer hardware video decoders inside webkit2gtk. VA-API
+	// and NVDEC paths on Arch with webkit2gtk-4.1 2.50 + GStreamer 1.28
+	// trip the WebProcess for several common MP4 codec profiles —
+	// especially when `gst-plugins-bad` (the package that ships HEVC /
+	// AV1 / many newer codec elements) is missing on the host, which
+	// leaves the pipeline negotiating against an incomplete codec set.
+	// Software decode via `gst-libav` is slower but stable. Set this
+	// alongside the playbin3 + DMABUF guards so the entire video path is
+	// pinned to the known-stable software-decode lane.
+	#[cfg(target_os = "linux")]
+	if std::env::var_os("WEBKIT_GST_USE_HARDWARE_VIDEO_DECODERS").is_none() {
+		std::env::set_var("WEBKIT_GST_USE_HARDWARE_VIDEO_DECODERS", "0");
+	}
+	#[cfg(target_os = "linux")]
+	if std::env::var_os("WEBKIT_GST_DISABLE_VAAPI").is_none() {
+		std::env::set_var("WEBKIT_GST_DISABLE_VAAPI", "1");
+	}
+
 	tauri::Builder::default()
 		// Pin the embedded server to 127.0.0.1 — left to its default
 		// "localhost" the plugin's tiny-http binds to whichever IP

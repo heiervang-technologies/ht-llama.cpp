@@ -47,12 +47,7 @@
 	{:else if artifact.kind === 'video' && objectUrl}
 		{#if videoMounted}
 			<!-- svelte-ignore a11y_media_has_caption -->
-			<video
-				src={objectUrl}
-				controls
-				autoplay
-				class="h-full w-full bg-black"
-				preload="metadata"
+			<video src={objectUrl} controls autoplay class="h-full w-full bg-black" preload="metadata"
 			></video>
 		{:else}
 			<button

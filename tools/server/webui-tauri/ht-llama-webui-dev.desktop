@@ -4,7 +4,7 @@ Version=1.0
 Name=ht-llama.cpp WebUI (dev)
 GenericName=LLM Chat (dev)
 Comment=Launch the ht-llama.cpp Tauri shell in dev mode (cargo tauri dev)
-Exec=sh -c 'cd %k/.. && WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_GST_USE_PLAYBIN3=0 GTK_CSD=0 cargo tauri dev'
+Exec=sh -c 'cd %k/.. && WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_GST_USE_PLAYBIN3=0 WEBKIT_GST_USE_HARDWARE_VIDEO_DECODERS=0 WEBKIT_GST_DISABLE_VAAPI=1 GTK_CSD=0 cargo tauri dev'
 Icon=ht-llama-webui
 Categories=Development;Network;Chat;Utility;
 Keywords=llama;llm;ai;chat;inference;ggml;dev;
