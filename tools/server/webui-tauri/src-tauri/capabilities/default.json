@@ -1,12 +1,18 @@
 {
 	"$schema": "../gen/schemas/desktop-schema.json",
 	"identifier": "default",
-	"description": "Default permissions plus the webview-window creation surface the pop-out buttons need (terminal drawer in chat → term-*; artifact detail → art-*). The globs cover every spawned window without needing per-id capability entries. The http:default allow-list intentionally accepts any HTTP/HTTPS URL — HT is a trusted-LAN product and the cluster surface keeps growing (search.ht.local, images.ht.local, ai.ht.local, NodePort services, Tailscale 100/8 peers, etc.). Narrow per-host allow-lists shaped wrong against the URL Pattern parser have caused 'Command plugin:http|fetch not allowed by ACL' surprises; broad allow + trusted-LAN deployment is the right trade.",
+	"description": "Default permissions plus the webview-window creation surface the pop-out buttons need (terminal drawer in chat → term-*; artifact detail → art-*). The globs cover every spawned window without needing per-id capability entries. The http:default allow-list intentionally accepts any HTTP/HTTPS URL — HT is a trusted-LAN product and the cluster surface keeps growing (search.ht.local, images.ht.local, ai.ht.local, NodePort services, Tailscale 100/8 peers, etc.). Narrow per-host allow-lists shaped wrong against the URL Pattern parser have caused 'Command plugin:http|fetch not allowed by ACL' surprises; broad allow + trusted-LAN deployment is the right trade. The `remote.urls` list extends the capability to the tauri-plugin-localhost-served origin (http://localhost:5173) — without this, release builds classify the webview as Remote (because Tauri's resource URL is `tauri://localhost`, not localhost:5173) and the implicit `local: true` capability never matches.",
 	"windows": [
 		"main",
 		"term-*",
 		"art-*"
 	],
+	"remote": {
+		"urls": [
+			"http://localhost:5173",
+			"http://127.0.0.1:5173"
+		]
+	},
 	"permissions": [
 		"core:default",
 		"core:webview:allow-create-webview-window",
