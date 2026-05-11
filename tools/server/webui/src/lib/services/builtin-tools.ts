@@ -1920,7 +1920,7 @@ register({
 		function: {
 			name: 'search_images',
 			description:
-				"Search the web for IMAGES via SearXNG. Returns each hit's `img_src` (the actual full-size image URL), `thumbnail` URL, `resolution` (e.g. '1920x1080'), `source` site, the page `url` the image was found on, and a short `title`. Use when the user asks for a reference photo, a visual example, a meme, a screenshot, or a diagram — anything where the *picture itself* is the answer, not a description of it. Cite both the source page URL and the img_src so the user can verify. Returns the same shape regardless of the underlying SearXNG image engines (DuckDuckGo, Brave, Google Images, etc.).",
+				"Search the web for IMAGES via SearXNG. Returns each hit's `img_src` (the actual full-size image URL), `thumbnail` URL, `resolution` (e.g. '1920x1080'), `source` site, the page `url` the image was found on, and a short `title`. Use when the user asks for a reference photo, a visual example, a meme, a screenshot, or a diagram — anything where the *picture itself* is the answer, not a description of it.\n\nIMPORTANT — to show the image inline, **call `fetch_image(url=<img_src>)` after picking the result you want**. Don't embed `img_src` directly in markdown (`![](...)`): most image hosts block cross-origin image loads via CORS, hotlink protection, referrer checks, or mixed-content rules, so the inline `<img>` renders as 'Image cannot be displayed'. `fetch_image` pulls the bytes server-side via reqwest (no CORS gate) and saves the result as a local artifact, which the chat then renders from a blob URL — that always works. If you only need to *cite* an image source without showing it, the URL alone is fine.\n\nResponse shape is identical regardless of underlying SearXNG image engines (DuckDuckGo, Brave, Google Images, etc.).",
 			parameters: {
 				type: 'object',
 				properties: {
@@ -1987,7 +1987,7 @@ register({
 					query: {
 						type: 'string',
 						description:
-							"News search query. Phrase it the way you'd skim a headline — e.g. \"OpenAI GPT-5 release date\", \"USDC depeg August 2025\"."
+							'News search query. Phrase it the way you\'d skim a headline — e.g. "OpenAI GPT-5 release date", "USDC depeg August 2025".'
 					},
 					time_range: {
 						type: 'string',
@@ -2115,7 +2115,8 @@ register({
 				headers: {
 					// Lots of sites serve different (cleaner) markup to non-browser
 					// User-Agents; a plain UA gets us a static page more often.
-					'User-Agent': 'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
+					'User-Agent':
+						'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
 					Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 				}
 			});

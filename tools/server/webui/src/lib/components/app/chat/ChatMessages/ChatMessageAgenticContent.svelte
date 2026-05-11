@@ -6,6 +6,7 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import ToolResultArtifactPreviews from './ToolResultArtifactPreviews.svelte';
+	import ToolResultRichPreview from './ToolResultRichPreview.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import { AgenticSectionType, FileTypeText } from '$lib/enums';
@@ -233,6 +234,12 @@
 		     which misses the image-render contract. -->
 		{#if section.toolResult}
 			<ToolResultArtifactPreviews toolResult={section.toolResult} />
+			<!-- Web-tool family (web_search, search_images, search_news,
+			     fetch_url) gets a rich card-style render outside the
+			     collapsible so the user sees the actual results at a
+			     glance. The raw JSON stays inside the collapsible for
+			     debugging / model-context replay. -->
+			<ToolResultRichPreview toolName={section.toolName} toolResult={section.toolResult} />
 		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock

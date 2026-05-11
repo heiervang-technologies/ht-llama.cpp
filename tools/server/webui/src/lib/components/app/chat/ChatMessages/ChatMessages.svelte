@@ -163,10 +163,15 @@
 			}
 
 			const toolMessages: DatabaseMessage[] = [];
-			// In standalone mode we skip the look-ahead that folds tool
-			// messages into the assistant's group — each tool message will
-			// land as its own entry in this same loop.
-			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg) && !standaloneTools) {
+			// Standalone mode emits tool messages as their own entries, but
+			// the assistant card's agentic-content view still needs to see
+			// them to pair each `tool_call` with its result — without that
+			// lookup, every section stays TOOL_CALL_PENDING and the spinner
+			// gets stuck forever. So we ALWAYS gather the related tool/
+			// continuation messages for the assistant's display entry; we
+			// just don't advance past them in standalone mode so they also
+			// get their own emit on a subsequent loop iteration.
+			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
 				while (j < filteredMessages.length) {
@@ -185,13 +190,19 @@
 					}
 				}
 
-				i = j - 1;
-			} else if (msg.role === MessageRole.ASSISTANT && !standaloneTools) {
+				if (!standaloneTools) {
+					i = j - 1;
+				}
+			} else if (msg.role === MessageRole.ASSISTANT) {
 				let j = i + 1;
 
 				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
 					toolMessages.push(filteredMessages[j]);
 					j++;
+				}
+
+				if (!standaloneTools) {
+					i = j - 1;
 				}
 			}
 
