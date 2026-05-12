@@ -178,16 +178,17 @@
 		{showSearchInput}
 		searchPlaceholder="Search resources..."
 		emptyMessage="No MCP resources available"
-		itemKey={(resource) => resource.serverName + ':' + resource.uri}
+		itemKey={(resource: { serverName: string; uri: string }) =>
+			resource.serverName + ':' + resource.uri}
 	>
-		{#snippet item(resource, index, isSelected)}
+		{#snippet item(resource: any, index: number, isSelected: boolean)}
 			{@const server = serverSettingsMap.get(resource.serverName)}
 			{@const serverLabel = server ? mcpStore.getServerLabel(server) : resource.serverName}
 
 			<ChatFormPickerListItem
 				dataIndex={index}
 				{isSelected}
-				onclick={() => handleResourceClick(resource)}
+				onClick={() => handleResourceClick(resource)}
 			>
 				<ChatFormPickerItemHeader
 					{server}

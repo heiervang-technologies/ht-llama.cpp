@@ -20,17 +20,22 @@
  */
 
 import { browser } from '$app/environment';
-import { base } from '$app/paths';
-import { SETTINGS_KEYS } from '$lib/constants';
+import { resolveApiUrl } from '$lib/utils/backend-url';
 import { MCPService } from '$lib/services/mcp.service';
+import {
+	dispatchBuiltin,
+	getBuiltinToolDefinitions,
+	hasBuiltinTool
+} from '$lib/services/builtin-tools';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { mode } from 'mode-watcher';
 import {
+	getProxiedUrlString,
 	parseMcpServerSettings,
 	detectMcpTransportFromUrl,
-	uuid,
-	extractRootDomain
+	getFaviconUrl,
+	uuid
 } from '$lib/utils';
 import {
 	MCPConnectionPhase,
@@ -108,7 +113,7 @@ class MCPStore {
 	 */
 	async probeProxy(): Promise<void> {
 		try {
-			const response = await fetch(`${base}${CORS_PROXY_ENDPOINT}`, { method: 'HEAD' });
+			const response = await fetch(resolveApiUrl(CORS_PROXY_ENDPOINT), { method: 'HEAD' });
 			this._proxyAvailable = response.status !== 404;
 		} catch {
 			this._proxyAvailable = false;
@@ -413,9 +418,7 @@ class MCPStore {
 	#isValidIconUri(src: string): boolean {
 		try {
 			if (src.startsWith(UrlProtocol.DATA)) return true;
-
 			const url = new URL(src);
-
 			return url.protocol === UrlProtocol.HTTPS;
 		} catch {
 			return false;
@@ -448,29 +451,40 @@ class MCPStore {
 
 		// 1. Prefer icon explicitly matching the current color scheme
 		const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
-		if (themedIcon) return themedIcon.src;
+		if (themedIcon) return this.#proxyIconSrc(themedIcon.src);
 
 		// 2. Handle universal icons (no theme specified)
 		const universalIcons = validIcons.filter((icon) => !icon.theme);
 
 		if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
 			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
-			return universalIcons[isDark ? 1 : 0].src;
+			return this.#proxyIconSrc(universalIcons[isDark ? 1 : 0].src);
 		}
 
 		if (universalIcons.length > 0) {
-			return universalIcons[0].src;
+			return this.#proxyIconSrc(universalIcons[0].src);
 		}
 
 		// 3. Last resort: use opposite-theme icon
-		return validIcons[0].src;
+		return this.#proxyIconSrc(validIcons[0].src);
+	}
+
+	/**
+	 * Route an icon src through the CORS proxy if it's an HTTPS URL.
+	 * Data URIs are returned as-is.
+	 */
+	#proxyIconSrc(src: string): string {
+		if (src.startsWith('data:')) return src;
+		if (!this._proxyAvailable) return src;
+
+		return getProxiedUrlString(src);
 	}
 
 	/**
 	 * Get icon URL for an MCP server by its ID.
-	 * Returns the best icon from the MCP server's `icons` array
-	 * (see MCP spec: spec.modelcontextprotocol.io).
-	 * Returns null if no icon is available.
+	 * Prefers the server's own icons (from MCP spec) and falls back
+	 * to Google's favicon service.
+	 * Returns null if server is not found.
 	 */
 	getServerFavicon(serverId: string): string | null {
 		const server = this.getServerById(serverId);
@@ -488,39 +502,7 @@ class MCPStore {
 			}
 		}
 
-		// Fallback: try favicon from root domain
-		const fallbackUrl = this.#getServerFaviconFallback(server.url);
-		if (fallbackUrl) {
-			return fallbackUrl;
-		}
-
-		return null;
-	}
-
-	/**
-	 * Construct a fallback favicon URL from the MCP server URL.
-	 * e.g. https://mcp.exa.ai/mcp -> https://exa.ai/favicon.ico
-	 */
-	#getServerFaviconFallback(serverUrl: string): string | null {
-		try {
-			const url = new URL(serverUrl);
-			const rootDomain = extractRootDomain(url);
-			if (!rootDomain) return null;
-
-			const origin = `${url.protocol}//${rootDomain}`;
-			const candidates = ['favicon.ico', 'favicon.svg', 'favicon.png'];
-
-			for (const path of candidates) {
-				const faviconUrl = `${origin}/${path}`;
-				if (this.#isValidIconUri(faviconUrl)) {
-					return faviconUrl;
-				}
-			}
-		} catch {
-			// Invalid URL, return null
-		}
-
-		return null;
+		return getFaviconUrl(server.url, this._proxyAvailable);
 	}
 
 	isAnyServerLoading(): boolean {
@@ -557,13 +539,13 @@ class MCPStore {
 			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			useProxy: serverData.useProxy
 		};
-		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		settingsStore.updateConfig('mcpServers', JSON.stringify([...servers, newServer]));
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
 		const servers = this.getServers();
 		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
+			'mcpServers',
 			JSON.stringify(
 				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
 			)
@@ -572,10 +554,7 @@ class MCPStore {
 
 	removeServer(id: string): void {
 		const servers = this.getServers();
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(servers.filter((s) => s.id !== id))
-		);
+		settingsStore.updateConfig('mcpServers', JSON.stringify(servers.filter((s) => s.id !== id)));
 		this.clearHealthCheck(id);
 	}
 
@@ -966,7 +945,12 @@ class MCPStore {
 	}
 
 	getToolDefinitionsForLLM(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
+		// Built-ins prepended so model attention lands on them before the (often
+		// longer) MCP list. Naming collisions are resolved in favour of the
+		// built-in via `executeTool`'s dispatch order — but the registry
+		// namespace is small (`list_artifacts` / `get_artifact` / `fork_artifact`)
+		// and unlikely to clash with user MCP tools in practice.
+		const tools: OpenAIToolDefinition[] = [...getBuiltinToolDefinitions()];
 
 		for (const connection of this.connections.values()) {
 			for (const tool of connection.tools) {
@@ -1155,6 +1139,11 @@ class MCPStore {
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
 		const toolName = toolCall.function.name;
 
+		// Built-ins take priority so a user MCP server can't shadow a core tool.
+		if (hasBuiltinTool(toolName)) {
+			return dispatchBuiltin(toolCall, signal);
+		}
+
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 
@@ -1185,6 +1174,13 @@ class MCPStore {
 		args: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
+		if (hasBuiltinTool(toolName)) {
+			return dispatchBuiltin(
+				{ id: 'builtin', function: { name: toolName, arguments: args } },
+				signal
+			);
+		}
+
 		const serverName = this.toolsIndex.get(toolName);
 		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
 		const connection = this.connections.get(serverName);

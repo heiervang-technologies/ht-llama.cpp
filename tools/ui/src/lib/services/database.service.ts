@@ -1,21 +1,76 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
-import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
+import type {
+	DatabaseArtifact,
+	DatabaseArtifactRevision,
+	DatabaseDoc,
+	McpServerOverride
+} from '$lib/types/database';
 
-class LlamaUiDatabase extends Dexie {
-	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
-	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
+/**
+ * Single-row secrets table — used for credentials that we don't want
+ * sitting in localStorage alongside ordinary preferences. Each row is
+ * `{ key, value }` keyed by `key`. Stored in IndexedDB without
+ * encryption — this is a "treat as sensitive" signal, not a security
+ * boundary. The threat model on a trusted desktop / Tauri install is
+ * "an XSS could read either store anyway", but keeping passwords out
+ * of the prefs blob makes export/import flows and accidental console
+ * dumps safer.
+ */
+export interface DatabaseSecret {
+	key: string;
+	value: string;
+}
+
+class LlamacppDatabase extends Dexie {
+	conversations!: EntityTable<DatabaseConversation, string>;
+	messages!: EntityTable<DatabaseMessage, string>;
+	docs!: EntityTable<DatabaseDoc, 'id'>;
+	artifacts!: EntityTable<DatabaseArtifact, 'id'>;
+	artifactRevisions!: EntityTable<DatabaseArtifactRevision, 'id'>;
+	secrets!: EntityTable<DatabaseSecret, 'key'>;
 
 	constructor() {
-		super(STORAGE_APP_NAME);
+		super('LlamacppWebui');
 
-		this.version(1).stores(IDXDB_STORES);
+		this.version(1).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children'
+		});
+
+		this.version(2).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name'
+		});
+
+		// v3: artifact gallery + per-artifact revisions. Composite index
+		// [sourceConversationId+sourceMessageSlot] is how the auto-capture hook
+		// finds the existing artifact when a turn is regenerated.
+		this.version(3).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name',
+			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
+			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash'
+		});
+
+		// v4: secrets table for sensitive prefs (Nextcloud app password,
+		// future API tokens). Keyed by `key` so we can put/get/delete
+		// by name without listing.
+		this.version(4).stores({
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
+			docs: 'id, lastModified, createdAt, name',
+			artifacts: 'id, updatedAt, createdAt, kind, title, [sourceConversationId+sourceMessageSlot]',
+			artifactRevisions: 'id, artifactId, createdAt, revisionNumber, contentHash',
+			secrets: 'key'
+		});
 	}
 }
 
-const db = new LlamaUiDatabase();
+const db = new LlamacppDatabase();
+import { MessageRole } from '$lib/enums';
 
 export class DatabaseService {
 	/**
@@ -40,7 +95,7 @@ export class DatabaseService {
 			currNode: ''
 		};
 
-		await db[IDXDB_TABLES.conversations].add(conversation);
+		await db.conversations.add(conversation);
 		return conversation;
 	}
 
@@ -64,45 +119,41 @@ export class DatabaseService {
 		message: Omit<DatabaseMessage, 'id'>,
 		parentId: string | null
 	): Promise<DatabaseMessage> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				// Handle null parent (root message case)
-				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-					if (!parentMessage) {
-						throw new Error(`Parent message ${parentId} not found`);
-					}
+		return await db.transaction('rw', [db.conversations, db.messages], async () => {
+			// Handle null parent (root message case)
+			if (parentId !== null) {
+				const parentMessage = await db.messages.get(parentId);
+				if (!parentMessage) {
+					throw new Error(`Parent message ${parentId} not found`);
 				}
-
-				const newMessage: DatabaseMessage = {
-					...message,
-					id: uuid(),
-					parent: parentId,
-					toolCalls: message.toolCalls ?? '',
-					children: []
-				};
-
-				await db[IDXDB_TABLES.messages].add(newMessage);
-
-				// Update parent's children array if parent exists
-				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-					if (parentMessage) {
-						await db[IDXDB_TABLES.messages].update(parentId, {
-							children: [...parentMessage.children, newMessage.id]
-						});
-					}
-				}
-
-				await this.updateConversation(message.convId, {
-					currNode: newMessage.id
-				});
-
-				return newMessage;
 			}
-		);
+
+			const newMessage: DatabaseMessage = {
+				...message,
+				id: uuid(),
+				parent: parentId,
+				toolCalls: message.toolCalls ?? '',
+				children: []
+			};
+
+			await db.messages.add(newMessage);
+
+			// Update parent's children array if parent exists
+			if (parentId !== null) {
+				const parentMessage = await db.messages.get(parentId);
+				if (parentMessage) {
+					await db.messages.update(parentId, {
+						children: [...parentMessage.children, newMessage.id]
+					});
+				}
+			}
+
+			await this.updateConversation(message.convId, {
+				currNode: newMessage.id
+			});
+
+			return newMessage;
+		});
 	}
 
 	/**
@@ -125,7 +176,7 @@ export class DatabaseService {
 			children: []
 		};
 
-		await db[IDXDB_TABLES.messages].add(rootMessage);
+		await db.messages.add(rootMessage);
 		return rootMessage.id;
 	}
 
@@ -159,11 +210,11 @@ export class DatabaseService {
 			children: []
 		};
 
-		await db[IDXDB_TABLES.messages].add(systemMessage);
+		await db.messages.add(systemMessage);
 
-		const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+		const parentMessage = await db.messages.get(parentId);
 		if (parentMessage) {
-			await db[IDXDB_TABLES.messages].update(parentId, {
+			await db.messages.update(parentId, {
 				children: [...parentMessage.children, systemMessage.id]
 			});
 		}
@@ -180,50 +231,46 @@ export class DatabaseService {
 		id: string,
 		options?: { deleteWithForks?: boolean }
 	): Promise<void> {
-		await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				if (options?.deleteWithForks) {
-					// Recursively collect all descendant IDs
-					const idsToDelete: string[] = [];
-					const queue = [id];
+		await db.transaction('rw', [db.conversations, db.messages], async () => {
+			if (options?.deleteWithForks) {
+				// Recursively collect all descendant IDs
+				const idsToDelete: string[] = [];
+				const queue = [id];
 
-					while (queue.length > 0) {
-						const parentId = queue.pop()!;
-						const children = await db[IDXDB_TABLES.conversations]
-							.filter((c) => c.forkedFromConversationId === parentId)
-							.toArray();
-
-						for (const child of children) {
-							idsToDelete.push(child.id);
-							queue.push(child.id);
-						}
-					}
-
-					for (const forkId of idsToDelete) {
-						await db[IDXDB_TABLES.conversations].delete(forkId);
-						await db[IDXDB_TABLES.messages].where('convId').equals(forkId).delete();
-					}
-				} else {
-					// Reparent direct children to deleted conv's parent
-					const conv = await db[IDXDB_TABLES.conversations].get(id);
-					const newParent = conv?.forkedFromConversationId;
-					const directChildren = await db[IDXDB_TABLES.conversations]
-						.filter((c) => c.forkedFromConversationId === id)
+				while (queue.length > 0) {
+					const parentId = queue.pop()!;
+					const children = await db.conversations
+						.filter((c) => c.forkedFromConversationId === parentId)
 						.toArray();
 
-					for (const child of directChildren) {
-						await db[IDXDB_TABLES.conversations].update(child.id, {
-							forkedFromConversationId: newParent ?? undefined
-						});
+					for (const child of children) {
+						idsToDelete.push(child.id);
+						queue.push(child.id);
 					}
 				}
 
-				await db[IDXDB_TABLES.conversations].delete(id);
-				await db[IDXDB_TABLES.messages].where('convId').equals(id).delete();
+				for (const forkId of idsToDelete) {
+					await db.conversations.delete(forkId);
+					await db.messages.where('convId').equals(forkId).delete();
+				}
+			} else {
+				// Reparent direct children to deleted conv's parent
+				const conv = await db.conversations.get(id);
+				const newParent = conv?.forkedFromConversationId;
+				const directChildren = await db.conversations
+					.filter((c) => c.forkedFromConversationId === id)
+					.toArray();
+
+				for (const child of directChildren) {
+					await db.conversations.update(child.id, {
+						forkedFromConversationId: newParent ?? undefined
+					});
+				}
 			}
-		);
+
+			await db.conversations.delete(id);
+			await db.messages.where('convId').equals(id).delete();
+		});
 	}
 
 	/**
@@ -232,21 +279,21 @@ export class DatabaseService {
 	 * @param messageId - ID of the message to delete
 	 */
 	static async deleteMessage(messageId: string): Promise<void> {
-		await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
+		await db.transaction('rw', db.messages, async () => {
+			const message = await db.messages.get(messageId);
 			if (!message) return;
 
 			// Remove this message from its parent's children array
 			if (message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+				const parent = await db.messages.get(message.parent);
 				if (parent) {
 					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
+					await db.messages.put(parent);
 				}
 			}
 
 			// Delete the message
-			await db[IDXDB_TABLES.messages].delete(messageId);
+			await db.messages.delete(messageId);
 		});
 	}
 
@@ -262,29 +309,26 @@ export class DatabaseService {
 		conversationId: string,
 		messageId: string
 	): Promise<string[]> {
-		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
+		return await db.transaction('rw', db.messages, async () => {
 			// Get all messages in the conversation to find descendants
-			const allMessages = await db[IDXDB_TABLES.messages]
-				.where('convId')
-				.equals(conversationId)
-				.toArray();
+			const allMessages = await db.messages.where('convId').equals(conversationId).toArray();
 
 			// Find all descendant messages
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
 
 			// Get the message to delete for parent cleanup
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
+			const message = await db.messages.get(messageId);
 			if (message && message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+				const parent = await db.messages.get(message.parent);
 				if (parent) {
 					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
+					await db.messages.put(parent);
 				}
 			}
 
 			// Delete all messages in the branch
-			await db[IDXDB_TABLES.messages].bulkDelete(allToDelete);
+			await db.messages.bulkDelete(allToDelete);
 
 			return allToDelete;
 		});
@@ -296,7 +340,7 @@ export class DatabaseService {
 	 * @returns Array of conversations
 	 */
 	static async getAllConversations(): Promise<DatabaseConversation[]> {
-		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
+		return await db.conversations.orderBy('lastModified').reverse().toArray();
 	}
 
 	/**
@@ -306,7 +350,7 @@ export class DatabaseService {
 	 * @returns The conversation if found, otherwise undefined
 	 */
 	static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
-		return await db[IDXDB_TABLES.conversations].get(id);
+		return await db.conversations.get(id);
 	}
 
 	/**
@@ -316,7 +360,7 @@ export class DatabaseService {
 	 * @returns Array of messages in the conversation
 	 */
 	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
-		return await db[IDXDB_TABLES.messages].where('convId').equals(convId).sortBy('timestamp');
+		return await db.messages.where('convId').equals(convId).sortBy('timestamp');
 	}
 
 	/**
@@ -330,7 +374,7 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseConversation, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, {
+		await db.conversations.update(id, {
 			...updates,
 			lastModified: Date.now()
 		});
@@ -368,7 +412,7 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.messages].update(id, updates);
+		await db.messages.update(id, updates);
 	}
 
 	/**
@@ -391,31 +435,27 @@ export class DatabaseService {
 		let importedCount = 0;
 		let skippedCount = 0;
 
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				for (const item of data) {
-					const { conv, messages } = item;
+		return await db.transaction('rw', [db.conversations, db.messages], async () => {
+			for (const item of data) {
+				const { conv, messages } = item;
 
-					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
-					if (existing) {
-						console.warn(`Conversation "${conv.name}" already exists, skipping...`);
-						skippedCount++;
-						continue;
-					}
-
-					await db[IDXDB_TABLES.conversations].add(conv);
-					for (const msg of messages) {
-						await db[IDXDB_TABLES.messages].put(msg);
-					}
-
-					importedCount++;
+				const existing = await db.conversations.get(conv.id);
+				if (existing) {
+					console.warn(`Conversation "${conv.name}" already exists, skipping...`);
+					skippedCount++;
+					continue;
 				}
 
-				return { imported: importedCount, skipped: skippedCount };
+				await db.conversations.add(conv);
+				for (const msg of messages) {
+					await db.messages.put(msg);
+				}
+
+				importedCount++;
 			}
-		);
+
+			return { imported: importedCount, skipped: skippedCount };
+		});
 	}
 
 	/**
@@ -440,76 +480,285 @@ export class DatabaseService {
 		atMessageId: string,
 		options: { name: string; includeAttachments: boolean }
 	): Promise<DatabaseConversation> {
-		return await db.transaction(
-			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
-			async () => {
-				const sourceConv = await db[IDXDB_TABLES.conversations].get(sourceConvId);
-				if (!sourceConv) {
-					throw new Error(`Source conversation ${sourceConvId} not found`);
-				}
-
-				const allMessages = await db[IDXDB_TABLES.messages]
-					.where('convId')
-					.equals(sourceConvId)
-					.toArray();
-
-				const pathMessages = filterByLeafNodeId(
-					allMessages,
-					atMessageId,
-					true
-				) as DatabaseMessage[];
-				if (pathMessages.length === 0) {
-					throw new Error(`Could not resolve message path to ${atMessageId}`);
-				}
-
-				const idMap = new Map<string, string>();
-
-				for (const msg of pathMessages) {
-					idMap.set(msg.id, uuid());
-				}
-
-				const newConvId = uuid();
-				const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
-					const newId = idMap.get(msg.id)!;
-					const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
-					const newChildren = msg.children
-						.filter((childId: string) => idMap.has(childId))
-						.map((childId: string) => idMap.get(childId)!);
-
-					return {
-						...msg,
-						id: newId,
-						convId: newConvId,
-						parent: newParent,
-						children: newChildren,
-						extra: options.includeAttachments ? msg.extra : undefined
-					};
-				});
-
-				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
-				const newConv: DatabaseConversation = {
-					id: newConvId,
-					name: options.name,
-					lastModified: Date.now(),
-					currNode: lastClonedMessage.id,
-					forkedFromConversationId: sourceConvId,
-					mcpServerOverrides: sourceConv.mcpServerOverrides
-						? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
-								serverId: o.serverId,
-								enabled: o.enabled
-							}))
-						: undefined
-				};
-
-				await db[IDXDB_TABLES.conversations].add(newConv);
-
-				for (const msg of clonedMessages) {
-					await db[IDXDB_TABLES.messages].add(msg);
-				}
-
-				return newConv;
+		return await db.transaction('rw', [db.conversations, db.messages], async () => {
+			const sourceConv = await db.conversations.get(sourceConvId);
+			if (!sourceConv) {
+				throw new Error(`Source conversation ${sourceConvId} not found`);
 			}
-		);
+
+			const allMessages = await db.messages.where('convId').equals(sourceConvId).toArray();
+
+			const pathMessages = filterByLeafNodeId(allMessages, atMessageId, true) as DatabaseMessage[];
+			if (pathMessages.length === 0) {
+				throw new Error(`Could not resolve message path to ${atMessageId}`);
+			}
+
+			const idMap = new Map<string, string>();
+
+			for (const msg of pathMessages) {
+				idMap.set(msg.id, uuid());
+			}
+
+			const newConvId = uuid();
+			const clonedMessages: DatabaseMessage[] = pathMessages.map((msg) => {
+				const newId = idMap.get(msg.id)!;
+				const newParent = msg.parent ? (idMap.get(msg.parent) ?? null) : null;
+				const newChildren = msg.children
+					.filter((childId: string) => idMap.has(childId))
+					.map((childId: string) => idMap.get(childId)!);
+
+				return {
+					...msg,
+					id: newId,
+					convId: newConvId,
+					parent: newParent,
+					children: newChildren,
+					extra: options.includeAttachments ? msg.extra : undefined
+				};
+			});
+
+			const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
+			const newConv: DatabaseConversation = {
+				id: newConvId,
+				name: options.name,
+				lastModified: Date.now(),
+				currNode: lastClonedMessage.id,
+				forkedFromConversationId: sourceConvId,
+				mcpServerOverrides: sourceConv.mcpServerOverrides
+					? sourceConv.mcpServerOverrides.map((o: McpServerOverride) => ({
+							serverId: o.serverId,
+							enabled: o.enabled
+						}))
+					: undefined
+			};
+
+			await db.conversations.add(newConv);
+
+			for (const msg of clonedMessages) {
+				await db.messages.add(msg);
+			}
+
+			return newConv;
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Docs
+	 *
+	 *
+	 */
+
+	static async listDocs(): Promise<DatabaseDoc[]> {
+		return await db.docs.orderBy('lastModified').reverse().toArray();
+	}
+
+	static async getDoc(id: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.get(id);
+	}
+
+	/**
+	 * Look up a doc by `name`, case-insensitively. Used by the ai-patch
+	 * live-chat bootstrap (commit 5) to resolve a filename line above a
+	 * SEARCH/REPLACE fence to a persisted doc. Returns `undefined` on miss;
+	 * callers treat that as an unambiguous `E_NO_TARGET` (never a fuzzy
+	 * filename guess).
+	 */
+	static async findDocByName(name: string): Promise<DatabaseDoc | undefined> {
+		return await db.docs.where('name').equalsIgnoreCase(name).first();
+	}
+
+	static async createDoc(name: string, content = ''): Promise<DatabaseDoc> {
+		const now = Date.now();
+		const doc: DatabaseDoc = {
+			id: uuid(),
+			name,
+			content,
+			createdAt: now,
+			lastModified: now
+		};
+		await db.docs.add(doc);
+		return doc;
+	}
+
+	static async updateDoc(
+		id: string,
+		updates: Partial<Omit<DatabaseDoc, 'id' | 'createdAt'>>
+	): Promise<void> {
+		await db.docs.update(id, { ...updates, lastModified: Date.now() });
+	}
+
+	static async deleteDoc(id: string): Promise<void> {
+		await db.docs.delete(id);
+	}
+
+	/**
+	 *
+	 *
+	 * Artifacts
+	 *
+	 *
+	 */
+
+	static async listArtifacts(): Promise<DatabaseArtifact[]> {
+		return await db.artifacts.orderBy('updatedAt').reverse().toArray();
+	}
+
+	static async getArtifact(id: string): Promise<DatabaseArtifact | undefined> {
+		return await db.artifacts.get(id);
+	}
+
+	static async listArtifactRevisions(artifactId: string): Promise<DatabaseArtifactRevision[]> {
+		return await db.artifactRevisions
+			.where('artifactId')
+			.equals(artifactId)
+			.sortBy('revisionNumber');
+	}
+
+	static async getArtifactRevision(
+		revisionId: string
+	): Promise<DatabaseArtifactRevision | undefined> {
+		return await db.artifactRevisions.get(revisionId);
+	}
+
+	/**
+	 * Finds the existing artifact for a given conversation + slot, if any.
+	 * Slot is the caller's choice: for chat it's typically
+	 * `${messageId}#${artifactIndex}` at capture time, but on regenerate the
+	 * hook supplies the stable pre-regenerate slot so we match the prior
+	 * chain and append a revision instead of creating a new artifact.
+	 */
+	static async findArtifactBySlot(
+		conversationId: string,
+		slot: string
+	): Promise<DatabaseArtifact | undefined> {
+		return await db.artifacts
+			.where('[sourceConversationId+sourceMessageSlot]')
+			.equals([conversationId, slot])
+			.first();
+	}
+
+	/**
+	 * Creates a brand-new artifact with its initial revision. All writes
+	 * happen in one Dexie transaction so a crash mid-save can't leave an
+	 * artifact without at least one revision.
+	 */
+	static async createArtifact(
+		meta: Omit<DatabaseArtifact, 'id' | 'currentRevisionId' | 'createdAt' | 'updatedAt'>,
+		revision: Omit<
+			DatabaseArtifactRevision,
+			'id' | 'artifactId' | 'revisionNumber' | 'createdAt' | 'reason' | 'parentRevisionId'
+		> & { reason?: DatabaseArtifactRevision['reason'] }
+	): Promise<{ artifact: DatabaseArtifact; revision: DatabaseArtifactRevision }> {
+		return await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			const now = Date.now();
+			const artifactId = uuid();
+			const revisionId = uuid();
+			const rev: DatabaseArtifactRevision = {
+				id: revisionId,
+				artifactId,
+				revisionNumber: 1,
+				createdAt: now,
+				reason: revision.reason ?? 'initial',
+				contentHash: revision.contentHash,
+				mimeType: revision.mimeType,
+				text: revision.text,
+				blob: revision.blob,
+				sourceMessageId: revision.sourceMessageId,
+				metadata: revision.metadata
+			};
+			const artifact: DatabaseArtifact = {
+				...meta,
+				id: artifactId,
+				currentRevisionId: revisionId,
+				createdAt: now,
+				updatedAt: now
+			};
+			await db.artifacts.add(artifact);
+			await db.artifactRevisions.add(rev);
+			return { artifact, revision: rev };
+		});
+	}
+
+	/**
+	 * Appends a new revision to an existing artifact and points
+	 * `currentRevisionId` at it. Callers dedupe on contentHash upstream so
+	 * no-op regenerations don't flood the timeline.
+	 */
+	static async appendArtifactRevision(
+		artifactId: string,
+		revision: Omit<
+			DatabaseArtifactRevision,
+			'id' | 'artifactId' | 'revisionNumber' | 'createdAt'
+		> & { reason: DatabaseArtifactRevision['reason'] }
+	): Promise<DatabaseArtifactRevision> {
+		return await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			const artifact = await db.artifacts.get(artifactId);
+			if (!artifact) throw new Error(`Artifact ${artifactId} not found`);
+			const last = (
+				await db.artifactRevisions.where('artifactId').equals(artifactId).sortBy('revisionNumber')
+			).at(-1);
+			const now = Date.now();
+			const rev: DatabaseArtifactRevision = {
+				id: uuid(),
+				artifactId,
+				revisionNumber: (last?.revisionNumber ?? 0) + 1,
+				createdAt: now,
+				parentRevisionId: revision.parentRevisionId ?? last?.id,
+				reason: revision.reason,
+				contentHash: revision.contentHash,
+				mimeType: revision.mimeType,
+				text: revision.text,
+				blob: revision.blob,
+				sourceMessageId: revision.sourceMessageId,
+				metadata: revision.metadata
+			};
+			await db.artifactRevisions.add(rev);
+			await db.artifacts.update(artifactId, {
+				currentRevisionId: rev.id,
+				updatedAt: now
+			});
+			return rev;
+		});
+	}
+
+	static async updateArtifact(
+		id: string,
+		updates: Partial<Omit<DatabaseArtifact, 'id' | 'createdAt'>>
+	): Promise<void> {
+		await db.artifacts.update(id, { ...updates, updatedAt: Date.now() });
+	}
+
+	static async deleteArtifact(id: string): Promise<void> {
+		await db.transaction('rw', [db.artifacts, db.artifactRevisions], async () => {
+			await db.artifactRevisions.where('artifactId').equals(id).delete();
+			await db.artifacts.delete(id);
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Secrets — opaque key/value strings kept out of localStorage.
+	 *
+	 * Use for credentials (app passwords, API tokens) that we want
+	 * separate from the ordinary settings blob. NOT encrypted —
+	 * IndexedDB is plaintext-on-disk, same as localStorage.
+	 *
+	 *
+	 */
+
+	static async getSecret(key: string): Promise<string | null> {
+		const row = await db.secrets.get(key);
+		return row?.value ?? null;
+	}
+
+	static async setSecret(key: string, value: string): Promise<void> {
+		await db.secrets.put({ key, value });
+	}
+
+	static async clearSecret(key: string): Promise<void> {
+		await db.secrets.delete(key);
 	}
 }

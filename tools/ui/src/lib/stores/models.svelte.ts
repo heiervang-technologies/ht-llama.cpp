@@ -63,6 +63,9 @@ class ModelsStore {
 
 	private modelUsage = $state<Map<string, SvelteSet<string>>>(new Map());
 	private modelLoadingStates = new SvelteMap<string, boolean>();
+	private loadAbortControllers = new Map<string, AbortController>();
+	private modelCancellingStates = new SvelteMap<string, boolean>();
+	private modelUnloadingStates = new SvelteMap<string, boolean>();
 
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 
@@ -170,6 +173,15 @@ class ModelsStore {
 	}
 
 	/**
+	 * Check if a model advertises native video input. Most backends don't
+	 * advertise this yet — callers should fall back to the frames+audio
+	 * decomposition path when it returns false.
+	 */
+	modelSupportsVideo(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.video ?? false;
+	}
+
+	/**
 	 * Get model modalities as an array of ModelModality enum values
 	 */
 	getModelModalitiesArray(modelId: string): ModelModality[] {
@@ -180,6 +192,7 @@ class ModelsStore {
 
 		if (modalities.vision) result.push(ModelModality.VISION);
 		if (modalities.audio) result.push(ModelModality.AUDIO);
+		if (modalities.video) result.push(ModelModality.VIDEO);
 
 		return result;
 	}
@@ -235,6 +248,14 @@ class ModelsStore {
 
 	isModelOperationInProgress(modelId: string): boolean {
 		return this.modelLoadingStates.get(modelId) ?? false;
+	}
+
+	isModelCancelling(modelId: string): boolean {
+		return this.modelCancellingStates.get(modelId) ?? false;
+	}
+
+	isModelUnloading(modelId: string): boolean {
+		return this.modelUnloadingStates.get(modelId) ?? false;
 	}
 
 	getModelStatus(modelId: string): ServerModelStatus | null {
@@ -316,7 +337,8 @@ class ModelsStore {
 			if (serverStore.isModelMode && this.models.length > 0 && serverProps?.modalities) {
 				const modalities: ModelModalities = {
 					vision: serverProps.modalities.vision ?? false,
-					audio: serverProps.modalities.audio ?? false
+					audio: serverProps.modalities.audio ?? false,
+					video: serverProps.modalities.video ?? false
 				};
 				this.modelPropsCache.set(this.models[0].model, serverProps);
 				this.models = this.models.map((model, index) =>
@@ -410,7 +432,8 @@ class ModelsStore {
 
 				const modalities: ModelModalities = {
 					vision: props.modalities.vision ?? false,
-					audio: props.modalities.audio ?? false
+					audio: props.modalities.audio ?? false,
+					video: props.modalities.video ?? false
 				};
 
 				return { ...model, modalities };
@@ -624,6 +647,8 @@ class ModelsStore {
 
 	/** Polling interval in ms for checking model status */
 	private static readonly STATUS_POLL_INTERVAL = 500;
+	/** Maximum number of cancel poll attempts before giving up */
+	private static readonly MAX_CANCEL_POLL_ATTEMPTS = 60;
 
 	/**
 	 * Poll for expected model status after load/unload operation.
@@ -635,10 +660,15 @@ class ModelsStore {
 	 */
 	private async pollForModelStatus(
 		modelId: string,
-		expectedStatus: ServerModelStatus
+		expectedStatus: ServerModelStatus,
+		signal?: AbortSignal
 	): Promise<void> {
 		let attempt = 0;
 		while (true) {
+			if (signal?.aborted) {
+				return;
+			}
+
 			await this.fetchRouterModels();
 
 			const currentStatus = this.getModelStatus(modelId);
@@ -652,11 +682,16 @@ class ModelsStore {
 				);
 			}
 
+			// Only give up on UNLOADED status after enough time for the subprocess
+			// to start and report its status (large models can take 30+ seconds)
 			if (
 				expectedStatus === ServerModelStatus.LOADED &&
 				currentStatus === ServerModelStatus.UNLOADED &&
-				attempt > 2
+				attempt > 60
 			) {
+				if (signal?.aborted) {
+					return;
+				}
 				throw new Error('Model was unloaded unexpectedly during loading');
 			}
 
@@ -676,21 +711,79 @@ class ModelsStore {
 
 		if (this.modelLoadingStates.get(modelId)) return;
 
+		const controller = new AbortController();
+		this.loadAbortControllers.set(modelId, controller);
 		this.modelLoadingStates.set(modelId, true);
 		this.error = null;
 
 		try {
 			await ModelsService.load(modelId);
-			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
+			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED, controller.signal);
+
+			if (controller.signal.aborted) {
+				return;
+			}
 
 			await this.updateModelModalities(modelId);
 			toast.success(`Model loaded: ${this.toDisplayName(modelId)}`);
 		} catch (error) {
-			this.error = error instanceof Error ? error.message : 'Failed to load model';
-			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`);
+			if (controller.signal.aborted) {
+				return;
+			}
+			const detail = error instanceof Error ? error.message : String(error);
+			this.error = detail || 'Failed to load model';
+			toast.error(`Failed to load model: ${this.toDisplayName(modelId)}`, {
+				description: detail || undefined,
+				duration: 10_000
+			});
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
+			this.loadAbortControllers.delete(modelId);
+		}
+	}
+
+	/**
+	 * Cancel an in-progress model load (ROUTER mode)
+	 * Aborts the polling loop and sends unload to stop the subprocess
+	 * @param modelId - Model identifier to cancel loading
+	 */
+	async cancelLoadModel(modelId: string): Promise<void> {
+		const controller = this.loadAbortControllers.get(modelId);
+		if (controller) {
+			controller.abort();
+		}
+
+		this.modelLoadingStates.set(modelId, false);
+		this.loadAbortControllers.delete(modelId);
+		this.modelCancellingStates.set(modelId, true);
+
+		try {
+			const status = this.getModelStatus(modelId);
+			if (status === ServerModelStatus.LOADING || status === ServerModelStatus.LOADED) {
+				await ModelsService.unload(modelId);
+			}
+
+			// Poll until the model is no longer in LOADING state
+			for (let attempt = 0; attempt < ModelsStore.MAX_CANCEL_POLL_ATTEMPTS; attempt++) {
+				await this.fetchRouterModels();
+				const currentStatus = this.getModelStatus(modelId);
+				if (currentStatus !== ServerModelStatus.LOADING) {
+					break;
+				}
+				if (attempt === ModelsStore.MAX_CANCEL_POLL_ATTEMPTS - 1) {
+					console.warn(`Cancel polling timed out for model: ${modelId}`);
+					toast.warning(`Cancel may not have completed for: ${this.toDisplayName(modelId)}`);
+					return;
+				}
+				await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
+			}
+
+			toast.info(`Model loading cancelled: ${this.toDisplayName(modelId)}`);
+		} catch (error) {
+			console.warn(`Failed to cancel model loading: ${modelId}`, error);
+		} finally {
+			this.modelCancellingStates.set(modelId, false);
 		}
 	}
 
@@ -706,6 +799,7 @@ class ModelsStore {
 		if (this.modelLoadingStates.get(modelId)) return;
 
 		this.modelLoadingStates.set(modelId, true);
+		this.modelUnloadingStates.set(modelId, true);
 		this.error = null;
 
 		try {
@@ -719,6 +813,7 @@ class ModelsStore {
 			throw error;
 		} finally {
 			this.modelLoadingStates.set(modelId, false);
+			this.modelUnloadingStates.set(modelId, false);
 		}
 	}
 
@@ -801,6 +896,10 @@ class ModelsStore {
 		this.selectedModelName = null;
 		this.modelUsage.clear();
 		this.modelLoadingStates.clear();
+		this.loadAbortControllers.forEach((c) => c.abort());
+		this.loadAbortControllers.clear();
+		this.modelCancellingStates.clear();
+		this.modelUnloadingStates.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
 	}

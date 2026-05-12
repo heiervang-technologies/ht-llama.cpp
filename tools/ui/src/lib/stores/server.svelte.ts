@@ -98,8 +98,11 @@ class ServerStore {
 	private getErrorMessage(error: unknown): string {
 		if (error instanceof Error) {
 			const message = error.message || '';
+			const messageLower = message.toLowerCase();
 
-			if (error.name === 'TypeError' && message.includes('fetch')) {
+			if (messageLower.includes('loading model')) {
+				return 'Model is loading, please wait...';
+			} else if (error.name === 'TypeError' && message.includes('fetch')) {
 				return 'Server is not running or unreachable';
 			} else if (message.includes('ECONNREFUSED')) {
 				return 'Connection refused - server may be offline';
@@ -107,7 +110,7 @@ class ServerStore {
 				return 'Server not found - check server address';
 			} else if (message.includes('ETIMEDOUT')) {
 				return 'Request timed out';
-			} else if (message.includes('503')) {
+			} else if (message.includes('503') || messageLower.includes('unavailable')) {
 				return 'Server temporarily unavailable';
 			} else if (message.includes('500')) {
 				return 'Server error - check server logs';

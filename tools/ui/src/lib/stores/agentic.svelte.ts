@@ -23,14 +23,17 @@
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
+import { getBuiltinToolDefinitions } from '$lib/services/builtin-tools';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { ToolSource, ToolPermissionDecision } from '$lib/enums';
-import { SvelteMap } from 'svelte/reactivity';
-import { ToolsService } from '$lib/services/tools.service';
+import { toolTimings } from '$lib/stores/tool-timings.svelte';
 import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
+import {
+	DEFAULT_AGENTIC_CONFIG,
+	NEWLINE_SEPARATOR,
+	TURN_LIMIT_MESSAGE,
+	LLM_ERROR_BLOCK_START,
+	LLM_ERROR_BLOCK_END
+} from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -57,8 +60,7 @@ import type {
 	AgenticMessage,
 	AgenticToolCallList,
 	AgenticFlowCallbacks,
-	AgenticFlowOptions,
-	SteeringMessage
+	AgenticFlowOptions
 } from '$lib/types/agentic';
 import type {
 	ApiChatCompletionToolCall,
@@ -99,7 +101,6 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 			return {
 				role: MessageRole.ASSISTANT,
 				content: message.content,
-				reasoning_content: message.reasoning_content,
 				tool_calls: message.tool_calls.map((call, index) => ({
 					id: call.id ?? `call_${index}`,
 					type: (call.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION,
@@ -108,13 +109,6 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 						arguments: call.function?.arguments ?? ''
 					}
 				}))
-			} satisfies AgenticMessage;
-		}
-		if (message.role === MessageRole.ASSISTANT) {
-			return {
-				role: MessageRole.ASSISTANT,
-				content: message.content,
-				reasoning_content: message.reasoning_content
 			} satisfies AgenticMessage;
 		}
 		if (message.role === MessageRole.TOOL && message.tool_call_id) {
@@ -132,22 +126,7 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 }
 
 class AgenticStore {
-	private _sessions = new SvelteMap<string, AgenticSession>();
-	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private _pendingPermissions = new SvelteMap<
-		string,
-		{ toolName: string; serverLabel: string } | null
-	>();
-	/** Non-reactive: stores resolve functions for pending permission Promises */
-	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
-
-	/** Dedicated reactive state for pending continue requests (turn limit reached) */
-	private _pendingContinueRequests = new SvelteMap<string, boolean>();
-	/** Non-reactive: stores resolve functions for pending continue Promises */
-	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
-
-	/** Reactive: queued steering messages to inject between turns */
-	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
+	private _sessions = $state<Map<string, AgenticSession>>(new Map());
 
 	get isReady(): boolean {
 		return true;
@@ -205,86 +184,21 @@ class AgenticStore {
 		return this.getSession(conversationId).streamingToolCall;
 	}
 
-	pendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
-		return this._pendingPermissions.get(conversationId) ?? null;
-	}
-
-	pendingContinueRequest(conversationId: string): boolean {
-		return this._pendingContinueRequests.get(conversationId) ?? false;
-	}
-
-	resolveContinue(conversationId: string, shouldContinue: boolean): void {
-		const resolver = this._continueResolvers.get(conversationId);
-		if (resolver) {
-			this._continueResolvers.delete(conversationId);
-			resolver(shouldContinue);
-		}
-	}
-
-	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
-		const resolver = this._permissionResolvers.get(conversationId);
-		if (resolver) {
-			this._permissionResolvers.delete(conversationId);
-			resolver(decision);
-		}
-	}
-
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
-	}
-
-	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this._steeringMessages.has(conversationId);
-	}
-
-	pendingSteeringMessageContent(conversationId: string): string | null {
-		return this._steeringMessages.get(conversationId)?.content ?? null;
-	}
-
-	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this._steeringMessages.get(conversationId)?.extras;
-	}
-
-	/**
-	 * Queue a steering message. When the current agentic turn completes,
-	 * the flow exits and the caller re-sends the message as a normal chat message.
-	 */
-	injectSteeringMessage(
-		conversationId: string,
-		content: string,
-		extras?: DatabaseMessageExtra[]
-	): void {
-		this._steeringMessages.set(conversationId, { content, extras });
-	}
-
-	/**
-	 * Clear the pending steering message without consuming it.
-	 */
-	clearSteeringMessage(conversationId: string): void {
-		this._steeringMessages.delete(conversationId);
-	}
-
-	/**
-	 * Consume and return the pending steering message for re-sending.
-	 * Called by chatStore after the agentic flow exits.
-	 */
-	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
-		const msg = this._steeringMessages.get(conversationId);
-		if (!msg) return null;
-		this._steeringMessages.delete(conversationId);
-		return msg;
 	}
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const maxToolPreviewLines =
 			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
+		// Built-in tools (list_artifacts, get_artifact, fork_artifact, etc.)
+		// count the same as MCP servers for the purpose of turning on the
+		// agentic loop — without this, a user with zero MCP servers but
+		// built-in tools available would fall through to the non-agentic
+		// path, which can't execute tool_calls. Either source enables it.
 		const hasTools =
-			mcpStore.hasEnabledServers(perChatOverrides) ||
-			toolsStore.builtinTools.length > 0 ||
-			toolsStore.customTools.length > 0;
+			mcpStore.hasEnabledServers(perChatOverrides) || getBuiltinToolDefinitions().length > 0;
 		return {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
 			maxTurns,
@@ -292,125 +206,25 @@ class AgenticStore {
 		};
 	}
 
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'object') return args;
-		const trimmed = args.trim();
-		if (trimmed === '') return {};
-		return JSON.parse(trimmed) as Record<string, unknown>;
-	}
-
-	private async requestPermission(
-		conversationId: string,
-		toolName: string,
-		serverLabel: string,
-		signal?: AbortSignal
-	): Promise<ToolPermissionDecision> {
-		const permissionKey = toolsStore.getPermissionKey(toolName);
-		if (permissionKey && permissionsStore.hasTool(permissionKey)) {
-			return ToolPermissionDecision.ONCE;
-		}
-
-		this._pendingPermissions.set(conversationId, { toolName, serverLabel });
-
-		return new Promise<ToolPermissionDecision>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingPermissions.set(conversationId, null);
-				resolve(ToolPermissionDecision.DENY);
-				return;
-			}
-
-			this._permissionResolvers.set(conversationId, (decision) => {
-				this._pendingPermissions.set(conversationId, null);
-				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
-					permissionsStore.allowTool(permissionKey);
-				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
-					const serverToolKeys = toolsStore.allTools
-						.filter((t) =>
-							t.serverName
-								? t.serverName === serverLabel
-								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
-						)
-						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
-						.filter((k): k is string => k !== null);
-					permissionsStore.allowTools(serverToolKeys);
-				}
-				resolve(decision);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._permissionResolvers.get(conversationId);
-					if (resolver) {
-						this._permissionResolvers.delete(conversationId);
-						this._pendingPermissions.set(conversationId, null);
-						resolve(ToolPermissionDecision.DENY);
-					}
-				},
-				{ once: true }
-			);
-		});
-	}
-
-	private async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
-		this._pendingContinueRequests.set(conversationId, true);
-
-		return new Promise<boolean>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(false);
-				return;
-			}
-
-			this._continueResolvers.set(conversationId, (shouldContinue) => {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(shouldContinue);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._continueResolvers.get(conversationId);
-					if (resolver) {
-						this._continueResolvers.delete(conversationId);
-						this._pendingContinueRequests.set(conversationId, false);
-						resolve(false);
-					}
-				},
-				{ once: true }
-			);
-		});
-	}
-
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { conversationId, messages, options = {}, callbacks, signal, perChatOverrides } = params;
-
-		// Clear any pending permissions/continue requests for this conversation when starting a new flow
-		this._pendingPermissions.set(conversationId, null);
-		this._permissionResolvers.delete(conversationId);
-		this._pendingContinueRequests.set(conversationId, false);
-		this._continueResolvers.delete(conversationId);
-		this._steeringMessages.delete(conversationId);
-
-		// Ensure built-in tools are fetched before checking if agentic is enabled
-		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-			await toolsStore.fetchBuiltinTools();
-		}
 
 		const agenticConfig = this.getConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) return { handled: false };
 
-		const hasMcpServers = mcpStore.hasEnabledServers(perChatOverrides);
-		if (hasMcpServers) {
-			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
-
-			if (!initialized) {
-				console.log('[AgenticStore] MCP not initialized');
-			}
+		// Built-ins are always available; MCP may be absent. We still try to
+		// initialize MCP so configured servers come online, but a false return
+		// (no MCP configured at all) isn't fatal when built-ins are registered.
+		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+		const hasBuiltins = getBuiltinToolDefinitions().length > 0;
+		if (!initialized && !hasBuiltins) {
+			console.log('[AgenticStore] No tool sources available, falling back to standard chat');
+			return { handled: false };
 		}
 
-		const tools = toolsStore.getEnabledToolsForLLM();
+		const tools = mcpStore.getToolDefinitionsForLLM();
 		if (tools.length === 0) {
+			console.log('[AgenticStore] No tools available, falling back to standard chat');
 			return { handled: false };
 		}
 
@@ -438,8 +252,7 @@ class AgenticStore {
 			totalToolCalls: 0,
 			lastError: null
 		});
-
-		if (hasMcpServers) mcpStore.acquireConnection();
+		mcpStore.acquireConnection();
 
 		try {
 			await this.executeAgenticLoop({
@@ -459,14 +272,11 @@ class AgenticStore {
 			return { handled: true, error: normalizedError };
 		} finally {
 			this.updateSession(conversationId, { isRunning: false });
-
-			if (hasMcpServers) {
-				await mcpStore
-					.releaseConnection()
-					.catch((err: unknown) =>
-						console.warn('[AgenticStore] Failed to release MCP connection:', err)
-					);
-			}
+			await mcpStore
+				.releaseConnection()
+				.catch((err: unknown) =>
+					console.warn('[AgenticStore] Failed to release MCP connection:', err)
+				);
 		}
 	}
 
@@ -510,24 +320,7 @@ class AgenticStore {
 
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 
-		let turn = 0;
-		while (true) {
-			if (turn >= maxTurns) {
-				// Turn limit reached - ask user whether to continue
-				const shouldContinue = await this.requestContinue(conversationId, signal);
-
-				// Yield to allow Svelte to flush the UI update
-				await new Promise((r) => setTimeout(r, 0));
-
-				if (!shouldContinue || signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-					return;
-				}
-
-				// User chose to continue - extend the limit
-				turn = 0;
-			}
-
+		for (let turn = 0; turn < maxTurns; turn++) {
 			this.updateSession(conversationId, { currentTurn: turn + 1 });
 			agenticTimings.turns = turn + 1;
 
@@ -649,20 +442,6 @@ class AgenticStore {
 				throw normalizedError;
 			}
 
-			// === Steering check: if a user message was queued during this turn, exit the flow.
-			// The caller (chatStore) will consume the pending message and re-send it normally.
-			if (this._steeringMessages.has(conversationId)) {
-				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
-				await onAssistantTurnComplete?.(
-					turnContent,
-					turnReasoningContent || undefined,
-					this.buildFinalTimings(capturedTimings, agenticTimings),
-					turnToolCalls.length > 0 ? this.normalizeToolCalls(turnToolCalls) : undefined
-				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
 			// No tool calls = final turn, save and complete
 			if (turnToolCalls.length === 0) {
 				agenticTimings.perTurn!.push(turnStats);
@@ -716,88 +495,31 @@ class AgenticStore {
 			});
 
 			// Execute each tool call and create result messages
-			for (let i = 0; i < normalizedCalls.length; i++) {
-				const toolCall = normalizedCalls[i];
-
-				if (signal?.aborted) {
-					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-					return;
-				}
-
-				// Check for pending steering message - skip remaining tool calls
-				if (this._steeringMessages.has(conversationId)) {
-					console.log(
-						`[AgenticStore] Steering message detected, skipping ${normalizedCalls.length - i} remaining tool call(s)`
-					);
-					for (let j = i; j < normalizedCalls.length; j++) {
-						const remainingCall = normalizedCalls[j];
-						const interruptedContent = 'Tool execution was interrupted by a new user message.';
-						if (createToolResultMessage) {
-							await createToolResultMessage(remainingCall.id, interruptedContent);
-						}
-						sessionMessages.push({
-							role: MessageRole.TOOL,
-							tool_call_id: remainingCall.id,
-							content: interruptedContent
-						});
-					}
-					break;
-				}
-
-				const toolName = toolCall.function.name;
-				const serverLabel = toolsStore.getToolServerLabel(toolName);
-
-				// Ask for permission before executing the tool
-				const permission = await this.requestPermission(
-					conversationId,
-					toolName,
-					serverLabel,
-					signal
-				);
-
-				// Yield to allow Svelte to flush the UI update (hide permission dialog)
-				await new Promise((r) => setTimeout(r, 0));
-
+			for (const toolCall of normalizedCalls) {
 				if (signal?.aborted) {
 					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 					return;
 				}
 
 				const toolStartTime = performance.now();
-				const toolSource = toolsStore.getToolSource(toolName);
+				const mcpCall: MCPToolCall = {
+					id: toolCall.id,
+					function: { name: toolCall.function.name, arguments: toolCall.function.arguments }
+				};
 
 				let result: string;
 				let toolSuccess = true;
 
-				if (permission === ToolPermissionDecision.DENY) {
-					result = 'Tool execution was denied by the user.';
-					toolSuccess = false;
-				} else {
-					try {
-						if (toolSource === ToolSource.BUILTIN) {
-							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(toolName, args, signal);
-
-							result = executionResult.content;
-
-							if (executionResult.isError) toolSuccess = false;
-						} else {
-							const mcpCall: MCPToolCall = {
-								id: toolCall.id,
-								function: { name: toolName, arguments: toolCall.function.arguments }
-							};
-							const executionResult = await mcpStore.executeTool(mcpCall, signal);
-
-							result = executionResult.content;
-						}
-					} catch (error) {
-						if (isAbortError(error)) {
-							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-							return;
-						}
-						result = `Error: ${error instanceof Error ? error.message : String(error)}`;
-						toolSuccess = false;
+				try {
+					const executionResult = await mcpStore.executeTool(mcpCall, signal);
+					result = executionResult.content;
+				} catch (error) {
+					if (isAbortError(error)) {
+						onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+						return;
 					}
+					result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+					toolSuccess = false;
 				}
 
 				const toolDurationMs = performance.now() - toolStartTime;
@@ -812,6 +534,12 @@ class AgenticStore {
 				agenticTimings.toolsMs += Math.round(toolDurationMs);
 				turnStats.toolCalls.push(toolTiming);
 				turnStats.toolsMs += Math.round(toolDurationMs);
+
+				// Feed the rolling-median estimator so the UI's pending
+				// progress bar adapts to actual per-tool latency. Only
+				// successful calls — a failed call's duration says nothing
+				// useful about a successful one.
+				toolTimings.record(toolCall.function.name, toolDurationMs, toolSuccess);
 
 				if (signal?.aborted) {
 					onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
@@ -868,18 +596,17 @@ class AgenticStore {
 				const intermediateTimings = this.buildFinalTimings(capturedTimings, agenticTimings);
 				if (intermediateTimings) onTurnComplete?.(intermediateTimings);
 			}
-
-			// If tools were interrupted by a steering message, exit now instead of starting another LLM turn
-			if (this._steeringMessages.has(conversationId)) {
-				console.log(
-					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
-				);
-				onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
-				return;
-			}
-
-			turn++;
 		}
+
+		// Turn limit reached
+		onChunk?.(TURN_LIMIT_MESSAGE);
+		await onAssistantTurnComplete?.(
+			TURN_LIMIT_MESSAGE,
+			undefined,
+			this.buildFinalTimings(capturedTimings, agenticTimings),
+			undefined
+		);
+		onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 	}
 
 	private buildFinalTimings(
@@ -978,46 +705,6 @@ export function agenticLastError(conversationId: string) {
 
 export function agenticStreamingToolCall(conversationId: string) {
 	return agenticStore.streamingToolCall(conversationId);
-}
-
-export function agenticPendingPermissionRequest(conversationId: string) {
-	return agenticStore.pendingPermissionRequest(conversationId);
-}
-
-export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
-	agenticStore.resolvePermission(conversationId, decision);
-}
-
-export function agenticPendingContinueRequest(conversationId: string) {
-	return agenticStore.pendingContinueRequest(conversationId);
-}
-
-export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
-	agenticStore.resolveContinue(conversationId, shouldContinue);
-}
-
-export function agenticHasPendingSteeringMessage(conversationId: string) {
-	return agenticStore.hasPendingSteeringMessage(conversationId);
-}
-
-export function agenticInjectSteeringMessage(
-	conversationId: string,
-	content: string,
-	extras?: DatabaseMessageExtra[]
-) {
-	agenticStore.injectSteeringMessage(conversationId, content, extras);
-}
-
-export function agenticPendingSteeringMessageContent(conversationId: string) {
-	return agenticStore.pendingSteeringMessageContent(conversationId);
-}
-
-export function agenticPendingSteeringMessageExtras(conversationId: string) {
-	return agenticStore.pendingSteeringMessageExtras(conversationId);
-}
-
-export function agenticClearSteeringMessage(conversationId: string) {
-	agenticStore.clearSteeringMessage(conversationId);
 }
 
 export function agenticIsAnyRunning() {

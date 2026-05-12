@@ -6,6 +6,7 @@
 	interface Props {
 		modelId: string;
 		hideOrgName?: boolean;
+		showOrgName?: boolean;
 		showRaw?: boolean;
 		hideQuantization?: boolean;
 		aliases?: string[];

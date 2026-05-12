@@ -30,6 +30,28 @@ export interface DatabaseMessageExtraImageFile {
 	base64Url: string;
 }
 
+export interface DatabaseMessageExtraVideoFile {
+	type: AttachmentType.VIDEO;
+	name: string;
+	/** `data:video/<format>;base64,…` so the chat history can render a
+	 *  native <video controls> element directly from the stored extra. */
+	base64Url: string;
+	mimeType: string;
+	/** Pre-rendered poster frame (first/middle frame) to show in attachment
+	 *  chips without having to remount the video element. */
+	posterDataUrl?: string;
+	durationSec?: number;
+	widthPx?: number;
+	heightPx?: number;
+	/** Precomputed frame sequence for models without native video input.
+	 *  Each entry is a data URL (JPEG). Populated at attachment time so
+	 *  we don't re-decode the video on every send. */
+	fallbackFrames?: string[];
+	/** Base64-encoded WAV audio extracted from the video track. Same
+	 *  rationale — cached at attachment time. */
+	fallbackAudioBase64?: string;
+}
+
 /**
  * Legacy format from the old UI — pasted content was stored as "context" type
  * @deprecated Use DatabaseMessageExtraTextFile instead
@@ -82,6 +104,7 @@ export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
 	| DatabaseMessageExtraAudioFile
+	| DatabaseMessageExtraVideoFile
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraMcpResource
@@ -109,6 +132,13 @@ export interface DatabaseMessage {
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;
 	model?: string;
+	/**
+	 * Free-form provenance bag — narrower shapes are defined in the
+	 * relevant subsystem (e.g. `MessageSource` in
+	 * `$lib/editor/ai-patch/types.ts`). The renderer switches on
+	 * `metadata?.source?.kind` to pick a specialised presentation.
+	 */
+	metadata?: Record<string, unknown>;
 }
 
 export type ExportedConversation = {
@@ -117,3 +147,61 @@ export type ExportedConversation = {
 };
 
 export type ExportedConversations = ExportedConversation | ExportedConversation[];
+
+export interface DatabaseDoc {
+	id: string;
+	name: string;
+	content: string;
+	createdAt: number;
+	lastModified: number;
+}
+
+export type DatabaseArtifactKind =
+	| 'html'
+	| 'svg'
+	| 'image'
+	| 'code'
+	| 'audio'
+	| 'video'
+	| 'pdf'
+	| 'markdown';
+
+export interface DatabaseArtifact {
+	id: string;
+	title: string;
+	kind: DatabaseArtifactKind;
+	currentRevisionId: string;
+	tags: string[];
+	createdAt: number;
+	updatedAt: number;
+	sourceConversationId?: string;
+	sourceMessageSlot?: string;
+	summary?: string;
+	/**
+	 * Cross-cutting state that lives at the artifact level rather than the
+	 * revision level — e.g. sync state with external services. Keyed by a
+	 * convention so multiple integrations can coexist:
+	 *   - `nextcloudSync` → see NextcloudSyncState in nextcloud-upload.service
+	 * No schema change needed — Dexie persists unknown top-level fields
+	 * verbatim. Older artifacts default to `undefined`.
+	 */
+	metadata?: Record<string, unknown>;
+}
+
+export interface DatabaseArtifactRevision {
+	id: string;
+	artifactId: string;
+	revisionNumber: number;
+	createdAt: number;
+	reason: 'initial' | 'regenerate' | 'edit' | 'fork' | 'rollback';
+	parentRevisionId?: string;
+	contentHash: string;
+	mimeType: string;
+	/** Present for text-like kinds (html/svg/code/markdown). */
+	text?: string;
+	/** Present for binary kinds (image/audio/video/pdf) — stored as a Blob so
+	 *  IndexedDB avoids the base64 inflation you'd get from a string field. */
+	blob?: Blob;
+	sourceMessageId?: string;
+	metadata?: Record<string, unknown>;
+}

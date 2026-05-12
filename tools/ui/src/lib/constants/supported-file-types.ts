@@ -8,14 +8,17 @@ import {
 	FileExtensionImage,
 	FileExtensionPdf,
 	FileExtensionText,
+	FileExtensionVideo,
 	FileTypeAudio,
 	FileTypeImage,
 	FileTypePdf,
 	FileTypeText,
+	FileTypeVideo,
 	MimeTypeAudio,
 	MimeTypeImage,
 	MimeTypeApplication,
-	MimeTypeText
+	MimeTypeText,
+	MimeTypeVideo
 } from '$lib/enums';
 
 // File type configuration using enums
@@ -27,6 +30,25 @@ export const AUDIO_FILE_TYPES = {
 	[FileTypeAudio.WAV]: {
 		extensions: [FileExtensionAudio.WAV],
 		mimeTypes: [MimeTypeAudio.WAV]
+	}
+} as const;
+
+export const VIDEO_FILE_TYPES = {
+	[FileTypeVideo.MP4]: {
+		extensions: [FileExtensionVideo.MP4, FileExtensionVideo.M4V],
+		mimeTypes: [MimeTypeVideo.MP4, MimeTypeVideo.M4V]
+	},
+	[FileTypeVideo.WEBM]: {
+		extensions: [FileExtensionVideo.WEBM],
+		mimeTypes: [MimeTypeVideo.WEBM]
+	},
+	[FileTypeVideo.MOV]: {
+		extensions: [FileExtensionVideo.MOV],
+		mimeTypes: [MimeTypeVideo.QUICKTIME]
+	},
+	[FileTypeVideo.MKV]: {
+		extensions: [FileExtensionVideo.MKV],
+		mimeTypes: [MimeTypeVideo.MATROSKA]
 	}
 } as const;
 

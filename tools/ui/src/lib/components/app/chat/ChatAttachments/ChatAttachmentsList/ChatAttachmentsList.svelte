@@ -1,6 +1,6 @@
 <script lang="ts">
 	import {
-		ChatAttachmentsListItem,
+		ChatAttachmentsList,
 		DialogChatAttachmentsPreview,
 		DialogMcpResourcePreview,
 		HorizontalScrollCarousel
@@ -75,7 +75,7 @@
 </script>
 
 {#snippet attachmentitem(item: ChatAttachmentDisplayItem)}
-	<ChatAttachmentsListItem
+	<ChatAttachmentsList
 		{imageClass}
 		{imageHeight}
 		{imageWidth}

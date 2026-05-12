@@ -175,7 +175,7 @@ export { default as DialogCodePreview } from './DialogCodePreview.svelte';
  * or a gallery with carousel navigation for multiple items.
  *
  * **Architecture:**
- * - Wraps ChatAttachmentsPreview component in ShadCN Dialog
+ * - Wraps ChatAttachmentPreview component in ShadCN Dialog
  * - Accepts uploadedFiles and attachments arrays as data sources
  * - Filters out MCP prompts and MCP resources from display
  *
@@ -474,3 +474,27 @@ export { default as DialogMcpResourcesBrowser } from './DialogMcpResourcesBrowse
  * ```
  */
 export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.svelte';
+
+/**
+ * **DialogAvailableTools** - Model tool-surface inspector
+ *
+ * Shows exactly what the model sees on the next chat turn: MCP tools that
+ * will be serialised into the `tools[]` request array (with expandable
+ * JSON schemas + one-click copy), built-in features active at the
+ * prompt/pipeline layer (reasoning parsing, python interpreter, continue
+ * generation, inline completions), and user-defined AI commands local to
+ * the doc editor. Everything derives off the live stores so the dialog
+ * mirrors the real pipeline state at open time.
+ *
+ * @example
+ * ```svelte
+ * <DialogAvailableTools bind:open={showToolsDialog} />
+ * ```
+ */
+export { default as DialogAvailableTools } from './DialogAvailableTools.svelte';
+
+/** DialogMcpResources — HT MCP resource picker (restored from ht). */
+export { default as DialogMcpResources } from './DialogMcpResources.svelte';
+
+/** DialogChatSettings — HT chat settings dialog (restored from ht). */
+export { default as DialogChatSettings } from './DialogChatSettings.svelte';

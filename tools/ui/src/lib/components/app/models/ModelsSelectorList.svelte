@@ -4,24 +4,28 @@
 	import type { GroupedModelOptions, ModelItem } from './utils';
 
 	interface Props {
-		groups: GroupedModelOptions;
-		currentModel: string | null;
-		activeId: string | null;
+		groups?: GroupedModelOptions;
+		currentModel?: string | null;
+		activeId?: string | null;
 		sectionHeaderClass?: string;
 		orgHeaderClass?: string;
-		onSelect: (modelId: string) => void;
-		onInfoClick: (modelName: string) => void;
+		onSelect?: (modelId: string) => void;
+		onInfoClick?: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
+		disabled?: boolean;
+		forceForegroundText?: boolean;
+		showOrgName?: boolean;
+		useGlobalSelection?: boolean;
 	}
 
 	let {
-		groups,
-		currentModel,
-		activeId,
+		groups = {} as GroupedModelOptions,
+		currentModel = null,
+		activeId = null,
 		sectionHeaderClass = 'my-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
 		orgHeaderClass = 'px-2 py-2 text-[11px] font-semibold text-muted-foreground/50 select-none [&:not(:first-child)]:mt-1',
-		onSelect,
-		onInfoClick,
+		onSelect = () => {},
+		onInfoClick = () => {},
 		renderOption
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);

@@ -110,3 +110,6 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
+
+/** ModelsSelector — main model selector entry point (restored from ht). */
+export { default as ModelsSelector } from './ModelsSelector.svelte';

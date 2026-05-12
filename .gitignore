@@ -157,6 +157,22 @@ flake.lock
 a.out.*
 
 # AGENTS
-
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Worktrees
+.worktrees
+
+# Agent / tooling state
+/.claude/
+/.codex
+/.playwright-mcp/
+/docs/superpowers/
+
+# Local scratch (debug scripts, cached diffs, screenshots)
+/fix_deadlocks.py
+/patch_fattn.py
+/rewrite_turboq.py
+/upstream-pr-*.diff
+/webui-lora*.png
+/theme-picker-*.png

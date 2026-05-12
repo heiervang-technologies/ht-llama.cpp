@@ -358,6 +358,57 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Deletes a set of conversations (and their cascading forks) in one batch.
+	 * Used by the sidebar's bulk-selection mode.
+	 */
+	async deleteMany(ids: string[]): Promise<void> {
+		if (ids.length === 0) return;
+		const toRemove = new SvelteSet(ids);
+		// Cascade into forks so we don't leave orphaned children dangling with a
+		// dead parent pointer. A single-conversation delete reparents, but bulk
+		// delete is almost always "nuke this whole subtree".
+		const queue = [...ids];
+		while (queue.length > 0) {
+			const parentId = queue.pop()!;
+			for (const c of this.conversations) {
+				if (c.forkedFromConversationId === parentId && !toRemove.has(c.id)) {
+					toRemove.add(c.id);
+					queue.push(c.id);
+				}
+			}
+		}
+
+		let failed = 0;
+		for (const id of toRemove) {
+			try {
+				await DatabaseService.deleteConversation(id);
+			} catch (error) {
+				failed += 1;
+				console.error('Failed to delete conversation', id, error);
+			}
+		}
+
+		this.conversations = this.conversations.filter((c) => !toRemove.has(c.id));
+
+		if (this.activeConversation && toRemove.has(this.activeConversation.id)) {
+			this.clearActiveConversation();
+			await goto(`?new_chat=true#/`);
+		}
+
+		const deleted = toRemove.size - failed;
+		if (deleted > 0) {
+			toast.success(deleted === 1 ? '1 conversation deleted' : `${deleted} conversations deleted`);
+		}
+		if (failed > 0) {
+			toast.error(
+				failed === 1
+					? 'Failed to delete 1 conversation'
+					: `Failed to delete ${failed} conversations`
+			);
+		}
+	}
+
+	/**
 	 * Deletes all conversations and their messages
 	 */
 	async deleteAll(): Promise<void> {

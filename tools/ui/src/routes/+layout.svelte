@@ -2,116 +2,137 @@
 	import '../app.css';
 	import { base } from '$app/paths';
 	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { untrack } from 'svelte';
-	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
+	import { onMount, untrack } from 'svelte';
 	import {
-		DesktopIconStrip,
+		ChatSidebar,
 		DialogConversationTitleUpdate,
-		SidebarNavigation
+		DialogChatSettings
 	} from '$lib/components/app';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { isLoading } from '$lib/stores/chat.svelte';
+	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
-	import { ROUTES } from '$lib/constants/routes';
-	import { RouterService } from '$lib/services/router.service';
 	import { Toaster } from 'svelte-sonner';
+	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import type { SettingsSectionTitle } from '$lib/constants';
+	import { KeyboardKey } from '$lib/enums';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
+	import { setChatSettingsDialogContext } from '$lib/contexts';
+	import { isTauri, restoreZoom, zoomIn, zoomOut, zoomReset } from '$lib/utils/tauri-window';
 
 	let { children } = $props();
 
+	// Tag the boot splash (defined inline in app.html) with `.hide` once
+	// the root layout is mounted and interactive. The CSS transition
+	// fades it out over 250 ms, then we remove it from the DOM so it
+	// can't intercept clicks. This closes the "green-black blank
+	// screen" window cold-boot used to spend on bundle parse.
+	onMount(() => {
+		// Reapply persisted webview zoom on cold boot — Tauri's webkit2gtk
+		// resets to 1.0× across launches, so we re-call setZoom with the
+		// last value the user picked. No-op in browser tabs.
+		restoreZoom();
+
+		if (typeof document === 'undefined') return;
+		const splash = document.getElementById('boot-splash');
+		if (!splash) return;
+		splash.classList.add('hide');
+		splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+		// Safety net in case `transitionend` never fires (e.g. user has
+		// `prefers-reduced-motion`; some browsers skip transitions in
+		// that case so the event is suppressed).
+		setTimeout(() => splash.remove(), 600);
+	});
+
+	let isChatRoute = $derived(page.route.id === '/(chat)/chat/[id]');
+	let isDocRoute = $derived(page.route.id === '/doc/[id]');
+	let isHomeRoute = $derived(page.route.id === '/');
+	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
+	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
+	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
-	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let chatSidebar:
 		| { activateSearchMode?: () => void; editActiveConversation?: () => void }
 		| undefined = $state();
 
+	// Conversation title update dialog state
 	let titleUpdateDialogOpen = $state(false);
 	let titleUpdateCurrentTitle = $state('');
 	let titleUpdateNewTitle = $state('');
 	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
-	const panelNav = useSettingsNavigation();
+	let chatSettingsDialogOpen = $state(false);
+	let chatSettingsDialogInitialSection = $state<SettingsSectionTitle | undefined>(undefined);
 
-	function navigateToConversation(direction: -1 | 1) {
-		const allConvs = conversations();
-		if (allConvs.length === 0) return;
-
-		const currentId = page.params.id;
-
-		if (!currentId) {
-			goto(RouterService.chat(allConvs[direction === 1 ? 0 : allConvs.length - 1].id));
-
-			return;
+	setChatSettingsDialogContext({
+		open: (initialSection?: SettingsSectionTitle) => {
+			chatSettingsDialogInitialSection = initialSection;
+			chatSettingsDialogOpen = true;
 		}
-
-		const idx = allConvs.findIndex((c) => c.id === currentId);
-		if (idx === -1) return;
-
-		const targetIdx = idx + direction;
-
-		if (targetIdx >= 0 && targetIdx < allConvs.length) {
-			goto(RouterService.chat(allConvs[targetIdx].id));
-		} else {
-			goto(ROUTES.NEW_CHAT);
-		}
-	}
-
-	// Global keyboard shortcuts
-	const { handleKeydown } = useKeyboardShortcuts({
-		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
-
-		navigateToPrevConversation: () => navigateToConversation(-1),
-
-		navigateToNextConversation: () => navigateToConversation(1)
 	});
 
-	function checkApiKey() {
-		const apiKey = config().apiKey;
+	// Global keyboard shortcuts
+	function handleKeydown(event: KeyboardEvent) {
+		const isCtrlOrCmd = event.ctrlKey || event.metaKey;
 
-		if (
-			(page.route.id === '/(chat)' || page.route.id === '/(chat)/chat/[id]') &&
-			page.status !== 401 &&
-			page.status !== 403
-		) {
-			const headers: Record<string, string> = {
-				'Content-Type': 'application/json'
-			};
-
-			if (apiKey && apiKey.trim() !== '') {
-				headers.Authorization = `Bearer ${apiKey.trim()}`;
+		if (isCtrlOrCmd && event.key === KeyboardKey.K_LOWER) {
+			event.preventDefault();
+			if (chatSidebar?.activateSearchMode) {
+				chatSidebar.activateSearchMode();
+				sidebarOpen = true;
 			}
+		}
 
-			fetch(`${base}/props`, { headers })
-				.then((response) => {
-					if (response.status === 401 || response.status === 403) {
-						window.location.reload();
-					}
-				})
-				.catch((e) => {
-					console.error('Error checking API key:', e);
-				});
+		if (isCtrlOrCmd && event.shiftKey && event.key === KeyboardKey.O_UPPER) {
+			event.preventDefault();
+			goto('?new_chat=true#/');
+		}
+
+		if (event.shiftKey && isCtrlOrCmd && event.key === KeyboardKey.E_UPPER) {
+			event.preventDefault();
+
+			if (chatSidebar?.editActiveConversation) {
+				chatSidebar.editActiveConversation();
+			}
+		}
+
+		// Webview zoom — webkit2gtk inside Tauri doesn't bind Ctrl+= /
+		// Ctrl+- / Ctrl+0 by default, so the desktop shell silently
+		// ignored them. Hook them up to the shared zoom helper, which
+		// persists in localStorage and reapplies after reload. In a
+		// browser the chrome handles its own zoom so we let the event
+		// bubble and only intervene in Tauri.
+		if (isCtrlOrCmd && (event.key === '+' || event.key === '=')) {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomIn();
+			}
+		} else if (isCtrlOrCmd && event.key === '-') {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomOut();
+			}
+		} else if (isCtrlOrCmd && event.key === '0') {
+			if (isTauri()) {
+				event.preventDefault();
+				zoomReset();
+			}
 		}
 	}
 
 	function handleTitleUpdateCancel() {
 		titleUpdateDialogOpen = false;
-
 		if (titleUpdateResolve) {
 			titleUpdateResolve(false);
 			titleUpdateResolve = null;
@@ -120,21 +141,33 @@
 
 	function handleTitleUpdateConfirm() {
 		titleUpdateDialogOpen = false;
-
 		if (titleUpdateResolve) {
 			titleUpdateResolve(true);
 			titleUpdateResolve = null;
 		}
 	}
 
-	onMount(() => {
-		mounted = true;
-	});
-
 	$effect(() => {
 		if (alwaysShowSidebarOnDesktop && isDesktop) {
 			sidebarOpen = true;
 			return;
+		}
+
+		if (isHomeRoute && !isNewChatMode) {
+			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
+			sidebarOpen = false;
+		} else if (isHomeRoute && isNewChatMode) {
+			// Keep sidebar open in new chat mode
+			sidebarOpen = true;
+		} else if (isChatRoute || isDocRoute) {
+			// On chat/doc routes, only auto-show sidebar if setting is enabled
+			if (autoShowSidebarOnNewChat) {
+				sidebarOpen = true;
+			}
+			// If setting is disabled, don't change sidebar state - let user control it manually
+		} else {
+			// Other routes follow default behavior
+			sidebarOpen = showSidebarByDefault;
 		}
 	});
 
@@ -196,7 +229,49 @@
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
-		checkApiKey();
+		const apiKey = config().apiKey;
+
+		if (
+			(page.route.id === '/' ||
+				page.route.id === '/(chat)' ||
+				page.route.id === '/(chat)/chat/[id]') &&
+			page.status !== 401 &&
+			page.status !== 403
+		) {
+			const headers: Record<string, string> = {
+				'Content-Type': 'application/json'
+			};
+
+			if (apiKey && apiKey.trim() !== '') {
+				headers.Authorization = `Bearer ${apiKey.trim()}`;
+			}
+
+			fetch(`${base}/props`, { headers })
+				.then((response) => {
+					if (response.status === 401 || response.status === 403) {
+						window.location.reload();
+					}
+				})
+				.catch((e) => {
+					console.error('Error checking API key:', e);
+				});
+		}
+	});
+
+	// Push theme hue / chroma / mode onto the document root so app.css picks them up.
+	$effect(() => {
+		if (!browser) return;
+		const primary = Number(config().themePrimaryHue);
+		const secondary = Number(config().themeSecondaryHue);
+		const chroma = Number(config().themeChromaScale);
+		const mode = String(config().themeMode ?? 'colorful');
+		const root = document.documentElement;
+		if (Number.isFinite(primary)) root.style.setProperty('--hue-primary', String(primary));
+		if (Number.isFinite(secondary)) root.style.setProperty('--hue-secondary', String(secondary));
+		if (Number.isFinite(chroma))
+			root.style.setProperty('--theme-chroma-scale', String(Math.max(0, Math.min(1, chroma))));
+		root.classList.toggle('theme-pure-black', mode === 'pure-black');
+		root.classList.toggle('theme-pure-white', mode === 'pure-white');
 	});
 
 	// Set up title update confirmation callback
@@ -219,6 +294,12 @@
 
 	<Toaster richColors />
 
+	<DialogChatSettings
+		open={chatSettingsDialogOpen}
+		onOpenChange={(open: boolean) => (chatSettingsDialogOpen = open)}
+		initialSection={chatSettingsDialogInitialSection}
+	/>
+
 	<DialogConversationTitleUpdate
 		bind:open={titleUpdateDialogOpen}
 		currentTitle={titleUpdateCurrentTitle}
@@ -229,33 +310,16 @@
 
 	<Sidebar.Provider bind:open={sidebarOpen}>
 		<div class="flex h-screen w-full" style:height="{innerHeight}px">
-			<Sidebar.Root variant="floating" class="h-full">
-				<SidebarNavigation bind:this={chatSidebar} />
+			<Sidebar.Root class="h-full">
+				<ChatSidebar bind:this={chatSidebar} />
 			</Sidebar.Root>
 
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
-				{#if mounted}
-					<div in:fade={{ duration: 200 }}>
-						<Sidebar.Trigger
-							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-								: 'left-0!'}"
-							style="translate: 1rem 1rem;"
-						/>
-					</div>
-				{/if}
-			{/if}
-
-			{#if isDesktop && !alwaysShowSidebarOnDesktop}
-				<DesktopIconStrip
-					{sidebarOpen}
-					onSearchClick={() => {
-						if (chatSidebar?.activateSearchMode) {
-							chatSidebar.activateSearchMode();
-						}
-
-						sidebarOpen = true;
-					}}
+			{#if !(alwaysShowSidebarOnDesktop && isDesktop)}
+				<Sidebar.Trigger
+					class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
+						? 'md:left-[var(--sidebar-width)]'
+						: 'md:left-0!'}"
+					style="translate: 1rem 1rem;"
 				/>
 			{/if}
 

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Check, X } from '@lucide/svelte';
-	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
+	import { ChatMessageActions, MarkdownContent } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
 	import { INPUT_CLASSES } from '$lib/constants';
@@ -212,7 +212,7 @@
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
+				<ChatMessageActions
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"
