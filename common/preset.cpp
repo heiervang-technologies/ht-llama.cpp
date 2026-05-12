@@ -448,7 +448,14 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
 
 // helper: read GGUF metadata to determine if file is a LoRA adapter
 // returns true if it is an adapter, and fills out architecture string
-static bool gguf_is_lora_adapter(const std::string & path, std::string & architecture) {
+// Reads adapter metadata from a GGUF file. On success, populates `architecture`,
+// `name_meta` (general.name) and `version_meta` (general.version). The name/version
+// pair is what we use to dedupe adapters that point at the same logical checkpoint
+// but were exported at different quantizations.
+static bool gguf_is_lora_adapter(const std::string & path,
+                                 std::string & architecture,
+                                 std::string & name_meta,
+                                 std::string & version_meta) {
     struct gguf_init_params params = {
         /*.no_alloc = */ true,
         /*.ctx      = */ nullptr,
@@ -471,6 +478,20 @@ static bool gguf_is_lora_adapter(const std::string & path, std::string & archite
                 const char * arch_val = gguf_get_val_str(ctx, arch_key);
                 if (arch_val) {
                     architecture = arch_val;
+                }
+            }
+            int64_t name_key = gguf_find_key(ctx, "general.name");
+            if (name_key >= 0) {
+                const char * v = gguf_get_val_str(ctx, name_key);
+                if (v) {
+                    name_meta = v;
+                }
+            }
+            int64_t ver_key = gguf_find_key(ctx, "general.version");
+            if (ver_key >= 0) {
+                const char * v = gguf_get_val_str(ctx, ver_key);
+                if (v) {
+                    version_meta = v;
                 }
             }
         }
@@ -509,14 +530,16 @@ common_models_dir_result common_preset_context::load_from_models_dir_with_lora(c
 
         // check each non-shard, non-mmproj gguf file for adapter type
         for (const auto & file : other_gguf_files) {
-            std::string arch;
-            if (gguf_is_lora_adapter(file.path, arch)) {
+            std::string arch, name_meta, version_meta;
+            if (gguf_is_lora_adapter(file.path, arch, name_meta, version_meta)) {
                 std::string adapter_name = file.name;
                 string_replace_all(adapter_name, ".gguf", "");
                 adapters.push_back({
                     /* name         */ adapter_name,
                     /* path         */ file.path,
                     /* architecture */ arch,
+                    /* name_meta    */ name_meta,
+                    /* version_meta */ version_meta,
                 });
                 LOG_INF("%s: discovered LoRA adapter '%s' (arch: %s) in %s\n",
                     __func__, adapter_name.c_str(), arch.c_str(), subdir_path.c_str());
@@ -545,12 +568,14 @@ common_models_dir_result common_preset_context::load_from_models_dir_with_lora(c
             string_replace_all(file_name, ".gguf", "");
 
             // check if this is a LoRA adapter
-            std::string arch;
-            if (gguf_is_lora_adapter(file.path, arch)) {
+            std::string arch, name_meta, version_meta;
+            if (gguf_is_lora_adapter(file.path, arch, name_meta, version_meta)) {
                 adapters.push_back({
                     /* name         */ file_name,
                     /* path         */ file.path,
                     /* architecture */ arch,
+                    /* name_meta    */ name_meta,
+                    /* version_meta */ version_meta,
                 });
                 LOG_INF("%s: discovered LoRA adapter '%s' (arch: %s)\n",
                     __func__, file_name.c_str(), arch.c_str());
@@ -563,6 +588,57 @@ common_models_dir_result common_preset_context::load_from_models_dir_with_lora(c
                 models.push_back(model);
             }
         }
+    }
+
+    // Dedupe adapters that share (general.name, general.version) — same logical
+    // checkpoint exported at multiple quantizations. Prior behaviour attached all
+    // matching adapters at spawn, which doubles VRAM for no benefit when the user
+    // just wants one variant of the same adapter. Prefer the smallest file
+    // (typically the more aggressively quantized export). Adapters lacking
+    // metadata are kept as-is so older / hand-built GGUFs still surface.
+    {
+        std::map<std::pair<std::string, std::string>, size_t> keep_idx;
+        std::vector<bool> keep(adapters.size(), true);
+        for (size_t i = 0; i < adapters.size(); ++i) {
+            const auto & a = adapters[i];
+            if (a.name_meta.empty()) {
+                continue;
+            }
+            auto key = std::make_pair(a.name_meta, a.version_meta);
+            auto it = keep_idx.find(key);
+            if (it == keep_idx.end()) {
+                keep_idx[key] = i;
+                continue;
+            }
+            size_t prev = it->second;
+            std::error_code ec_a, ec_p;
+            auto sz_a = std::filesystem::file_size(a.path, ec_a);
+            auto sz_p = std::filesystem::file_size(adapters[prev].path, ec_p);
+            // If either size lookup failed, fall back to first-seen.
+            bool replace = !ec_a && !ec_p && sz_a < sz_p;
+            if (replace) {
+                LOG_WRN("%s: deduping LoRA adapter — keeping '%s' over '%s' "
+                        "(same general.name='%s' general.version='%s'; smaller file)\n",
+                    __func__, a.name.c_str(), adapters[prev].name.c_str(),
+                    a.name_meta.c_str(), a.version_meta.c_str());
+                keep[prev] = false;
+                keep_idx[key] = i;
+            } else {
+                LOG_WRN("%s: deduping LoRA adapter — skipping '%s' in favour of '%s' "
+                        "(same general.name='%s' general.version='%s')\n",
+                    __func__, a.name.c_str(), adapters[prev].name.c_str(),
+                    a.name_meta.c_str(), a.version_meta.c_str());
+                keep[i] = false;
+            }
+        }
+        std::vector<common_lora_adapter_info> deduped;
+        deduped.reserve(adapters.size());
+        for (size_t i = 0; i < adapters.size(); ++i) {
+            if (keep[i]) {
+                deduped.push_back(std::move(adapters[i]));
+            }
+        }
+        adapters = std::move(deduped);
     }
 
     // convert local models to presets

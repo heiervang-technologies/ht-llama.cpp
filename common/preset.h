@@ -19,6 +19,8 @@ struct common_lora_adapter_info {
     std::string name;         // derived from filename (without .gguf extension)
     std::string path;         // full path to the adapter file
     std::string architecture; // general.architecture from GGUF metadata
+    std::string name_meta;    // general.name from GGUF metadata (dedupe key)
+    std::string version_meta; // general.version from GGUF metadata (dedupe key)
 };
 
 struct common_preset_context;
