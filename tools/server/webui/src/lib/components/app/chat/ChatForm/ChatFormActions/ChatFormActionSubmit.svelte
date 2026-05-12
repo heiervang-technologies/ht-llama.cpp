@@ -6,6 +6,7 @@
 	interface Props {
 		canSend?: boolean;
 		disabled?: boolean;
+		isLoading?: boolean;
 		showErrorState?: boolean;
 		tooltipLabel?: string;
 	}

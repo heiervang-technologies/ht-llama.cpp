@@ -22,6 +22,12 @@ export interface ApiChatMessageContentPart {
 		data: string;
 		format: 'wav' | 'mp3';
 	};
+	/** OpenAI-style native video input. Only emitted when the target model
+	 *  advertises video modality; otherwise the message is decomposed into
+	 *  image_url + input_audio parts at send time. */
+	video_url?: {
+		url: string;
+	};
 }
 
 export interface ApiContextSizeError {
@@ -190,6 +196,9 @@ export interface ApiLlamaCppServerProps {
 	modalities: {
 		vision: boolean;
 		audio: boolean;
+		/** Some backends also advertise native video input support. Optional
+		 * for backwards compatibility with servers that don't report it. */
+		video?: boolean;
 	};
 	chat_template: string;
 	bos_token: string;
@@ -439,6 +448,16 @@ export interface ApiRouterModelsStatusResponse {
 export interface ApiRouterModelsListResponse {
 	object: string;
 	data: ApiModelDataEntry[];
+	lora_adapters?: ApiDiscoveredLoraAdapter[];
+}
+
+/**
+ * A LoRA adapter discovered in the models directory
+ */
+export interface ApiDiscoveredLoraAdapter {
+	name: string;
+	path: string;
+	architecture: string;
 }
 
 /**

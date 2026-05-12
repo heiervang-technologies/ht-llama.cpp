@@ -39,7 +39,10 @@ export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } fr
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedUrl, getProxiedUrlString, buildProxiedHeaders } from './cors-proxy';
+
+// Favicon
+export { getFaviconUrl } from './favicon';
 
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl } from './url';

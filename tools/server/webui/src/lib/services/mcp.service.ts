@@ -44,8 +44,6 @@ import type {
 import {
 	buildProxiedUrl,
 	buildProxiedHeaders,
-	getAuthHeaders,
-	sanitizeHeaders,
 	throwIfAborted,
 	isAbortError,
 	createBase64DataUrl,
@@ -57,6 +55,10 @@ import {
 	extractJsonRpcMethods,
 	type RequestBodySummary
 } from '$lib/utils';
+// Import directly from the leaf module to avoid a Rollup circular-
+// chunk warning — `api-headers` is re-exported via `$lib/utils`
+// which we also import above, creating a cycle at chunking time.
+import { getAuthHeaders, sanitizeHeaders } from '$lib/utils/api-headers';
 
 interface ToolResultContentItem {
 	type: string;

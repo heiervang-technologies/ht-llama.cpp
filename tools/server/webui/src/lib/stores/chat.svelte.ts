@@ -24,6 +24,7 @@ import {
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
+import { loraStore } from '$lib/stores/lora.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -36,8 +37,7 @@ import {
 import {
 	MAX_INACTIVE_CONVERSATION_STATES,
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	SYSTEM_MESSAGE_PLACEHOLDER,
-	TITLE_GENERATION
+	SYSTEM_MESSAGE_PLACEHOLDER
 } from '$lib/constants';
 import type {
 	ChatMessageTimings,
@@ -45,16 +45,35 @@ import type {
 	ChatStreamCallbacks,
 	ErrorDialogState
 } from '$lib/types/chat';
-import type {
-	ApiChatMessageData,
-	ApiProcessingState,
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types';
+import type { ApiProcessingState, DatabaseMessage, DatabaseMessageExtra } from '$lib/types';
 import { ErrorDialogType, MessageRole, MessageType } from '$lib/enums';
+import {
+	consumeCompletedPatchSession,
+	handleCompletedPatchSession
+} from '$lib/editor/ai-patch/chat-integration';
+import {
+	createChatPatchBootstrap,
+	type ChatPatchBootstrap
+} from '$lib/editor/ai-patch/chat-bootstrap';
+import type { InlineSeed } from '$lib/editor/ai-patch/target-resolution';
+import { toast } from 'svelte-sonner';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
+}
+
+/**
+ * Read `/artifacts/<id>` from the current route, if present. Used by the
+ * ai-patch bootstrap to decide whether the user has an artifact
+ * foregrounded at turn-start — a naked SEARCH/REPLACE fence then targets
+ * that artifact instead of falling through to the autocapture-slot
+ * fallback. SSR-safe: returns `null` when `window` is unavailable.
+ */
+function readCurrentArtifactIdFromRoute(): string | null {
+	if (typeof window === 'undefined') return null;
+	const path = window.location?.pathname ?? '';
+	const match = /\/artifacts\/([^/?#]+)/.exec(path);
+	return match ? decodeURIComponent(match[1]) : null;
 }
 
 class ChatStore {
@@ -78,12 +97,6 @@ class ChatStore {
 		| null = null;
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
-
-	/** Reactive: queued pending messages for non-agentic streaming */
-	private _pendingMessages = new SvelteMap<
-		string,
-		{ content: string; extras?: DatabaseMessageExtra[] }
-	>();
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
@@ -188,19 +201,6 @@ class ChatStore {
 		}
 	}
 
-	/**
-	 * Abort the current agentic flow signal without clearing loading state.
-	 * Used by "Send immediately" to force the agentic loop to exit so that
-	 * the pending steering message can be re-sent.
-	 */
-	abortCurrentFlow(convId: string): void {
-		const c = this.abortControllers.get(convId);
-		if (c) {
-			c.abort();
-			this.abortControllers.delete(convId);
-		}
-	}
-
 	private showErrorDialog(state: ErrorDialogState | null): void {
 		this.errorDialogState = state;
 	}
@@ -265,36 +265,7 @@ class ChatStore {
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
-		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
-	}
-
-	hasPendingMessage(convId: string): boolean {
-		return this._pendingMessages.has(convId);
-	}
-
-	pendingMessageContent(convId: string): string | null {
-		return this._pendingMessages.get(convId)?.content ?? null;
-	}
-
-	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
-		return this._pendingMessages.get(convId)?.extras;
-	}
-
-	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
-		this._pendingMessages.set(convId, { content, extras });
-	}
-
-	clearPendingMessage(convId: string): void {
-		this._pendingMessages.delete(convId);
-	}
-
-	consumePendingMessage(
-		convId: string
-	): { content: string; extras?: DatabaseMessageExtra[] } | null {
-		const msg = this._pendingMessages.get(convId);
-		if (!msg) return null;
-		this._pendingMessages.delete(convId);
-		return msg;
+		return this.chatStreamingStates.has(convId);
 	}
 
 	private touchConversationState(convId: string): void {
@@ -516,18 +487,7 @@ class ChatStore {
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 		const activeConv = conversationsStore.activeConversation;
-
-		// If agentic loop is running, inject as a steering message instead of starting a new flow
-		if (activeConv && agenticStore.isRunning(activeConv.id)) {
-			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
-			return;
-		}
-
-		// If non-agentic streaming is active, queue as a pending message to send after completion
-		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
-			this.injectPendingMessage(activeConv.id, content, extras);
-			return;
-		}
+		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
 
 		// Cancel any in-flight pre-encode request
 		this.cancelPreEncode();
@@ -578,12 +538,14 @@ class ChatStore {
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage,
-				undefined,
-				undefined,
-				undefined,
-				config().titleGenerationUseLLM && isNewConversation ? content : undefined
+				assistantMessage
 			);
+			// ai-patch repair loop: if the assistant turn owned a PatchSession
+			// and it ended with a repairable failure (F2/F3/F6/F7/F11/F14),
+			// inject a synthetic user turn quoting the error and re-run the
+			// stream. See `$lib/editor/ai-patch/chat-integration.ts` for the
+			// one-step-of-the-loop contract and the reflection-budget cap.
+			await this.maybeRunPatchRepairLoop(currentConv.id, assistantMessage.id);
 		} catch (error) {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
@@ -611,8 +573,7 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null,
-		firstUserMessageContent?: string
+		modelOverride?: string | null
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -633,6 +594,43 @@ class ChatStore {
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		const convId = assistantMessage.convId;
+
+		// ai-patch live-chat bootstrap (commit 5). Lazily opens a
+		// PatchSession the first time the assistant stream emits a
+		// `<<<<<<< SEARCH` marker. Until then it's inert — no DB writes,
+		// no registry entries, no toasts. On stream end (success or
+		// error) we call `bootstrap.end()` so the CommitResult lands in
+		// the completed-session registry; `maybeRunPatchRepairLoop` then
+		// consumes it.
+		const parentMessageId = assistantMessage.parent ?? '';
+		const patchBootstrap: ChatPatchBootstrap = createChatPatchBootstrap({
+			messageId: assistantMessage.id,
+			modelId: effectiveModel ?? selectedModelName() ?? '',
+			conversationId: convId,
+			parentMessageId,
+			getCurrentArtifactId: readCurrentArtifactIdFromRoute,
+			getInlineSeed: (): InlineSeed | null => {
+				// Default seed — html/text/plain. The autocapture path
+				// doesn't sniff the REPLACE payload yet; commit 6
+				// territory. For now we accept the v1 limitation: the
+				// inline seed only materialises a fresh artifact when
+				// a naked-fence block has no current artifact open and
+				// the dispatcher's inline→artifact upgrade fires on
+				// first commit. If the content turns out not to be
+				// html-shaped the artifact will still render via the
+				// gallery's "code" kind — this is best-effort.
+				if (!streamedContent) return null;
+				return {
+					kind: 'code',
+					title: 'ai-patch draft',
+					mimeType: 'text/plain',
+					baseText: streamedContent
+				};
+			},
+			onNoTarget: (reason) => {
+				toast.error('AI-patch could not find a target buffer', { description: reason });
+			}
+		});
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -671,6 +669,11 @@ class ChatStore {
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();
+				// ai-patch tap — the bootstrap is inert until the first
+				// `<<<<<<< SEARCH` marker is sniffed. The raw text
+				// continues to render in the chat message unchanged;
+				// this tap only drives the patch-session side-effect.
+				patchBootstrap.feed(chunk);
 			},
 			onReasoningChunk: (chunk: string) => {
 				streamedReasoningContent += chunk;
@@ -818,16 +821,10 @@ class ChatStore {
 				this.setStreamingActive(false);
 				if (isAbortError(error)) {
 					cleanupStreamingState();
-					// If aborted with a pending message (e.g. "Send immediately"), re-send it
-					const pending = this.consumePendingMessage(convId);
-					if (pending) {
-						this.sendMessage(pending.content, pending.extras);
-					}
 					return;
 				}
 				console.error('Streaming error:', error);
 				cleanupStreamingState();
-				this.clearPendingMessage(convId);
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				if (idx !== -1) {
 					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
@@ -847,86 +844,146 @@ class ChatStore {
 
 		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
 
-		{
-			const agenticResult = await agenticStore.runAgenticFlow({
-				conversationId: convId,
-				messages: allMessages,
-				options: { ...this.getApiOptions(), ...(effectiveModel ? { model: effectiveModel } : {}) },
-				callbacks: streamCallbacks,
-				signal: abortController.signal,
-				perChatOverrides
-			});
-			if (agenticResult.handled) {
-				// Generate LLM based title for new conversations after agentic flow completes
-				if (firstUserMessageContent) {
-					await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
+		// Ensure `patchBootstrap.end()` fires exactly once per turn, after
+		// both the agentic and non-agentic paths have drained their
+		// stream callbacks. This is what lands the CommitResult in the
+		// chat-integration registry so `maybeRunPatchRepairLoop` can
+		// consume it.
+		let bootstrapClosed = false;
+		const closeBootstrap = async () => {
+			if (bootstrapClosed) return;
+			bootstrapClosed = true;
+			try {
+				await patchBootstrap.end();
+			} catch (err) {
+				console.warn('[ai-patch] bootstrap.end failed', err);
+			}
+		};
+
+		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
+		if (agenticConfig.enabled) {
+			try {
+				const agenticResult = await agenticStore.runAgenticFlow({
+					conversationId: convId,
+					messages: allMessages,
+					options: {
+						...this.getApiOptions(),
+						...(effectiveModel ? { model: effectiveModel } : {})
+					},
+					callbacks: streamCallbacks,
+					signal: abortController.signal,
+					perChatOverrides
+				});
+				if (agenticResult.handled) {
+					await closeBootstrap();
+					return;
 				}
-				// Check if there's a pending steering message to re-send
-				const pending = agenticStore.consumePendingSteeringMessage(convId);
-				if (pending) {
-					await this.sendMessage(pending.content, pending.extras);
-				}
-				return;
+			} catch (err) {
+				patchBootstrap.abort();
+				throw err;
 			}
 		}
 
-		await ChatService.sendMessage(
-			allMessages,
-			{
-				...this.getApiOptions(),
-				...(effectiveModel ? { model: effectiveModel } : {}),
-				stream: true,
-				onChunk: streamCallbacks.onChunk,
-				onReasoningChunk: streamCallbacks.onReasoningChunk,
-				onModel: streamCallbacks.onModel,
-				onTimings: streamCallbacks.onTimings,
-				onComplete: async (
-					finalContent?: string,
-					reasoningContent?: string,
-					timings?: ChatMessageTimings,
-					toolCalls?: string
-				) => {
-					const content = streamedContent || finalContent || '';
-					const reasoning = streamedReasoningContent || reasoningContent;
-					const updateData: Record<string, unknown> = {
-						content,
-						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || '',
-						timings
-					};
-					if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
-					await DatabaseService.updateMessage(currentMessageId, updateData);
-					const idx = conversationsStore.findMessageIndex(currentMessageId);
-					const uiUpdate: Partial<DatabaseMessage> = {
-						content,
-						reasoningContent: reasoning || undefined,
-						toolCalls: toolCalls || ''
-					};
-					if (timings) uiUpdate.timings = timings;
-					if (resolvedModel) uiUpdate.model = resolvedModel;
-					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-					await conversationsStore.updateCurrentNode(currentMessageId);
-					cleanupStreamingState();
-					if (onComplete) await onComplete(content);
-					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
-
-					// Generate LLM based title for new conversations (avoids stale reference
-					// issue when user switches conversations while streaming)
-					if (firstUserMessageContent) {
-						await this.generateTitleWithLLM(firstUserMessageContent, streamedContent, convId);
-					}
-
-					// Check if there's a pending message queued during streaming
-					const pending = this.consumePendingMessage(convId);
-					if (pending) {
-						await this.sendMessage(pending.content, pending.extras);
-					}
+		// Non-agentic path: direct streaming into the single assistant message
+		try {
+			await ChatService.sendMessage(
+				allMessages,
+				{
+					...this.getApiOptions(),
+					...(effectiveModel ? { model: effectiveModel } : {}),
+					stream: true,
+					onChunk: streamCallbacks.onChunk,
+					onReasoningChunk: streamCallbacks.onReasoningChunk,
+					onModel: streamCallbacks.onModel,
+					onTimings: streamCallbacks.onTimings,
+					onComplete: async (
+						finalContent?: string,
+						reasoningContent?: string,
+						timings?: ChatMessageTimings,
+						toolCalls?: string
+					) => {
+						const content = streamedContent || finalContent || '';
+						const reasoning = streamedReasoningContent || reasoningContent;
+						const updateData: Record<string, unknown> = {
+							content,
+							reasoningContent: reasoning || undefined,
+							toolCalls: toolCalls || '',
+							timings
+						};
+						if (resolvedModel && !modelPersisted) updateData.model = resolvedModel;
+						await DatabaseService.updateMessage(currentMessageId, updateData);
+						const idx = conversationsStore.findMessageIndex(currentMessageId);
+						const uiUpdate: Partial<DatabaseMessage> = {
+							content,
+							reasoningContent: reasoning || undefined,
+							toolCalls: toolCalls || ''
+						};
+						if (timings) uiUpdate.timings = timings;
+						if (resolvedModel) uiUpdate.model = resolvedModel;
+						conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+						await conversationsStore.updateCurrentNode(currentMessageId);
+						cleanupStreamingState();
+						if (onComplete) await onComplete(content);
+						if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					},
+					onError: streamCallbacks.onError
 				},
-				onError: streamCallbacks.onError
-			},
-			convId,
-			abortController.signal
-		);
+				convId,
+				abortController.signal
+			);
+		} catch (err) {
+			patchBootstrap.abort();
+			throw err;
+		} finally {
+			await closeBootstrap();
+		}
+	}
+
+	/**
+	 * Close the ai-patch repair loop for a just-completed assistant turn.
+	 *
+	 * The bootstrap that opens a `PatchSession` for a chat turn (commit 5
+	 * — not yet wired; commit 4d exposes the glue but doesn't create
+	 * sessions on the hot path) is expected to call
+	 * `recordCompletedPatchSession(messageId, result)` at `session.end()`
+	 * time. This method consumes that result (if any) and, for repairable
+	 * failures under the reflection budget, injects a synthetic
+	 * `patch-repair` user turn and re-runs the stream against it.
+	 *
+	 * Turns without a patch session are a no-op — the consume call
+	 * returns `null` and we fall through. This keeps the ai-patch
+	 * coupling one-way: chatStore imports the integration module, not the
+	 * other way round.
+	 */
+	private async maybeRunPatchRepairLoop(convId: string, assistantMessageId: string): Promise<void> {
+		const result = consumeCompletedPatchSession(assistantMessageId);
+		if (!result) return;
+
+		await handleCompletedPatchSession({
+			conversationId: convId,
+			parentSessionId: assistantMessageId,
+			result,
+			runAssistantTurn: async () => {
+				// Retrigger the stream against the just-injected repair turn.
+				// `injectRepairTurn` has already parented the synthetic user
+				// turn to the conversation's leaf and mirrored it into
+				// `activeMessages`, so we create a fresh assistant message
+				// under it and run streamChatCompletion — mirroring the final
+				// two steps of `sendMessage` without re-entering the guard.
+				if (conversationsStore.activeConversation?.id !== convId) return;
+				if (this.isChatLoadingInternal(convId)) return;
+				const leaf = conversationsStore.activeMessages.at(-1);
+				if (!leaf) return;
+				this.setChatLoading(convId, true);
+				const retryAssistant = await this.createAssistantMessage(leaf.id);
+				conversationsStore.addMessageToActive(retryAssistant);
+				await this.streamChatCompletion(
+					conversationsStore.activeMessages.slice(0, -1),
+					retryAssistant
+				);
+				await this.maybeRunPatchRepairLoop(convId, retryAssistant.id);
+			}
+		});
 	}
 
 	async stopGeneration(): Promise<void> {
@@ -941,51 +998,7 @@ class ChatStore {
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
 		this.setProcessingState(convId, null);
-		this.clearPendingMessage(convId);
 	}
-
-	private async generateTitleWithLLM(
-		userContent: string,
-		assistantContent: string,
-		convId: string
-	): Promise<void> {
-		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
-		const configValue = config();
-		const titlePromptTemplate =
-			typeof configValue.titleGenerationPrompt === 'string' &&
-			configValue.titleGenerationPrompt.trim()
-				? configValue.titleGenerationPrompt
-				: TITLE_GENERATION.DEFAULT_PROMPT;
-
-		const titlePrompt = titlePromptTemplate
-			.replace('{{USER}}', String(userContent || ''))
-			.replace('{{ASSISTANT}}', String(assistantContent || ''));
-
-		const titleMessage: ApiChatMessageData = {
-			role: MessageRole.USER,
-			content: titlePrompt
-		};
-
-		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
-
-		if (!titleResponse) {
-			return;
-		}
-
-		let cleanTitle = titleResponse.trim();
-		cleanTitle = cleanTitle
-			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
-			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
-			.trim();
-		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
-			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
-			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
-		}
-		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
-			await conversationsStore.updateConversationName(convId, cleanTitle);
-		}
-	}
-
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
 		const conversationId = convId || conversationsStore.activeConversation?.id;
 		if (!conversationId) return;
@@ -1796,6 +1809,9 @@ class ChatStore {
 
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
+		const loraPayload = loraStore.getRequestPayload();
+		if (loraPayload) apiOptions.lora = loraPayload;
+
 		return apiOptions;
 	}
 
@@ -1850,13 +1866,3 @@ export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
-export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
-export const chatPendingMessageContent = (convId: string) =>
-	chatStore.pendingMessageContent(convId);
-export const chatPendingMessageExtras = (convId: string) => chatStore.pendingMessageExtras(convId);
-export const chatClearPendingMessage = (convId: string) => chatStore.clearPendingMessage(convId);
-export const chatInjectPendingMessage = (
-	convId: string,
-	content: string,
-	extras?: DatabaseMessageExtra[]
-) => chatStore.injectPendingMessage(convId, content, extras);

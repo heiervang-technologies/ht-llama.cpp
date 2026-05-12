@@ -2,13 +2,19 @@
 	import { Dialog } from 'bits-ui';
 	import { X } from '@lucide/svelte';
 	import * as DialogUI from '$lib/components/ui/dialog';
-	import { ChatAttachmentsPreview } from '$lib/components/app';
+	import { ChatAttachmentPreview } from '$lib/components/app';
 	import { KeyboardKey } from '$lib/enums';
 
 	interface Props {
 		open: boolean;
 		uploadedFiles?: ChatUploadedFile[];
+		uploadedFile?: ChatUploadedFile;
 		attachments?: DatabaseMessageExtra[];
+		attachment?: DatabaseMessageExtra;
+		preview?: string;
+		name?: string;
+		size?: number;
+		textContent?: string;
 		activeModelId?: string;
 		previewFocusIndex?: number;
 	}
@@ -76,7 +82,7 @@
 				<X class="size-4" />
 			</Dialog.Close>
 
-			<ChatAttachmentsPreview
+			<ChatAttachmentPreview
 				{uploadedFiles}
 				{attachments}
 				{activeModelId}

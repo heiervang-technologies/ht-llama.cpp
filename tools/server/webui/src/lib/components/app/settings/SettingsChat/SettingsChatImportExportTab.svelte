@@ -126,7 +126,7 @@
 			showExportDialog = true;
 		} catch (err) {
 			console.error('Failed to load conversations:', err);
-			alert('Failed to load conversations');
+			toast.error('Failed to load conversations');
 		}
 	}
 
@@ -147,7 +147,7 @@
 			showExportDialog = false;
 		} catch (err) {
 			console.error('Export failed:', err);
-			alert('Failed to export conversations');
+			toast.error('Failed to export conversations');
 		}
 	}
 
@@ -193,14 +193,14 @@
 					const message = err instanceof Error ? err.message : 'Unknown error';
 
 					console.error('Failed to parse file:', err);
-					alert(`Failed to parse file: ${message}`);
+					toast.error(`Failed to parse file: ${message}`);
 				}
 			};
 
 			input.click();
 		} catch (err) {
 			console.error('Import failed:', err);
-			alert('Failed to import conversations');
+			toast.error('Failed to import conversations');
 		}
 	}
 
@@ -219,7 +219,7 @@
 			showImportDialog = false;
 		} catch (err) {
 			console.error('Import failed:', err);
-			alert('Failed to import conversations. Please check the file format.');
+			toast.error('Failed to import conversations. Please check the file format.');
 		}
 	}
 

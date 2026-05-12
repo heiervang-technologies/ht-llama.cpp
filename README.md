@@ -1,6 +1,140 @@
-# llama.cpp
+![ht-llama.cpp](media/ht-llama-banner.png)
 
-![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
+# ht-llama.cpp
+
+_Heiervang Technologies fork of [llama.cpp](https://github.com/ggml-org/llama.cpp)_
+
+[HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) | [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3) | [Upstream: llama.cpp](https://github.com/ggml-org/llama.cpp)
+
+---
+
+## HT Fork Changes
+
+This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [llama.cpp](https://github.com/ggml-org/llama.cpp). The `ht` branch contains the following changes on top of upstream `master`.
+
+**We do not plan to contribute any of these changes back to upstream `llama.cpp`**, unless the upstream maintainers explicitly ask for a specific change. This fork exists for HT product work — syncs go one way (upstream → `master` → `ht`). The "Tracked upstream" column below is strictly informational: it points to any pre-existing upstream issue or PR discussing the topic, for the reader's reference, not because we intend to land anything there.
+
+Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Backend & quantization
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | No |
+| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | [#22003](https://github.com/ggml-org/llama.cpp/pull/22003) |
+| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | No |
+| Developer-role remap | `--remap-developer-role` flag merges `developer` messages into the system prompt for templates that reject duplicates | No |
+| LCO-Embedding-Omni GGUF | Conversion script support for the LCO-Embedding-Omni multi-modal embedding family, including audio tensors routed to the base class in the Qwen2.5 Omni mmproj path. | No |
+| MLA LoRA conversion | `convert_lora_to_gguf.py` understands MLA (`kv_b_proj`) so adapters trained on MLA-style attention convert without manual surgery. | No |
+| Scheduler split-input cap | `GGML_SCHED_MAX_SPLIT_INPUTS` raised 30 → 256 (CMake cache var) so wide multi-modal graphs no longer trip the scheduler's per-split input limit. | No |
+
+### WebUI — voice (TTS / STT)
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| OpenAI-compatible TTS | Play/stop per assistant message plus an autoplay toggle that fires once after each generation (does *not* replay), wired to any `POST /v1/audio/speech` endpoint. Tested against the vLLM Qwen3-TTS multiplexer. | No |
+| Voice picker | Dropdown in the chat header populated from `GET /v1/audio/voices` so the active voice is one click away (no settings dive). Defaults to `zap`; falls back to the picked voice on every TTS call. | No |
+| OpenAI-compatible STT | Record from the mic and transcribe via any `POST /v1/audio/transcriptions` endpoint — dictate directly into the chat composer or at the doc-editor cursor, with optional auto-send for a hands-free voice flow and tap-mic-again to cancel in-flight transcription. Tested against vLLM Qwen3-ASR. | No |
+| Always-visible mic | Mic button sits alongside send at all times with concrete toast errors for `NotAllowedError` / `NotFoundError` / `NotReadableError`; records even when neither STT nor audio modality is configured (falls back to attaching the `.wav`). | No |
+
+### WebUI — image generation
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Image-generation tab | First-class **Image** workspace mode alongside Chat / Doc — prompt + negative prompt, source-image upload for edits, ASCII-locked aspect-ratio picker, simple/advanced toggle, results land directly in the gallery. Talks to any OpenAI-compatible `/v1/images/generations` and `/v1/images/edits` endpoint. Run state survives navigation, parameters persist across reloads via `localStorage`. | No |
+| Task-type axis | The Image workspace's task picker covers t2i, i2i, i2v (image-to-video), s2v (sound-to-video), and FLF (first/last-frame video). Inputs (image, audio, last-frame) are normalised + magic-byte-validated client-side before submission, so the model can pass an `https://` URL or a base64 data URL interchangeably. | No |
+| Image-tool composer toggle | `/image` slash command and a sparkle pill in the chat composer enable the model's `generate_image` / `edit_image` / `generate_video` tools; tool-call results render inline in the message and are auto-saved as gallery artifacts. Video jobs poll asynchronously and persist their final mp4 as an artifact when done. | No |
+| Themed loading states | Spinners and progress bars match the active theme color so generation feels native to the app rather than a third-party iframe. | No |
+
+### WebUI — documents
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Doc mode | Second workspace mode alongside chats: standalone markdown docs with CodeMirror 6 editor, split edit/preview, live word count, auto-title from first H1, duplicate / download / delete, `Ctrl+S` flush-save, and "Chat about this" to lift the document into a seeded conversation. | No |
+| AI commands in docs | `Ctrl+Shift+K` (or `⌘⇧K` on macOS) command palette streams prompt output into the editor live with a preview, names the running command next to a Stop button, and `Esc` cancels — covers summarize, rewrite, translate, expand, and user-defined prompts. | No |
+| Inline ghost-text completions | AI autocomplete in the doc editor: `Tab` to accept, `Esc` to dismiss, `Ctrl+Tab` to force a suggestion; per-doc on/off toggle in the header. Routes through `/infill` (FIM) for completion-capable models. | No |
+| AI patch tool | Streaming SEARCH/REPLACE editor for artifacts and docs (see [`tools/server/webui/src/lib/editor/ai-patch/README.md`](tools/server/webui/src/lib/editor/ai-patch/README.md)). The model emits patch hunks live during generation; the editor parses, applies, and renders diff previews with per-hunk approve/reject. Works inline in chat and inside the doc editor. | No |
+
+### WebUI — sandbox terminals
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Sandbox terminals tab | Workspace tile that spawns gVisor-hardened containers on the `unleash-sandbox` Docker network — internet yes, LAN no. Live xterm.js panels with theme-matched palettes (default + a few CRT-flavoured variants for fun), `sudo` available inside the container. | No |
+| One-click setup gate | If the four invariants (Docker daemon, `runsc` runtime, `unleash-sandbox` network with `icc=off`, iptables LAN-drop, `unleash:latest` image) aren't all green, the page surfaces a "Sandbox setup incomplete" panel with the exact one-shot command (`sudo unleash sandbox setup`) and a Refresh button instead of silently failing. | No |
+| Inline terminal drawer | When the model calls `run_in_terminal`, the live terminal drops below the chat composer as a drawer so you can either type into the terminal or keep chatting; auto-picks the lone terminal so the model never has to call `list_terminals` first. | No |
+| Pop-out terminal | Picture-in-picture button on the drawer spawns a native Tauri window pointed at `#/terminals/<id>`; stable per-terminal labels so re-clicking focuses the existing window. Falls back to `window.open` in plain browser mode. | No |
+| Per-terminal mode | Each terminal carries a Solo / Shared / Review mode. Solo: only the user types. Shared: model and user share the PTY. Review: model proposes commands into a queue you approve before they execute. Mode is per-tile, swap from the tile menu. | No |
+| Review proposal queue | In Review mode, model-proposed commands stack as approvable cards (preview, approve, reject); a sidebar badge surfaces the pending count. Approving sends the command into the shared PTY exactly as the model wrote it. | No |
+| Bootstrap recipes | New terminals can be created with a `bootstrap` shell snippet plus a list of files to drop in before it runs (text or `base64:` for binary). Output is captured to a per-terminal bootstrap log accessible at `/v1/terminals/:id/bootstrap-log`. | No |
+| Bearer-token auth | `ht-termd` accepts a `--token` flag and the webui presents it as `Authorization: Bearer …` (HTTP) or `?token=…` (WebSocket upgrade). The Tauri shell auto-injects the daemon-issued token so loopback dev still has zero config; tailnet deployments stay safe behind the bearer check. | No |
+| Reconnect resilience | xterm pane keeps the WebSocket alive with a 25 s app-level ping and auto-reconnects on transient closes (exponential backoff capped at 5 s, max 20 attempts ≈ 83 s). Refocusing the tab/window resets the counter; a manual `Click to retry` banner surfaces after the cap. | No |
+| Terminal tools | `run_in_terminal`, `send_keys`, `list_terminals` exposed as MCP-style tools the model can call; `send_keys` mode lookup tolerant to display name and container id, so models don't have to memorize panel ids. | No |
+
+### WebUI — artifacts gallery
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Multi-modal artifact gallery | First-class **Artifacts** workspace mode storing image / audio / video / pdf / html / svg / markdown / code with thumbnails, kind filters, search, drag-and-drop upload, `Upload` button, and bulk-select / bulk-delete. Backed by IndexedDB so artifacts survive reloads. | No |
+| Artifact detail page | Per-artifact view with rev list, in-place rename, `Ctrl+S` save-as-new-revision text editing, copy / download per revision, pin-default and rollback-to-revision, and an "Open source chat" jump back to the conversation that produced it. | No |
+| Pop-out artifact | Picture-in-picture button in the detail header spawns a native Tauri window at `#/artifacts/<id>` (1100×800) for the canvas-y kinds (HTML / SVG / image / video). Stable per-artifact label so re-pop focuses the existing window. | No |
+| Artifacts drawer in chat | Side panel that extracts HTML / SVG snippets from assistant messages and renders them in a sandboxed preview with source toggle; toolbar button surfaces a live artifact count with an informative tooltip. | No |
+| Markdown image pipeline | Inline `![](data:image/...)` images in user messages are lifted into vision-encoder attachments while still rendering inline in the bubble (dedup prevents duplicate chips); generated images from the `generate_image` tool are auto-saved as gallery artifacts. | No |
+| Built-in artifact tools | `list_artifacts`, `get_artifact`, `fork_artifact` exposed as MCP-style tools the model can call to discover and operate on the user's gallery without having to manually paste URLs back and forth. | No |
+| Web search via SearXNG | Built-in `web_search` tool that hits a configurable SearXNG metasearch instance (`GET /search?q=…&format=json`) and returns title / URL / snippet / engine per hit. Gated on a Settings → Search opt-in (default off, mirrors image-gen surface); URL configurable per-deployment. Browser path needs CORS allow on the SearXNG host; Tauri / Android route through `tauri-plugin-http` and bypass CORS. | No |
+
+### WebUI — cloud-synced artifacts (Nextcloud)
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Nextcloud connection | Settings → Connections panel takes a Nextcloud server URL, username, and **app password** (link straight to the Nextcloud security page so users skip the admin-password trap). WebDAV client is pure-fetch; password is stored encrypted at rest in IndexedDB, not in `localStorage`. | No |
+| Browse drawer | Drill-down browser over `/AI/` (configurable) on the connected Nextcloud — `PROPFIND Depth: 1` per folder, `Add to gallery` per file, breadcrumb navigation, and a manual refresh. | No |
+| Auto-upload + sync badges | Every new artifact (manual or model-generated) is auto-uploaded to Nextcloud when a connection is configured. Each card surfaces its sync state inline: `syncing`, `synced` (links to remote file), `failed` (click to retry), or `cloud` if the artifact came *from* Nextcloud. Badges suppressed when no connection is configured. | No |
+| Mirror-deletes (opt-in) | Toggle in Settings to also delete the remote file when an artifact is removed locally; off by default so a stray bulk-delete can't nuke the remote folder. | No |
+| ETag round-trip | Uploads use `MKCOL` for the date-partitioned folder tree (`/AI/YYYY-MM-DD/sess-<id>/`), capture the returned `ETag`, and surface it as the artifact's `syncRemoteEtag` so subsequent syncs can detect drift. | No |
+
+### WebUI — chat & general
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Rebranded WebUI | `ht-llama.cpp` branding with turquoise/purple theme, configurable hue picker (live HSL preview, randomize button), and banner. | No |
+| Backend pill | Header shows the active server hostname in a themed pill — useful when the same Tauri/desktop shell points at different backends. | No |
+| Model picker | Compact dropdown in the chat composer for the active model with one-click switching. | No |
+| Model loading UX | Cancel button for in-progress model loads; clearer error states in router mode (toast instead of full-screen modal). | No |
+| LoRA adapter UI | Auto-discovery of LoRA adapters served by `llama-server` with enable/disable panel and router-mode awareness. | No |
+| Sidebar bulk delete | Multi-select conversations in the sidebar (click checkbox or shift-click range) and delete in one go; confirmation via themed `AlertDialog`. | No |
+| Themed dialogs everywhere | All destructive paths (gallery delete, conversation delete, settings import/export errors, terminal destroy) use the shadcn `AlertDialog` / `toast` instead of native `window.confirm` / `window.alert`. | No |
+| Prior-turn transparency | Toggle in the chat header to surface system messages, tool-call payloads, and tool results as inline cards before the user message that produced them — the full prompt context the model will see, readable at a glance. | No |
+| Composable chain picker | Composer-side picker that lets you assemble a chain of model calls (e.g. translate → summarise → critique) and run them as one streamed turn, with per-step results visible in the agentic-turn breakdown. | No |
+| Configurable backend URL | Frontend works as a standalone static bundle pointing at any remote `llama-server`. | No |
+
+### Desktop shell
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Tauri desktop shell | Native desktop wrapper around the WebUI in `tools/server/webui-tauri/` with `.desktop` launchers, HT icon set across Linux/Windows/iOS/Android, and Linux `webkit2gtk` `getUserMedia` auto-approval so mic capture works inside the bundled app. WebKit2GTK Wayland defenses (`WEBKIT_GST_USE_PLAYBIN3=0`, `WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`) are baked into both the Rust entry-point and the `.desktop` launcher so direct invocation and shortcut launch share the same hardening. | No |
+| Multi-window pop-out | The Tauri shell brokers `WebviewWindow` creation for terminal and artifact pop-outs, scoped via the `term-*` / `art-*` capability globs so each spawned window inherits the default permission set. | No |
+| Webview zoom keys | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` are intercepted in Tauri and routed to `getCurrentWebview().setZoom()` (webkit2gtk doesn't bind them by default); zoom level persists in `localStorage` and restores on next launch. No-op in plain browsers, where the browser's own zoom keys keep working. | No |
+| Tauri-routed HTTP | URL fetches from the webui (built-in tool image/audio inputs, `ht-termd` HTTP) route through `tauri-plugin-http` (reqwest) instead of the webview's `fetch`, sidestepping background-tab throttling on Hyprland. | No |
+| Android APK | The webui is also built as an Android APK that ships with a tailnet-preconfigured backend URL; same SvelteKit source, same Tauri runtime. See [`tools/server/webui-tauri/ANDROID.md`](tools/server/webui-tauri/ANDROID.md). | No |
+
+### Build / CI
+
+| Change | Description | Tracked upstream |
+|--------|-------------|------------------|
+| Release CI on `ht` | GitHub Actions release workflow runs on the `ht` branch, not just on tags. | No |
+
+### Branch Strategy
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Clean fast-forward mirror of upstream `master` — never commit directly |
+| `ht` | HT-specific changes on top of `master` — **default branch** |
+
+Feature branches are created from `ht` and squash-merged back via PR.
+
+For questions or inquiries, use the [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) page. For details on fork workflow and sync procedures, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+---
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)

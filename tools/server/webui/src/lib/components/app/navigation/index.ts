@@ -102,7 +102,7 @@ export { default as DesktopIconStrip } from './DesktopIconStrip.svelte';
  * - Active conversation highlighting
  * - Mobile-responsive collapse/expand via ShadCN sidebar
  * - New chat button in header
- * - Settings button opens DialogChatSettings
+ * - Settings button opens ChatSettings
  *
  * **Exported API:**
  * - `activateSearchMode()` - Focus search input programmatically
@@ -136,3 +136,10 @@ export { default as SidebarNavigationConversationItem } from './SidebarNavigatio
  * Integrated into sidebar header with proper styling.
  */
 export { default as SidebarNavigationSearch } from './SidebarNavigation/SidebarNavigationSearch.svelte';
+
+/**
+ * **BackendPill** - Displays configured backend hostname as a themed pill.
+ *
+ * Renders nothing when no custom backend base URL is set.
+ */
+export { default as BackendPill } from './BackendPill.svelte';

@@ -1,0 +1,110 @@
+<script lang="ts">
+	import type { DatabaseArtifactRevision } from '$lib/types/database';
+	import { RefreshCw, PencilLine, GitBranch, Sparkles, Pin, RotateCcw } from '@lucide/svelte';
+
+	interface Props {
+		revisions: DatabaseArtifactRevision[];
+		activeRevisionId: string | null;
+		currentRevisionId: string;
+		onSelect: (revisionId: string) => void;
+		onPin?: (revisionId: string) => void;
+		/**
+		 * Append a new `reason: 'rollback'` revision that duplicates the
+		 * payload of `revisionId`. The row shows a hover-revealed
+		 * "rollback" action for every non-current revision; rolling back
+		 * to the current tip is a no-op (the store dedupes on contentHash).
+		 */
+		onRollback?: (revisionId: string) => void;
+	}
+
+	let { revisions, activeRevisionId, currentRevisionId, onSelect, onPin, onRollback }: Props =
+		$props();
+
+	const ICON = {
+		initial: Sparkles,
+		regenerate: RefreshCw,
+		edit: PencilLine,
+		fork: GitBranch,
+		// Reuse RotateCcw for "rolled back to …" rows so they're visually
+		// distinct from the pencil-icon edits that created them. Muted by
+		// default — the fact this is a rollback lives in the `reason`
+		// subline.
+		rollback: RotateCcw
+	} as const;
+</script>
+
+<ol class="flex flex-col gap-1">
+	{#each [...revisions].reverse() as rev (rev.id)}
+		{@const Ico = ICON[rev.reason]}
+		{@const isActive = rev.id === activeRevisionId}
+		{@const isPinned = rev.id === currentRevisionId}
+		<li>
+			<button
+				type="button"
+				class="group flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-xs transition hover:border-primary/60 {isActive
+					? 'border-primary bg-primary/10'
+					: 'border-transparent'}"
+				onclick={() => onSelect(rev.id)}
+			>
+				<Ico class="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+				<div class="flex min-w-0 flex-1 flex-col">
+					<span class="flex items-center gap-1 font-medium">
+						rev {rev.revisionNumber}
+						{#if isPinned}
+							<Pin class="h-3 w-3 text-primary" aria-label="Current default" />
+						{/if}
+					</span>
+					<span class="truncate text-[10px] text-muted-foreground">
+						{rev.reason} · {new Date(rev.createdAt).toLocaleString()}
+					</span>
+				</div>
+				{#if onPin && !isPinned}
+					<!-- The "make default" button lives inside the list item button; using
+						   a nested <button> would break semantics, so it's a span with its own
+						   click + keyboard handling. -->
+					<span
+						role="button"
+						tabindex="0"
+						aria-label="Make default"
+						class="rounded-sm px-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+						onclick={(e) => {
+							e.stopPropagation();
+							onPin(rev.id);
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								onPin(rev.id);
+							}
+						}}>pin</span
+					>
+				{/if}
+				{#if onRollback && !isPinned}
+					<!-- Rollback-to-here action. Hidden until the row is hovered to
+						   keep the list tight. Same nested-role pattern as pin. -->
+					<span
+						role="button"
+						tabindex="0"
+						aria-label="Rollback to this revision"
+						title="Rollback to rev {rev.revisionNumber}"
+						class="flex h-5 w-5 items-center justify-center rounded-sm text-muted-foreground opacity-0 transition group-hover:opacity-100 hover:bg-accent hover:text-foreground"
+						onclick={(e) => {
+							e.stopPropagation();
+							onRollback(rev.id);
+						}}
+						onkeydown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault();
+								e.stopPropagation();
+								onRollback(rev.id);
+							}
+						}}
+					>
+						<RotateCcw class="h-3 w-3" aria-hidden="true" />
+					</span>
+				{/if}
+			</button>
+		</li>
+	{/each}
+</ol>

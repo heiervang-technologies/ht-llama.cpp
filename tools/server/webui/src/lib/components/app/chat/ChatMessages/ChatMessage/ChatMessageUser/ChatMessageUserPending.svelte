@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ActionIcon, ChatMessageEditForm, ChatMessageUserBubble } from '$lib/components/app';
+	import { ActionIcon, ChatMessageEditForm, ChatMessageUser } from '$lib/components/app';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import { ArrowUp, Edit, Trash2 } from '@lucide/svelte';
 	import { getProcessingInfoContext } from '$lib/contexts';
@@ -44,7 +44,7 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageUserBubble
+		<ChatMessageUser
 			{content}
 			attachments={extras}
 			textColorClass="text-muted-foreground"

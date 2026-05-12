@@ -1,6 +1,5 @@
-import { base } from '$app/paths';
 import { getJsonHeaders, getAuthHeaders } from './api-headers';
-import { UrlProtocol } from '$lib/enums';
+import { resolveApiUrl } from './backend-url';
 
 /**
  * API Fetch Utilities
@@ -49,10 +48,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
 
-	const url =
-		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
-			? path
-			: `${base}${path}`;
+	const url = resolveApiUrl(path);
 
 	const response = await fetch(url, {
 		...fetchOptions,
@@ -88,7 +84,8 @@ export async function apiFetchWithParams<T>(
 	params: Record<string, string>,
 	options: ApiFetchOptions = {}
 ): Promise<T> {
-	const url = new URL(basePath, window.location.href);
+	const resolved = resolveApiUrl(basePath);
+	const url = new URL(resolved, window.location.href);
 
 	for (const [key, value] of Object.entries(params)) {
 		if (value !== undefined && value !== null) {

@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { DialogModelNotAvailable } from '$lib/components/app';
+	import { ChatScreen, DialogModelNotAvailable } from '$lib/components/app';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { APP_NAME, NEW_CHAT_PARAM } from '$lib/constants';
 
 	let qParam = $derived(page.url.searchParams.get('q'));
 	let modelParam = $derived(page.url.searchParams.get('model'));
-	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
+	let newChatParam = $derived(page.url.searchParams.get('new_chat'));
 
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
@@ -26,7 +26,7 @@
 
 		url.searchParams.delete('q');
 		url.searchParams.delete('model');
-		url.searchParams.delete(NEW_CHAT_PARAM);
+		url.searchParams.delete('new_chat');
 
 		replaceState(url.toString(), {});
 	}
@@ -85,6 +85,23 @@
 			}
 		}
 
+		// Apply the configured default model when nothing's selected yet and the
+		// named model is currently available. URL param takes precedence (handled
+		// below). Silent when the default doesn't match any available model — a
+		// stale config shouldn't block the user from chatting.
+		const configured = (config().defaultModel ?? '').toString().trim();
+		if (configured && !modelsStore.selectedModelName && !modelParam) {
+			if (modelsStore.models.length === 0) await modelsStore.fetch();
+			const match = modelsStore.findModelByName(configured);
+			if (match) {
+				try {
+					await modelsStore.selectModelById(match.id);
+				} catch (err) {
+					console.warn('[default-model] select failed', configured, err);
+				}
+			}
+		}
+
 		// Handle URL params only if we have ?q= or ?model= or ?new_chat=true
 		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
 			await handleUrlParams();
@@ -93,8 +110,10 @@
 </script>
 
 <svelte:head>
-	<title>{APP_NAME}</title>
+	<title>ht-llama.cpp - AI Chat Interface</title>
 </svelte:head>
+
+<ChatScreen showCenteredEmpty />
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}

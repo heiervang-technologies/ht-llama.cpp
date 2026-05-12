@@ -117,6 +117,13 @@ export async function processFilesToChatUploaded(
 				// Generate preview URL for audio files
 				const preview = await readFileAsDataURL(file);
 				results.push({ ...base, preview });
+			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+				// Preview is the full video data URL so the attachment chip can
+				// render a <video> element directly. Decomposition into frames
+				// + audio for the fallback code path happens later in
+				// convert-files-to-extra.ts.
+				const preview = await readFileAsDataURL(file);
+				results.push({ ...base, preview });
 			} else {
 				// Fallback: treat unknown files as text
 				try {

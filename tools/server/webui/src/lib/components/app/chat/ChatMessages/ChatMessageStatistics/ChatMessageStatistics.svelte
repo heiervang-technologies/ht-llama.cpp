@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
-	import { ChatMessageStatisticsBadge } from '$lib/components/app';
+	import ChatMessageStatisticsBadge from './ChatMessageStatisticsBadge.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';

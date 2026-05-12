@@ -815,6 +815,63 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         msg.role = "assistant";
         msg.content = content;
     }
+
+    // HT: Fallback tool call parser for models that output {"name": ..., "arguments"|"parameters": ...}
+    // This catches tool calls that the PEG parser didn't handle (e.g. custom templates).
+    if (msg.tool_calls.empty() && !msg.content.empty()) {
+        auto trimmed = msg.content;
+        while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\n')) trimmed.erase(trimmed.begin());
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\n')) trimmed.pop_back();
+        if (!trimmed.empty() && trimmed.front() == '{') {
+            // Try to parse each top-level JSON object as a tool call
+            size_t pos = 0;
+            while (pos < trimmed.size()) {
+                // Skip whitespace/newlines between objects
+                while (pos < trimmed.size() && (trimmed[pos] == ' ' || trimmed[pos] == '\n' || trimmed[pos] == '\r')) pos++;
+                if (pos >= trimmed.size() || trimmed[pos] != '{') break;
+
+                // Find matching closing brace
+                int depth = 0;
+                size_t start = pos;
+                for (size_t j = pos; j < trimmed.size(); j++) {
+                    if (trimmed[j] == '{') depth++;
+                    else if (trimmed[j] == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            std::string candidate = trimmed.substr(start, j - start + 1);
+                            try {
+                                auto obj = json::parse(candidate);
+                                if (obj.contains("name")) {
+                                    common_chat_tool_call tc;
+                                    tc.name = obj["name"].get<std::string>();
+                                    // Accept both "arguments" and "parameters"
+                                    if (obj.contains("arguments")) {
+                                        tc.arguments = obj["arguments"].is_string()
+                                            ? obj["arguments"].get<std::string>()
+                                            : obj["arguments"].dump();
+                                    } else if (obj.contains("parameters")) {
+                                        tc.arguments = obj["parameters"].is_string()
+                                            ? obj["parameters"].get<std::string>()
+                                            : obj["parameters"].dump();
+                                    }
+                                    msg.tool_calls.push_back(tc);
+                                }
+                            } catch (...) {
+                                // Not valid JSON, skip
+                            }
+                            pos = j + 1;
+                            break;
+                        }
+                    }
+                }
+                if (depth != 0) break; // unmatched brace
+            }
+            if (!msg.tool_calls.empty()) {
+                msg.content.clear(); // Clear content since it's now in tool_calls
+            }
+        }
+    }
+
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
