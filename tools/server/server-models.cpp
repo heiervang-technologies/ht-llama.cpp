@@ -326,6 +326,7 @@ void server_models::load_models() {
                     SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
                         val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
                     inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+                }
             }
         }
     };
