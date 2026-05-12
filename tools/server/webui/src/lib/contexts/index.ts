@@ -19,6 +19,12 @@ export {
 } from './chat-settings-config.context';
 
 export {
+	getChatSettingsDialogContext,
+	setChatSettingsDialogContext,
+	type ChatSettingsDialogContext
+} from './chat-settings-dialog.context';
+
+export {
 	getProcessingInfoContext,
 	setProcessingInfoContext,
 	type ProcessingInfoContext

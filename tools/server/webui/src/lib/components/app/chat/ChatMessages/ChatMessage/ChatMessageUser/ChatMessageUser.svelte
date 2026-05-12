@@ -1,30 +1,35 @@
 <script lang="ts">
 	import {
-		ChatMessageActionIcons,
+		ChatMessageActions,
 		ChatMessageEditForm,
-		ChatMessageUserBubble
+		ChatMessageUser
 	} from '$lib/components/app/chat';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
-		message: DatabaseMessage;
+		message?: DatabaseMessage;
 		siblingInfo?: ChatMessageSiblingInfo | null;
-		deletionInfo: {
+		deletionInfo?: {
 			totalCount: number;
 			userMessages: number;
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		showDeleteDialog: boolean;
-		onEdit: () => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
+		showDeleteDialog?: boolean;
+		onEdit?: () => void;
+		onDelete?: () => void;
+		onConfirmDelete?: () => void;
 		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
+		onShowDeleteDialogChange?: (show: boolean) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy: () => void;
+		onCopy?: () => void;
+		content?: string;
+		attachments?: DatabaseMessageExtra[];
+		renderMarkdown?: boolean;
+		textColorClass?: string;
+		cardBgClass?: string;
 	}
 
 	let {
@@ -54,15 +59,11 @@
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
 	{:else}
-		<ChatMessageUserBubble
-			content={message.content}
-			attachments={message.extra}
-			renderMarkdown={true}
-		/>
+		<ChatMessageUser content={message.content} attachments={message.extra} renderMarkdown={true} />
 
 		{#if message.timestamp}
 			<div class="max-w-[80%]">
-				<ChatMessageActionIcons
+				<ChatMessageActions
 					actionsPosition="right"
 					{deletionInfo}
 					justify="end"

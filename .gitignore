@@ -98,6 +98,10 @@
 /tools/server/webui/dist
 # we no longer use gz for index.html
 /tools/server/public/index.html.gz
+# SvelteKit build artifacts that leak into public/ when vite build runs
+# directly instead of through the webui's build script
+/tools/server/public/_app/
+/tools/server/public/favicon.svg
 
 # Python
 
@@ -157,6 +161,22 @@ flake.lock
 a.out.*
 
 # AGENTS
-
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Worktrees
+.worktrees
+
+# Agent / tooling state
+/.claude/
+/.codex
+/.playwright-mcp/
+/docs/superpowers/
+
+# Local scratch (debug scripts, cached diffs, screenshots)
+/fix_deadlocks.py
+/patch_fattn.py
+/rewrite_turboq.py
+/upstream-pr-*.diff
+/webui-lora*.png
+/theme-picker-*.png

@@ -30,11 +30,17 @@ import { TITLE_GENERATION } from './title-generation';
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
 	DISPLAY: 'Display',
+	TTS: 'Speech',
+	IMAGES: 'Images',
+	SEARCH: 'Search',
+	AI_COMMANDS: 'AI Commands',
 	SAMPLING: 'Sampling',
 	PENALTIES: 'Penalties',
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
 	IMPORT_EXPORT: 'Import/Export',
+	MCP: 'MCP',
+	CONNECTIONS: 'Connections',
 	DEVELOPER: 'Developer'
 } as const;
 

@@ -7,7 +7,8 @@
 #
 # Usage:
 #   bash scripts/dev.sh
-#   npm run dev
+#   bun run dev      (preferred — bun.lock is authoritative for local dev)
+#   npm run dev      (CI still uses npm via package-lock.json)
 
 cd ../../../
 

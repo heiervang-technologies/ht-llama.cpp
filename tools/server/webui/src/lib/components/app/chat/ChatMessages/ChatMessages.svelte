@@ -1,22 +1,11 @@
 <script lang="ts">
-	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
+	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
+	import { ChatMessage, ChatMessagePhantomContext } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
-		chatClearPendingMessage,
-		chatInjectPendingMessage
-	} from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import {
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage
-	} from '$lib/stores/agentic.svelte';
 	import {
 		copyToClipboard,
 		formatMessageForClipboard,
@@ -25,14 +14,14 @@
 	} from '$lib/utils';
 
 	interface Props {
+		class?: string;
 		messages?: DatabaseMessage[];
 		onUserAction?: () => void;
 	}
 
-	let { messages = [], onUserAction }: Props = $props();
+	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
-
 	const currentConfig = config();
 
 	setChatActionsContext({
@@ -144,13 +133,44 @@
 			siblingInfo: ChatMessageSiblingInfo;
 		}> = [];
 
+		// When the transparency toggle is on, tool messages render as their own
+		// cards (see `ChatMessageTool` + the routing in `ChatMessage.svelte`).
+		// We keep the assistant-grouping loop below for the default (folded)
+		// mode.
+		const standaloneTools = Boolean(currentConfig.showToolMessagesAsStandalone);
+
 		for (let i = 0; i < filteredMessages.length; i++) {
 			const msg = filteredMessages[i];
 
-			// Skip tool messages - they're grouped with preceding assistant
-			if (msg.role === MessageRole.TOOL) continue;
+			// In folded mode, skip tool messages — they're absorbed into the
+			// preceding assistant turn. In standalone mode, emit them as their
+			// own display entries (no sibling controls, no toolMessages group).
+			if (msg.role === MessageRole.TOOL) {
+				if (standaloneTools) {
+					result.push({
+						message: msg,
+						toolMessages: [],
+						isLastAssistantMessage: false,
+						siblingInfo: {
+							message: msg,
+							siblingIds: [msg.id],
+							currentIndex: 0,
+							totalSiblings: 1
+						}
+					});
+				}
+				continue;
+			}
 
 			const toolMessages: DatabaseMessage[] = [];
+			// Standalone mode emits tool messages as their own entries, but
+			// the assistant card's agentic-content view still needs to see
+			// them to pair each `tool_call` with its result — without that
+			// lookup, every section stays TOOL_CALL_PENDING and the spinner
+			// gets stuck forever. So we ALWAYS gather the related tool/
+			// continuation messages for the assistant's display entry; we
+			// just don't advance past them in standalone mode so they also
+			// get their own emit on a subsequent loop iteration.
 			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
@@ -170,13 +190,19 @@
 					}
 				}
 
-				i = j - 1;
+				if (!standaloneTools) {
+					i = j - 1;
+				}
 			} else if (msg.role === MessageRole.ASSISTANT) {
 				let j = i + 1;
 
 				while (j < filteredMessages.length && filteredMessages[j].role === MessageRole.TOOL) {
 					toolMessages.push(filteredMessages[j]);
 					j++;
+				}
+
+				if (!standaloneTools) {
+					i = j - 1;
 				}
 			}
 
@@ -207,42 +233,23 @@
 	});
 </script>
 
-{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
-	<ChatMessage
-		class="mx-auto mt-12 w-full max-w-[48rem]"
-		{message}
-		{toolMessages}
-		{isLastAssistantMessage}
-		{siblingInfo}
-	/>
-{/each}
-
-{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-	{@const convId = activeConversation()!.id}
-	{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
-
-	{#if pendingContent}
-		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full max-w-[48rem]"
-			content={pendingContent}
-			extras={agenticPendingSteeringMessageExtras(convId)}
-			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-			onDelete={() => agenticClearSteeringMessage(convId)}
-		/>
+<div
+	class="flex h-full flex-col space-y-10 pt-24 {className}"
+	style="height: auto; min-height: calc(100dvh - 14rem);"
+>
+	{#if currentConfig.showToolMessagesAsStandalone}
+		<ChatMessagePhantomContext />
 	{/if}
-{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-	{@const convId = activeConversation()!.id}
-	{@const pendingContent = chatPendingMessageContent(convId)}
 
-	{#if pendingContent}
-		<ChatMessageUserPending
-			class="mx-auto mt-12 w-full max-w-[48rem]"
-			content={pendingContent}
-			extras={chatPendingMessageExtras(convId)}
-			onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-			onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-			onDelete={() => chatClearPendingMessage(convId)}
-		/>
-	{/if}
-{/if}
+	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
+		<div use:fadeInView>
+			<ChatMessage
+				class="mx-auto w-full max-w-[48rem]"
+				{message}
+				{toolMessages}
+				{isLastAssistantMessage}
+				{siblingInfo}
+			/>
+		</div>
+	{/each}
+</div>

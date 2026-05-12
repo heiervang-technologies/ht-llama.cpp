@@ -252,3 +252,6 @@ export { default as McpResourcePreview } from './McpResourcePreview.svelte';
  * - Read resolved resource action
  */
 export { default as McpResourceTemplateForm } from './McpResourceTemplateForm.svelte';
+
+/** McpServersSelector — HT MCP server picker (restored from ht). */
+export { default as McpServersSelector } from './McpServersSelector.svelte';

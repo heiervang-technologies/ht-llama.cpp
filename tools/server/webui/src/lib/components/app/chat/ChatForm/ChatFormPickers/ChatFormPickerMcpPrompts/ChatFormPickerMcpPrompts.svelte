@@ -399,16 +399,17 @@
 			{showSearchInput}
 			searchPlaceholder="Search prompts..."
 			emptyMessage="No MCP prompts available"
-			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
+			itemKey={(prompt: { serverName: string; name: string }) =>
+				prompt.serverName + ':' + prompt.name}
 		>
-			{#snippet item(prompt, index, isSelected)}
+			{#snippet item(prompt: any, index: number, isSelected: boolean)}
 				{@const server = serverSettingsMap.get(prompt.serverName)}
 				{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
 
 				<ChatFormPickerListItem
 					dataIndex={index}
 					{isSelected}
-					onclick={() => handlePromptClick(prompt)}
+					onClick={() => handlePromptClick(prompt)}
 				>
 					<ChatFormPickerItemHeader
 						{server}

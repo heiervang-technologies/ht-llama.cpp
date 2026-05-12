@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChevronDown, ShieldQuestion } from '@lucide/svelte';
-	import { ChatMessageActionCard } from '$lib/components/app';
+	import { ChatMessageActions } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as ButtonGroup from '$lib/components/ui/button-group';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -17,7 +17,7 @@
 	let { toolName, serverLabel, onDecision }: Props = $props();
 </script>
 
-<ChatMessageActionCard icon={ShieldQuestion}>
+<ChatMessageActions icon={ShieldQuestion}>
 	{#snippet message()}
 		Allow use of
 
@@ -85,4 +85,4 @@
 			Deny
 		</Button>
 	{/snippet}
-</ChatMessageActionCard>
+</ChatMessageActions>

@@ -1,0 +1,42 @@
+[package]
+name = "ht-llama-webui"
+version = "0.1.0"
+description = "Native desktop shell for the ht-llama.cpp WebUI"
+authors = ["Heiervang Technologies"]
+license = "MIT"
+repository = "https://github.com/heiervang-technologies/ht-llama.cpp"
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.10.3", features = ["devtools"] }
+tauri-plugin-log = "2"
+# Serves the embedded frontend at http://localhost:<port>/ so dev (vite at
+# :5173) and release (this plugin at :5173) share an origin — IndexedDB,
+# localStorage, and the gallery DB carry over without an export/import dance.
+tauri-plugin-localhost = "2"
+# Reqwest-backed `fetch` from JS. We use it to talk to ht-termd (loopback)
+# so HTTP requests aren't routed through WebKit's resource loader, which
+# stalls under page-throttling when the Tauri window sits on a non-active
+# Hyprland workspace. The plugin handles requests on the Tokio runtime
+# inside the app process; the IPC bridge surfaces the response back to JS.
+tauri-plugin-http = "2"
+
+# Linux-only: reach into the underlying webkit2gtk webview so we can enable
+# MediaStream APIs and auto-approve getUserMedia permission requests. Without
+# this, getUserMedia() from the Tauri window returns NotAllowedError even
+# though the desktop app already has OS-level mic access.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = "2.0"

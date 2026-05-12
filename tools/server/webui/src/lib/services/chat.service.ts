@@ -1,4 +1,5 @@
 import { getJsonHeaders } from '$lib/utils/api-headers';
+import { resolveApiUrl } from '$lib/utils/backend-url';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { isAbortError } from '$lib/utils/abort';
 import {
@@ -14,59 +15,15 @@ import {
 	ReasoningFormat,
 	UrlProtocol
 } from '$lib/enums';
+import type { ApiChatMessageContentPart, ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
-	ApiChatMessageContentPart,
-	ApiChatMessageData,
-	ApiChatCompletionToolCall
-} from '$lib/types/api';
-import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
-import { modelsStore } from '$lib/stores/models.svelte';
+	DatabaseMessageExtraMcpPrompt,
+	DatabaseMessageExtraMcpResource,
+	DatabaseMessageExtraVideoFile
+} from '$lib/types';
+import { modelsStore, selectedModelName, singleModelName } from '$lib/stores/models.svelte';
 
 export class ChatService {
-	/**
-	 *
-	 *
-	 * Title Generation
-	 *
-	 *
-	 */
-
-	/**
-	 * Sends a streaming chat completion request for generating a chat title.
-	 * Delegates to `sendMessage` for fetch, SSE parsing, and error handling.
-	 *
-	 * @param message - The single message to send (a user message containing the title generation prompt)
-	 * @param model - Optional model name to use (required in ROUTER mode)
-	 * @param signal - Optional AbortSignal to cancel the request
-	 * @returns {Promise<string>} The aggregated title text, or empty string if request failed
-	 * @static
-	 */
-	static async generateTitle(
-		message: ApiChatMessageData,
-		model?: string | null,
-		signal?: AbortSignal
-	): Promise<string> {
-		let titleResponse = '';
-		try {
-			await ChatService.sendMessage(
-				[message],
-				{
-					model: model || undefined,
-					stream: true,
-					custom: { chat_template_kwargs: { enable_thinking: false } },
-					onChunk: (chunk: string) => {
-						titleResponse += chunk;
-					}
-				},
-				undefined,
-				signal
-			);
-		} catch {
-			return '';
-		}
-		return titleResponse;
-	}
-
 	/**
 	 *
 	 *
@@ -170,11 +127,7 @@ export class ChatService {
 						return true;
 					});
 					// If only text remains and it's a single part, simplify to string
-					if (
-						msg.content.length === 1 &&
-						msg.content[0].type === ContentPartType.TEXT &&
-						typeof msg.content[0].text === 'string'
-					) {
+					if (msg.content.length === 1 && msg.content[0].type === ContentPartType.TEXT) {
 						msg.content = msg.content[0].text;
 					}
 				}
@@ -254,7 +207,7 @@ export class ChatService {
 		}
 
 		try {
-			const response = await fetch(`./v1/chat/completions`, {
+			const response = await fetch(resolveApiUrl('./v1/chat/completions'), {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -345,7 +298,7 @@ export class ChatService {
 	static async areAllSlotsIdle(model?: string | null, signal?: AbortSignal): Promise<boolean> {
 		try {
 			const url = model ? `./slots?model=${encodeURIComponent(model)}` : './slots';
-			const res = await fetch(url, { signal });
+			const res = await fetch(resolveApiUrl(url), { signal });
 			if (!res.ok) return true;
 
 			const slots: { is_processing: boolean }[] = await res.json();
@@ -420,7 +373,7 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(`./v1/chat/completions`, {
+			await fetch(resolveApiUrl('./v1/chat/completions'), {
 				method: 'POST',
 				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
@@ -513,7 +466,7 @@ export class ChatService {
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
 
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			if (import.meta.env.DEV) {
 				console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 			}
 
@@ -553,10 +506,9 @@ export class ChatService {
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
-							const choice = parsed.choices?.[0];
-							const content = choice?.delta?.content;
-							const reasoningContent = choice?.delta?.reasoning_content;
-							const toolCalls = choice?.delta?.tool_calls;
+							const content = parsed.choices[0]?.delta?.content;
+							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
+							const toolCalls = parsed.choices[0]?.delta?.tool_calls;
 							const timings = parsed.timings;
 							const promptProgress = parsed.prompt_progress;
 
@@ -876,6 +828,47 @@ export class ChatService {
 					format: audio.mimeType.includes('wav') ? 'wav' : 'mp3'
 				}
 			});
+		}
+
+		const videoFiles = message.extra.filter(
+			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraVideoFile =>
+				extra.type === AttachmentType.VIDEO
+		);
+
+		if (videoFiles.length > 0) {
+			const activeModel = selectedModelName() ?? singleModelName() ?? null;
+			const hasNativeVideo = activeModel ? modelsStore.modelSupportsVideo(activeModel) : false;
+
+			for (const video of videoFiles) {
+				if (hasNativeVideo) {
+					contentParts.push({
+						type: ContentPartType.VIDEO_URL,
+						video_url: { url: video.base64Url }
+					});
+					continue;
+				}
+				// Fallback: decompose into frames + audio so vision/audio models
+				// can still consume the message. Frames + audio are pre-computed
+				// at attach time and cached on the extra, so this path is just
+				// a re-emit, no extra decoding.
+				if (video.fallbackFrames?.length) {
+					for (const frameUrl of video.fallbackFrames) {
+						contentParts.push({
+							type: ContentPartType.IMAGE_URL,
+							image_url: { url: frameUrl }
+						});
+					}
+				}
+				if (video.fallbackAudioBase64) {
+					contentParts.push({
+						type: ContentPartType.INPUT_AUDIO,
+						input_audio: {
+							data: video.fallbackAudioBase64,
+							format: 'wav'
+						}
+					});
+				}
+			}
 		}
 
 		const pdfFiles = message.extra.filter(

@@ -7,7 +7,8 @@
 		Loader2,
 		Power,
 		PowerOff,
-		RotateCw
+		RotateCw,
+		X
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
@@ -20,6 +21,7 @@
 		isHighlighted: boolean;
 		isFav: boolean;
 		hideOrgName?: boolean;
+		showOrgName?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
@@ -44,12 +46,18 @@
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
+	let isCancelling = $derived(modelsStore.isModelCancelling(option.model));
+	let isUnloading = $derived(modelsStore.isModelUnloading(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
 	let isLoaded = $derived(
 		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
 	);
-	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
+	let isLoading = $derived(
+		(serverStatus === ServerModelStatus.LOADING || isOperationInProgress) &&
+			!isCancelling &&
+			!isUnloading
+	);
 </script>
 
 <div
@@ -111,9 +119,30 @@
 				/>
 			{/if}
 		</div>
+		{#if isCancelling}
+			<div class="flex items-center gap-1.5">
+				<Loader2 class="animate-spin-reverse h-4 w-4 text-orange-400" />
+				<span class="text-xs text-orange-400">Cancelling</span>
+			</div>
+		{:else if isUnloading}
+			<div class="flex items-center gap-1.5">
+				<Loader2 class="animate-spin-reverse h-4 w-4 text-red-500" />
+				<span class="text-xs text-red-500">Unloading</span>
+			</div>
+		{:else if isLoading}
+			<div class="flex items-center gap-1">
+				<Loader2 class="h-4 w-4 animate-spin text-green-500" />
 
-		{#if isLoading}
-			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				<button type="button" aria-label="Cancel loading" onclick={(e) => e.stopPropagation()}>
+					<ActionIcon
+						iconSize="h-3 w-3"
+						icon={X}
+						tooltip="Cancel loading"
+						class="h-4 w-4 text-muted-foreground hover:text-red-500"
+						onclick={() => modelsStore.cancelLoadModel(option.model)}
+					/>
+				</button>
+			</div>
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center">
 				<CircleAlert class="h-3.5 w-3.5 text-red-500 group-hover:hidden" />

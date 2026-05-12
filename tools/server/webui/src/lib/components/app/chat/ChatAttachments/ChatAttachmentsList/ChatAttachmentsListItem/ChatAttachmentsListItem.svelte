@@ -1,9 +1,9 @@
 <script lang="ts">
 	import {
-		ChatAttachmentsListItemMcpPrompt,
-		ChatAttachmentsListItemMcpResource,
-		ChatAttachmentsListItemThumbnailImage,
-		ChatAttachmentsListItemThumbnailFile
+		ChatAttachmentMcpPrompt,
+		ChatAttachmentMcpResource,
+		ChatAttachmentThumbnailImage,
+		ChatAttachmentThumbnailFile
 	} from '$lib/components/app';
 	import { AttachmentType } from '$lib/enums';
 	import type {
@@ -73,7 +73,7 @@
 					}
 				: null}
 	{#if mcpPrompt}
-		<ChatAttachmentsListItemMcpPrompt
+		<ChatAttachmentMcpPrompt
 			class="max-w-[300px] min-w-[200px] flex-shrink-0 {className} {scrollClasses}"
 			prompt={mcpPrompt}
 			{readonly}
@@ -85,13 +85,13 @@
 {:else if isMcpResource(item)}
 	{@const mcpResource = item.attachment as DatabaseMessageExtraMcpResource}
 
-	<ChatAttachmentsListItemMcpResource
+	<ChatAttachmentMcpResource
 		class="flex-shrink-0 {className} {scrollClasses}"
 		attachment={toMcpResourceAttachment(mcpResource, item.id)}
-		onclick={() => onMcpResourcePreview?.(mcpResource)}
+		onClick={() => onMcpResourcePreview?.(mcpResource)}
 	/>
 {:else if item.isImage && item.preview}
-	<ChatAttachmentsListItemThumbnailImage
+	<ChatAttachmentThumbnailImage
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
@@ -101,10 +101,10 @@
 		height={imageHeight}
 		width={imageWidth}
 		{imageClass}
-		onclick={() => onPreview?.(item)}
+		onClick={() => onPreview?.(item)}
 	/>
 {:else if isPdfFile(item.attachment, item.uploadedFile)}
-	<ChatAttachmentsListItemThumbnailFile
+	<ChatAttachmentThumbnailFile
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
@@ -114,10 +114,10 @@
 		textContent={item.textContent}
 		attachment={item.attachment}
 		uploadedFile={item.uploadedFile}
-		onclick={() => onPreview?.(item)}
+		onClick={() => onPreview?.(item)}
 	/>
 {:else}
-	<ChatAttachmentsListItemThumbnailFile
+	<ChatAttachmentThumbnailFile
 		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
 		id={item.id}
 		name={item.name}
@@ -127,6 +127,6 @@
 		textContent={item.textContent}
 		attachment={item.attachment}
 		uploadedFile={item.uploadedFile}
-		onclick={() => onPreview?.(item)}
+		onClick={() => onPreview?.(item)}
 	/>
 {/if}

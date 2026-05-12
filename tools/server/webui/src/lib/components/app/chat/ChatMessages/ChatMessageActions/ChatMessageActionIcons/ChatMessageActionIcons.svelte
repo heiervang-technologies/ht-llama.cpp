@@ -1,8 +1,18 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Trash2, ArrowRight, GitBranch } from '@lucide/svelte';
+	import {
+		Edit,
+		Copy,
+		RefreshCw,
+		Trash2,
+		ArrowRight,
+		GitBranch,
+		Volume2,
+		Square,
+		Loader2
+	} from '@lucide/svelte';
 	import {
 		ActionIcon,
-		ChatMessageActionIconsBranchingControls,
+		ChatMessageBranchingControls,
 		DialogConfirmation
 	} from '$lib/components/app';
 	import { Switch } from '$lib/components/ui/switch';
@@ -36,6 +46,9 @@
 		showRawOutputSwitch?: boolean;
 		rawOutputEnabled?: boolean;
 		onRawOutputToggle?: (enabled: boolean) => void;
+		onSpeak?: () => void;
+		isSpeaking?: boolean;
+		isLoadingSpeech?: boolean;
 	}
 
 	let {
@@ -56,7 +69,10 @@
 		showDeleteDialog,
 		showRawOutputSwitch = false,
 		rawOutputEnabled = false,
-		onRawOutputToggle
+		onRawOutputToggle,
+		onSpeak,
+		isSpeaking = false,
+		isLoadingSpeech = false
 	}: Props = $props();
 
 	let showForkDialog = $state(false);
@@ -89,7 +105,7 @@
 			: 'right-0'} flex items-center gap-2 opacity-100 transition-opacity"
 	>
 		{#if siblingInfo && siblingInfo.totalSiblings > 1}
-			<ChatMessageActionIconsBranchingControls {siblingInfo} {onNavigateToSibling} />
+			<ChatMessageBranchingControls {siblingInfo} {onNavigateToSibling} />
 		{/if}
 
 		<div
@@ -107,6 +123,21 @@
 
 			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
+			{/if}
+
+			{#if role === MessageRole.ASSISTANT && onSpeak}
+				{#if isLoadingSpeech}
+					<ActionIcon
+						icon={Loader2}
+						tooltip="Loading speech…"
+						onclick={onSpeak}
+						class="animate-spin"
+					/>
+				{:else if isSpeaking}
+					<ActionIcon icon={Square} tooltip="Stop speaking" onclick={onSpeak} />
+				{:else}
+					<ActionIcon icon={Volume2} tooltip="Speak message" onclick={onSpeak} />
+				{/if}
 			{/if}
 
 			{#if onForkConversation}

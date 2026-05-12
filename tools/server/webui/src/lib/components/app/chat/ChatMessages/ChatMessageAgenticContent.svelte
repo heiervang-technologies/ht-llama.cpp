@@ -1,103 +1,41 @@
 <script lang="ts">
-	import { Wrench, Loader2, Brain } from '@lucide/svelte';
 	import {
 		ChatMessageStatistics,
 		CollapsibleContentBlock,
 		MarkdownContent,
-		SyntaxHighlightedCode,
-		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest
+		SyntaxHighlightedCode
 	} from '$lib/components/app';
-
-	import {
-		AgenticSectionType,
-		ChatMessageStatsView,
-		FileTypeText,
-		ToolPermissionDecision
-	} from '$lib/enums';
-	import type {
-		ChatMessageAgenticTimings,
-		ChatMessageAgenticTurnStats,
-		DatabaseMessage
-	} from '$lib/types';
+	import ToolResultArtifactPreviews from './ToolResultArtifactPreviews.svelte';
+	import ToolResultRichPreview from './ToolResultRichPreview.svelte';
+	import ToolCallProgressBar from './ToolCallProgressBar.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { Wrench, Loader2, Brain } from '@lucide/svelte';
+	import { AgenticSectionType, FileTypeText } from '$lib/enums';
+	import { formatJsonPretty } from '$lib/utils';
 	import {
 		deriveAgenticSections,
-		formatJsonPretty,
 		parseToolResultWithImages,
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
-	import {
-		agenticPendingPermissionRequest,
-		agenticResolvePermission,
-		agenticPendingContinueRequest,
-		agenticResolveContinue
-	} from '$lib/stores/agentic.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import type { DatabaseMessage } from '$lib/types/database';
+	import type { ChatMessageAgenticTimings, ChatMessageAgenticTurnStats } from '$lib/types/chat';
+	import { ChatMessageStatsView } from '$lib/enums';
 
 	interface Props {
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
-		isLastAssistantMessage?: boolean;
 		highlightTurns?: boolean;
+		isLastAssistantMessage?: boolean;
 	}
 
-	let {
-		message,
-		toolMessages = [],
-		isStreaming = false,
-		isLastAssistantMessage = false,
-		highlightTurns = false
-	}: Props = $props();
+	let { message, toolMessages = [], isStreaming = false, highlightTurns = false }: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
-
-	let permissionDismissed = $state(false);
-
-	const pendingPermission = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
-	);
-
-	// Reset dismissed when pendingPermission changes (new request or cleared)
-	let prevPendingRef: typeof pendingPermission = null;
-	$effect(() => {
-		if (pendingPermission !== prevPendingRef) {
-			prevPendingRef = pendingPermission;
-			if (pendingPermission) {
-				permissionDismissed = false;
-			}
-		}
-	});
-
-	function handlePermission(decision: ToolPermissionDecision) {
-		permissionDismissed = true;
-		agenticResolvePermission(message.convId, decision);
-	}
-
-	let continueDismissed = $state(false);
-
-	const pendingContinue = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
-	);
-
-	let prevContinueRef = false;
-	$effect(() => {
-		if (pendingContinue !== prevContinueRef) {
-			prevContinueRef = pendingContinue;
-			if (pendingContinue) {
-				continueDismissed = false;
-			}
-		}
-	});
-
-	function handleContinue(shouldContinue: boolean) {
-		continueDismissed = true;
-		agenticResolveContinue(message.convId, shouldContinue);
-	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
@@ -267,11 +205,7 @@
 						<Loader2 class="h-3 w-3 animate-spin" />
 					{/if}
 				</div>
-				{#if isPending}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-						Waiting for result...
-					</div>
-				{:else if section.toolResult}
+				{#if section.toolResult}
 					<div class="overflow-auto rounded-lg border border-border bg-muted p-4">
 						{#each section.parsedLines as line, i (i)}
 							<div class="font-mono text-xs leading-relaxed whitespace-pre-wrap">{line.text}</div>
@@ -285,11 +219,39 @@
 							{/if}
 						{/each}
 					</div>
-				{:else}
-					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">No output</div>
+				{:else if isPending}
+					<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+						Waiting for result...
+					</div>
 				{/if}
 			</div>
 		</CollapsibleContentBlock>
+
+		<!-- Live progress bar while the call is in flight. Fills against
+		     the rolling median for this tool name; pegs amber past the
+		     estimate so the user sees "slower than usual" instead of
+		     wondering if the call has hung. Unmounts the moment the
+		     section transitions to TOOL_CALL (completion). -->
+		{#if isPending}
+			<ToolCallProgressBar toolName={section.toolName} />
+		{/if}
+
+		<!-- Gallery artifacts referenced in the tool result rendered
+		     OUTSIDE the collapsible card so the user sees the actual
+		     image / video / audio even when the tool-call is collapsed
+		     (which is the default for completed calls). Without this,
+		     a `generate_image` reply just looks like an empty
+		     "Wrench: generate_image" pill until you click to expand,
+		     which misses the image-render contract. -->
+		{#if section.toolResult}
+			<ToolResultArtifactPreviews toolResult={section.toolResult} />
+			<!-- Web-tool family (web_search, search_images, search_news,
+			     fetch_url) gets a rich card-style render outside the
+			     collapsible so the user sees the actual results at a
+			     glance. The raw JSON stays inside the collapsible for
+			     debugging / model-context replay. -->
+			<ToolResultRichPreview toolName={section.toolName} toolResult={section.toolResult} />
+		{/if}
 	{:else if section.type === AgenticSectionType.REASONING}
 		<CollapsibleContentBlock
 			open={isExpanded(index, section)}
@@ -356,18 +318,6 @@
 		{#each sectionsParsed as section, index (index)}
 			{@render renderSection(section, index)}
 		{/each}
-	{/if}
-
-	{#if pendingPermission && !permissionDismissed}
-		<ChatMessageActionCardPermissionRequest
-			toolName={pendingPermission.toolName}
-			serverLabel={pendingPermission.serverLabel}
-			onDecision={handlePermission}
-		/>
-	{/if}
-
-	{#if pendingContinue && !continueDismissed}
-		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>
 
