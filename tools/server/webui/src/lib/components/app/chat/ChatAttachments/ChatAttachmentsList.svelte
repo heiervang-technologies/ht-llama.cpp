@@ -37,10 +37,6 @@
 		limitToSingleRow?: boolean;
 		// For vision modality check
 		activeModelId?: string;
-		// HT extra fields
-		item?: ChatAttachmentDisplayItem;
-		onMcpResourcePreview?: (extra: DatabaseMessageExtraMcpResource) => void;
-		onPreview?: (item: ChatAttachmentDisplayItem, event?: MouseEvent) => void;
 	}
 
 	let {
@@ -295,12 +291,8 @@
 {#if previewItem}
 	<DialogChatAttachmentsPreview
 		bind:open={previewDialogOpen}
-		uploadedFile={previewItem.uploadedFile}
-		attachment={previewItem.attachment}
-		preview={previewItem.preview}
-		name={previewItem.name}
-		size={previewItem.size}
-		textContent={previewItem.textContent}
+		uploadedFiles={previewItem.uploadedFile ? [previewItem.uploadedFile] : []}
+		attachments={previewItem.attachment ? [previewItem.attachment] : []}
 		{activeModelId}
 	/>
 {/if}

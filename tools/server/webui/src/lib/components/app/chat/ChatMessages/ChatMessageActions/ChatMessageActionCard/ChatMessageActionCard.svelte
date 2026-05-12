@@ -5,40 +5,9 @@
 		icon?: Component<{ class?: string }>;
 		message?: Snippet;
 		actions?: Snippet;
-		children?: Snippet;
-		actionsPosition?: 'left' | 'right' | 'top' | 'bottom';
-		justify?: 'start' | 'end' | 'center' | 'between';
-		role?: string;
-		isLastAssistantMessage?: boolean;
-		content?: string;
-		uploadedFile?: unknown;
-		uploadedFiles?: unknown;
-		item?: unknown;
-		isLoading?: boolean;
-		showAddButton?: boolean;
-		disabled?: boolean;
-		deletionInfo?: unknown;
-		siblingInfo?: unknown;
-		onConfirmDelete?: (...args: any[]) => any;
-		onCopy?: (...args: any[]) => any;
-		onDelete?: (...args: any[]) => any;
-		onEdit?: (...args: any[]) => any;
-		onForkConversation?: (...args: any[]) => any;
-		onNavigateToSibling?: (...args: any[]) => any;
-		onShowDeleteDialogChange?: (...args: any[]) => any;
-		showDeleteDialog?: boolean;
-		onRegenerate?: (...args: any[]) => any;
-		onContinue?: (...args: any[]) => any;
-		showRawOutputSwitch?: boolean;
-		rawOutputEnabled?: boolean;
-		onRawOutputToggle?: (...args: any[]) => any;
-		onSpeak?: (...args: any[]) => any;
-		isSpeaking?: boolean;
-		isLoadingSpeech?: boolean;
-		highlightTurns?: boolean;
 	}
 
-	let { icon: IconComponent, message, actions, children }: Props = $props();
+	let { icon: IconComponent, message, actions }: Props = $props();
 </script>
 
 <div class="my-2 rounded-lg border border-border bg-card p-3">

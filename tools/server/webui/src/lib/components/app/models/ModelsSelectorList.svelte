@@ -12,10 +12,6 @@
 		onSelect?: (modelId: string) => void;
 		onInfoClick?: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
-		disabled?: boolean;
-		forceForegroundText?: boolean;
-		showOrgName?: boolean;
-		useGlobalSelection?: boolean;
 	}
 
 	let {
@@ -41,7 +37,7 @@
 		{isSelected}
 		isHighlighted={false}
 		{isFav}
-		{hideOrgName}
+		showOrgName={!hideOrgName}
 		{onSelect}
 		{onInfoClick}
 		onMouseEnter={() => {}}

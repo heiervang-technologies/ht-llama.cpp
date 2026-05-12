@@ -27,7 +27,6 @@
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
 		highlightTurns?: boolean;
-		isLastAssistantMessage?: boolean;
 	}
 
 	let { message, toolMessages = [], isStreaming = false, highlightTurns = false }: Props = $props();

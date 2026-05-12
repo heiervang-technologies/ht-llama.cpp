@@ -73,6 +73,13 @@ export { default as ChatAttachmentMcpResource } from './ChatAttachments/ChatAtta
 export { default as ChatAttachmentPreview } from './ChatAttachments/ChatAttachmentPreview.svelte';
 
 /**
+ * Multi-attachment preview component with navigation between items.
+ * Renders one attachment at a time with prev/next buttons and a thumbnail strip,
+ * driven by `previewFocusIndex` and `chat-attachments-nav` keyboard events.
+ */
+export { default as ChatAttachmentsPreview } from './ChatAttachments/ChatAttachmentsPreview.svelte';
+
+/**
  * Displays MCP Resource attachments as a horizontal carousel.
  * Shows resource name, URI, and allows clicking to view resource content.
  */
@@ -475,7 +482,9 @@ export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessage
  * for assistant messages.
  */
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
-export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
+// ht alias: upstream renamed the rich icon row to ChatMessageActionIcons;
+// ht call sites still import this as ChatMessageActions. Remove once migrated.
+export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
 export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
 
 /**

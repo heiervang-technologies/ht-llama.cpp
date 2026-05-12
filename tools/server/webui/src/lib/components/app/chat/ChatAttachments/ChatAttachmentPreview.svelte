@@ -20,18 +20,13 @@
 	interface Props {
 		// Either an uploaded file or a stored attachment
 		uploadedFile?: ChatUploadedFile;
-		uploadedFiles?: ChatUploadedFile[];
 		attachment?: DatabaseMessageExtra;
-		attachments?: DatabaseMessageExtra[];
 		// For uploaded files
 		preview?: string;
 		name?: string;
-		size?: number;
 		textContent?: string;
 		// For checking vision modality
 		activeModelId?: string;
-		previewFocusIndex?: number;
-		class?: string;
 	}
 
 	let { uploadedFile, attachment, preview, name, textContent, activeModelId }: Props = $props();

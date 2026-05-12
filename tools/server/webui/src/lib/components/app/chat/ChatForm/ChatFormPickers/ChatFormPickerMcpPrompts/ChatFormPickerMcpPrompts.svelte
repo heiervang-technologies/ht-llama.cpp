@@ -399,10 +399,9 @@
 			{showSearchInput}
 			searchPlaceholder="Search prompts..."
 			emptyMessage="No MCP prompts available"
-			itemKey={(prompt: { serverName: string; name: string }) =>
-				prompt.serverName + ':' + prompt.name}
+			itemKey={(prompt: MCPPromptInfo) => prompt.serverName + ':' + prompt.name}
 		>
-			{#snippet item(prompt: any, index: number, isSelected: boolean)}
+			{#snippet item(prompt: MCPPromptInfo, index: number, isSelected: boolean)}
 				{@const server = serverSettingsMap.get(prompt.serverName)}
 				{@const serverLabel = server ? mcpStore.getServerLabel(server) : prompt.serverName}
 

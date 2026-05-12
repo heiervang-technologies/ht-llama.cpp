@@ -4,7 +4,7 @@
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { TtsService } from '$lib/services/tts.service';
 	import LoraAdapters from '$lib/components/app/lora/LoraAdapters.svelte';
-	import { ModelsSelectorList, ModelsSelectorSheet } from '$lib/components/app';
+	import { ModelsSelector, ModelsSelectorSheet } from '$lib/components/app';
 	import VoicePicker from './VoicePicker.svelte';
 
 	interface Props {
@@ -30,14 +30,14 @@
 
 	let isMobile = new IsMobile();
 
-	let selectorDesktop: (ModelsSelectorList & { open?: () => void }) | undefined = $state(undefined);
-	let selectorMobile: (ModelsSelectorSheet & { open?: () => void }) | undefined = $state(undefined);
+	let selectorDesktop: ModelsSelector | undefined = $state(undefined);
+	let selectorMobile: ModelsSelectorSheet | undefined = $state(undefined);
 
 	export function openModelSelector() {
 		if (isMobile.current) {
-			selectorMobile?.open?.();
+			selectorMobile?.open();
 		} else {
-			selectorDesktop?.open?.();
+			selectorDesktop?.open();
 		}
 	}
 </script>
@@ -103,7 +103,7 @@
 				useGlobalSelection
 			/>
 		{:else}
-			<ModelsSelectorList
+			<ModelsSelector
 				disabled={disabled || isOffline}
 				bind:this={selectorDesktop}
 				currentModel={conversationModel}

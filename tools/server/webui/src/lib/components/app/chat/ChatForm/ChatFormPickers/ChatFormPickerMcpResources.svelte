@@ -178,10 +178,9 @@
 		{showSearchInput}
 		searchPlaceholder="Search resources..."
 		emptyMessage="No MCP resources available"
-		itemKey={(resource: { serverName: string; uri: string }) =>
-			resource.serverName + ':' + resource.uri}
+		itemKey={(resource: MCPResourceInfo) => resource.serverName + ':' + resource.uri}
 	>
-		{#snippet item(resource: any, index: number, isSelected: boolean)}
+		{#snippet item(resource: MCPResourceInfo, index: number, isSelected: boolean)}
 			{@const server = serverSettingsMap.get(resource.serverName)}
 			{@const serverLabel = server ? mcpStore.getServerLabel(server) : resource.serverName}
 

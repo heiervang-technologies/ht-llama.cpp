@@ -77,6 +77,8 @@
 		isLoading = false,
 		placeholder = 'Type a message...',
 		showMcpPromptButton = false,
+		showAddButton = true,
+		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		onAttachmentRemove,
@@ -703,6 +705,8 @@
 				{isLoading}
 				{isRecording}
 				{isTranscribing}
+				{showAddButton}
+				{showModelSelector}
 				{uploadedFiles}
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}

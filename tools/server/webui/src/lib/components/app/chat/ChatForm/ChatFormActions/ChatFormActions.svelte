@@ -30,6 +30,8 @@
 		isLoading?: boolean;
 		isRecording?: boolean;
 		isTranscribing?: boolean;
+		showAddButton?: boolean;
+		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -46,6 +48,8 @@
 		isLoading = false,
 		isRecording = false,
 		isTranscribing = false,
+		showAddButton = true,
+		showModelSelector = true,
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
@@ -197,32 +201,34 @@
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
 	<div class="mr-auto flex items-center gap-2">
-		{#if isMobile.current}
-			<ChatFormActionAttachmentsSheet
-				{disabled}
-				{hasAudioModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
-			/>
-		{:else}
-			<ChatFormActionAttachmentsDropdown
-				{disabled}
-				{hasAudioModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
-			/>
+		{#if showAddButton}
+			{#if isMobile.current}
+				<ChatFormActionAttachmentsSheet
+					{disabled}
+					{hasAudioModality}
+					{hasVisionModality}
+					{hasMcpPromptsSupport}
+					{hasMcpResourcesSupport}
+					{onFileUpload}
+					{onSystemPromptClick}
+					{onMcpPromptClick}
+					{onMcpResourcesClick}
+					onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
+				/>
+			{:else}
+				<ChatFormActionAttachmentsDropdown
+					{disabled}
+					{hasAudioModality}
+					{hasVisionModality}
+					{hasMcpPromptsSupport}
+					{hasMcpResourcesSupport}
+					{onFileUpload}
+					{onSystemPromptClick}
+					{onMcpPromptClick}
+					{onMcpResourcesClick}
+					onMcpSettingsClick={() => chatSettingsDialog.open(SETTINGS_SECTION_TITLES.MCP)}
+				/>
+			{/if}
 		{/if}
 
 		<McpServersSelector
@@ -233,16 +239,18 @@
 		<ChatFormActionTools {disabled} />
 	</div>
 
-	<div class="ml-auto flex items-center gap-1.5">
-		<ChainPicker
-			bind:this={chainPickerRef}
-			{disabled}
-			{isOffline}
-			{activeModelId}
-			{conversationModel}
-			{isRouter}
-		/>
-	</div>
+	{#if showModelSelector}
+		<div class="ml-auto flex items-center gap-1.5">
+			<ChainPicker
+				bind:this={chainPickerRef}
+				{disabled}
+				{isOffline}
+				{activeModelId}
+				{conversationModel}
+				{isRouter}
+			/>
+		</div>
+	{/if}
 
 	{#if isLoading}
 		<Button

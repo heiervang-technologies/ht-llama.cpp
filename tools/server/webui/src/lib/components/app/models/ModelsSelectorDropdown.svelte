@@ -208,7 +208,7 @@
 									{isSelected}
 									{isHighlighted}
 									{isFav}
-									{hideOrgName}
+									showOrgName={!hideOrgName}
 									onSelect={ms.handleSelect}
 									onInfoClick={ms.handleInfoClick}
 									onMouseEnter={() => (highlightedIndex = flatIndex)}

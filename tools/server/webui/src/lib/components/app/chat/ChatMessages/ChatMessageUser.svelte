@@ -13,28 +13,22 @@
 
 	interface Props {
 		class?: string;
-		message?: DatabaseMessage;
+		message: DatabaseMessage;
 		siblingInfo?: ChatMessageSiblingInfo | null;
-		deletionInfo?: {
+		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
 			assistantMessages: number;
 			messageTypes: string[];
 		} | null;
-		showDeleteDialog?: boolean;
-		onEdit?: () => void;
-		onDelete?: () => void;
-		onConfirmDelete?: () => void;
+		showDeleteDialog: boolean;
+		onEdit: () => void;
+		onDelete: () => void;
+		onConfirmDelete: () => void;
 		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onShowDeleteDialogChange?: (show: boolean) => void;
+		onShowDeleteDialogChange: (show: boolean) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onCopy?: () => void;
-		content?: string;
-		attachments?: DatabaseMessageExtra[];
-		renderMarkdown?: boolean;
-		textColorClass?: string;
-		cardBgClass?: string;
-		maxHeightStyle?: string;
+		onCopy: () => void;
 	}
 
 	let {
