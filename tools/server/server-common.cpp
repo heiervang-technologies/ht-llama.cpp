@@ -84,6 +84,10 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+std::string gen_rerankid() {
+    return "rerank-" + random_string();
+}
+
 const char * get_media_marker() {
     static const std::string marker = []() {
         // allow user to pin a reproducible marker via env var
@@ -1270,7 +1274,11 @@ json format_response_rerank(
         std::vector<std::string> & texts,
         int top_n) {
     int32_t n_tokens = 0;
-    bool return_text = is_tei_format && json_value(request, "return_text", false);
+    // TEI uses `return_text` on items; HT-compat / Cohere uses
+    // `return_documents` with the document text echoed at
+    // results[].document.text. Honor both shapes per-format.
+    bool return_text      = is_tei_format && json_value(request, "return_text", false);
+    bool return_documents = !is_tei_format && json_value(request, "return_documents", false);
     std::vector<json> elements; // Temporary vector to hold unsorted elements
     std::string score_label = is_tei_format ? "score" : "relevance_score";
     for (const auto & rank : ranks) {
@@ -1282,6 +1290,9 @@ json format_response_rerank(
         n_tokens += json_value(rank, "tokens_evaluated", 0);
         if (return_text) {
             elem["text"] = std::move(texts[index]);
+        }
+        if (return_documents) {
+            elem["document"] = json{{"text", texts[index]}};
         }
         elements.push_back(elem);
     }
@@ -1296,6 +1307,7 @@ json format_response_rerank(
     if (is_tei_format) return results;
 
     json res = json{
+        {"id", gen_rerankid()},
         {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json{
