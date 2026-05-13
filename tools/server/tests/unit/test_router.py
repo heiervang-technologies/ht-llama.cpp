@@ -101,19 +101,13 @@ def test_router_chat_unknown_model_returns_400():
     must return 400 invalid_request_error, not 500. See #41."""
     global server
     server.start()
-    ex: ServerError | None = None
-    try:
-        server.make_request("POST", "/chat/completions", data={
-            "model": "non-existent/model",
-            "max_tokens": 8,
-            "messages": [{"role": "user", "content": "hi"}],
-        })
-    except ServerError as e:
-        ex = e
-
-    assert ex is not None, "expected request to fail with a ServerError"
-    assert ex.code == 400, f"expected 400 (invalid_request), got {ex.code}: {ex.body}"
-    err = ex.body.get("error", {}) if isinstance(ex.body, dict) else {}
+    res = server.make_request("POST", "/chat/completions", data={
+        "model": "non-existent/model",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert res.status_code == 400, f"expected 400 (invalid_request), got {res.status_code}: {res.body}"
+    err = res.body.get("error", {}) if isinstance(res.body, dict) else {}
     assert err.get("type") == "invalid_request_error", f"unexpected error type: {err}"
     assert "not found" in (err.get("message") or "").lower()
 
