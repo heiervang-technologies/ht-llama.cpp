@@ -865,7 +865,8 @@ void server_models::wait_until_loading_finished(const std::string & name) {
 bool server_models::ensure_model_ready(const std::string & name) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
+        // Model name not in /v1/models — client error (400).
+        throw std::invalid_argument("model name=" + name + " is not found");
     }
     if (meta->is_ready()) {
         return false; // ready for taking requests
@@ -885,7 +886,10 @@ bool server_models::ensure_model_ready(const std::string & name) {
     // check final status
     meta = get_meta(name);
     if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
+        // Model exists in /v1/models but the load attempt didn't succeed —
+        // transient capability gap (memory pressure, eviction, contention).
+        // Maps to 503 Service Unavailable so clients can retry.
+        throw model_unavailable_error("model name=" + name + " failed to load");
     }
 
     return true;
@@ -894,7 +898,8 @@ bool server_models::ensure_model_ready(const std::string & name) {
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
+        // Model name not in /v1/models — client error (400).
+        throw std::invalid_argument("model name=" + name + " is not found");
     }
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
