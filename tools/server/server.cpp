@@ -47,6 +47,12 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
+        } catch (const model_unavailable_error & e) {
+            // model exists in /v1/models but isn't loadable right now —
+            // transient capability gap, 503 Service Unavailable. See
+            // heiervang-technologies/ht-llama.cpp#41.
+            error = ERROR_TYPE_UNAVAILABLE;
+            message = e.what();
         } catch (const std::exception & e) {
             // treat other exceptions as server error (500)
             error = ERROR_TYPE_SERVER;

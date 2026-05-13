@@ -86,6 +86,15 @@ struct server_model_meta {
 
 struct subprocess_s;
 
+// Thrown when a model that is listed in /v1/models can't be loaded right now
+// (memory pressure, contention, eviction policy). Distinct from std::runtime_error
+// so the HTTP wrapper can map it to 503 Service Unavailable instead of 500 —
+// the request was well-formed and the model exists; the failure is transient.
+// See heiervang-technologies/ht-llama.cpp#41.
+struct model_unavailable_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct server_models {
 private:
     struct instance_t {
