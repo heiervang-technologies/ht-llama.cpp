@@ -1,0 +1,60 @@
+# aioc compat probe for ht-llama.cpp's llama-server.
+#
+# Builds llama-server from the PR, boots it on a tiny test model, and
+# probes the OpenAI surface via heiervang-technologies/am-i-openai-compatible.
+# A FAIL row fails the job; WARN rows (e.g. /v1/audio/* on a build that
+# doesn't expose the ComfyUI proxy) are reported but don't fail.
+#
+# Test model: ggml-org/test-model-stories260K (~1 MB, sub-2s startup).
+# It generates gibberish but answers every endpoint shape correctly,
+# which is exactly what aioc's Phase B signature checks need.
+
+name: aioc compat
+on:
+  pull_request:
+    paths:
+      - 'tools/server/**'
+      - '.github/workflows/aioc.yml'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build llama-server
+        run: |
+          cmake -B build -DLLAMA_CURL=ON
+          cmake --build build --target llama-server -j 4
+
+      - name: Start llama-server
+        run: |
+          ./build/bin/llama-server \
+            -hf ggml-org/test-model-stories260K \
+            --port 8080 \
+            --embeddings \
+            >server.log 2>&1 &
+          for i in {1..60}; do
+            if curl -fs http://127.0.0.1:8080/health >/dev/null; then
+              echo "server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server failed to come up; last 50 lines of log:"
+          tail -n 50 server.log
+          exit 1
+
+      - uses: heiervang-technologies/am-i-openai-compatible@v0.1.1-pre1
+        with:
+          base-url: http://127.0.0.1:8080
+          name: ht-llama.cpp-${{ github.sha }}
+          fail-on: FAIL
+          # Pin the Python package to the same git ref so the action and
+          # the catalog/probe code move together until 0.1.1 lands on PyPI.
+          # After that, drop this line to take the latest published catalog.
+          aioc-version: "git+https://github.com/heiervang-technologies/am-i-openai-compatible.git@v0.1.1-pre1"
+
+      - name: Stop llama-server
+        if: always()
+        run: pkill -f llama-server || true
