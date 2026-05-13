@@ -55,10 +55,13 @@ jobs:
           # /v1/images/decompositions). 404 on HT rows is FAIL under
           # `ht` profile.
           profile: ht
-          # WARN until ht-llama.cpp ships its first HT endpoint —
-          # missing-rows are visible in the step summary but don't fail
-          # the build. Flip to FAIL once the first HT endpoint lands.
-          fail-on: WARN
+          # Discovery mode while ht-llama.cpp ships 0/5 HT endpoints —
+          # `none` keeps the build green regardless of FAIL/WARN row
+          # counts; the missing rows are still visible in the step
+          # summary. Flip to FAIL (default) once the first HT endpoint
+          # lands and we want to gate regressions.
+          fail-on: none
+          report-path: aioc-report-ht.json
           # Pin the Python package to the same git ref so the action and
           # the catalog/probe code move together until 0.2.0 lands on PyPI.
           # After that, drop this line to take the latest published catalog.
