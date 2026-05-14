@@ -88,7 +88,7 @@
 
 	let processor = $derived(() => {
 		void attachments;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
 		if (!disableMath) {

@@ -79,7 +79,6 @@ export async function convertPDFToText(file: File): Promise<string> {
 		const textContentPromises: Promise<TextContent>[] = [];
 
 		for (let i = 1; i <= numPages; i++) {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			textContentPromises.push(pdf.getPage(i).then((page: any) => page.getTextContent()));
 		}
 

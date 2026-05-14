@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
-	import { ChatMessage, ChatMessagePhantomContext, ChatMessageUserPending } from '$lib/components/app';
+	import { ChatMessage, ChatMessagePhantomContext } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -294,34 +294,4 @@
 			/>
 		</div>
 	{/each}
-
-	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
-
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={agenticPendingSteeringMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticClearSteeringMessage(convId)}
-			/>
-		{/if}
-	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = chatPendingMessageContent(convId)}
-
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={chatPendingMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-				onDelete={() => chatClearPendingMessage(convId)}
-			/>
-		{/if}
-	{/if}
 </div>

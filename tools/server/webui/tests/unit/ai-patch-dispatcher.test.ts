@@ -110,7 +110,6 @@ vi.mock('$lib/stores/artifact-gallery.svelte', () => ({
 				mimeType: payload.mimeType as string,
 				text: payload.text as string,
 				metadata: payload.metadata as Record<string, unknown> | undefined
-				// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			} as any);
 			fixtures.loadCalls += 1;
 			return rev;

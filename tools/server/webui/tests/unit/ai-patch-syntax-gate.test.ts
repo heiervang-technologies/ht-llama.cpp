@@ -89,11 +89,9 @@ describe('validateSyntax — SSR-safe fallbacks', () => {
 
 describe('validateSyntax — with a DOMParser shim installed', () => {
 	beforeAll(() => {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		(globalThis as any).DOMParser = FakeDOMParser;
 	});
 	afterAll(() => {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		delete (globalThis as any).DOMParser;
 	});
 
@@ -129,9 +127,8 @@ describe('validateSyntax — with a DOMParser shim installed', () => {
 	});
 
 	it('truncates very long parser errors to keep repair prompts bounded', () => {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		const originalParser = (globalThis as any).DOMParser;
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 		(globalThis as any).DOMParser = class {
 			parseFromString() {
 				return {
@@ -149,7 +146,6 @@ describe('validateSyntax — with a DOMParser shim installed', () => {
 				expect(res.error.endsWith('…')).toBe(true);
 			}
 		} finally {
-			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			(globalThis as any).DOMParser = originalParser;
 		}
 	});

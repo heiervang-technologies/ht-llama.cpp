@@ -45,7 +45,10 @@ export default ts.config(
 			// ChatMessageActionCard's `children` snippet is unused in the
 			// upstream body but exposed in Props for ht callers that pass
 			// children. Same follow-up.
-			'@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^(_|children$)' }]
+			'@typescript-eslint/no-unused-vars': [
+				'error',
+				{ argsIgnorePattern: '^_', varsIgnorePattern: '^(_|children$)' }
+			]
 		}
 	},
 	{

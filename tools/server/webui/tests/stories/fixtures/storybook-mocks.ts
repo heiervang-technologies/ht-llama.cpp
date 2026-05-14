@@ -27,13 +27,12 @@ export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 	const vision = props.modalities?.vision ?? false;
 	const audio = props.modalities?.audio ?? false;
 
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	(modelsStore as any).modelSupportsVision = () => vision;
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 	(modelsStore as any).modelSupportsAudio = () => audio;
 
 	// Mock models list with a test model so activeModelId can be resolved
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 	(modelsStore as any).models = [
 		{
 			id: 'test-model',
@@ -43,7 +42,7 @@ export function mockServerProps(props: Partial<ApiLlamaCppServerProps>): void {
 	];
 
 	// Mock selectedModelId
-	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 	(modelsStore as any).selectedModelId = 'test-model';
 }
 
