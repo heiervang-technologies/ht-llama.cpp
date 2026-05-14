@@ -2,6 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import type { DatabaseArtifact, DatabaseArtifactRevision } from '$lib/types/database';
 	import MarkdownContent from '$lib/components/app/content/MarkdownContent/MarkdownContent.svelte';
+	import { artifactDrag, ARTIFACT_DRAG_MIME } from '$lib/stores/artifact-drag.svelte';
 
 	interface Props {
 		artifact: DatabaseArtifact;
@@ -10,6 +11,40 @@
 	let { artifact, revision }: Props = $props();
 
 	let objectUrl = $state<string | null>(null);
+
+	// Best-effort file name when the user drags the artifact out. Title may
+	// contain characters the OS file pipeline dislikes, so strip the worst
+	// offenders and append the MIME-derived extension when it's missing.
+	function dragFileName(): string {
+		const safe = artifact.title.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'artifact';
+		const mime = revision.blob?.type || revision.mimeType || '';
+		const ext = mime.split('/')[1]?.split(';')[0];
+		return ext && !safe.toLowerCase().endsWith('.' + ext.toLowerCase()) ? `${safe}.${ext}` : safe;
+	}
+
+	function handleDragStart(event: DragEvent) {
+		if (!revision.blob || !event.dataTransfer) return;
+		const file = new File([revision.blob], dragFileName(), {
+			type: revision.blob.type || revision.mimeType
+		});
+		artifactDrag.begin(file);
+		// Custom MIME signals "this is one of ours" to the drop target so the
+		// existing 'Files'-only overlay path also lights up. The file payload
+		// itself is handed off through the module-level holder — webkit2gtk's
+		// support for dataTransfer.items.add(file) is too patchy to rely on.
+		try {
+			event.dataTransfer.setData(ARTIFACT_DRAG_MIME, file.name);
+		} catch {
+			/* setData is allowed to throw in some embedded contexts; harmless */
+		}
+		event.dataTransfer.effectAllowed = 'copy';
+	}
+
+	function handleDragEnd() {
+		// If the drop landed somewhere unrelated, clear the holder so a later
+		// native file drop doesn't accidentally pick up this stale artifact.
+		artifactDrag.end();
+	}
 
 	// Defer mounting the <video> element until the user explicitly asks
 	// to play. webkit2gtk's GStreamer pipeline can crash the WebProcess
@@ -43,7 +78,15 @@
 
 <div class="flex h-full w-full flex-col overflow-hidden rounded-lg border bg-card">
 	{#if artifact.kind === 'image' && objectUrl}
-		<img src={objectUrl} alt={artifact.title} class="h-full w-full object-contain" loading="lazy" />
+		<img
+			src={objectUrl}
+			alt={artifact.title}
+			class="h-full w-full cursor-grab object-contain active:cursor-grabbing"
+			loading="lazy"
+			draggable="true"
+			ondragstart={handleDragStart}
+			ondragend={handleDragEnd}
+		/>
 	{:else if artifact.kind === 'video' && objectUrl}
 		{#if videoMounted}
 			<!-- svelte-ignore a11y_media_has_caption -->

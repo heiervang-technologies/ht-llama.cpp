@@ -33,6 +33,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
 	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { artifactDrag, ARTIFACT_DRAG_MIME } from '$lib/stores/artifact-drag.svelte';
 	import { tryHandleSlashCommand } from '$lib/services/chat-slash-commands';
 	import { extractMarkdownDataImageAttachments } from '$lib/utils/extract-markdown-images';
 	import { ErrorDialogType } from '$lib/enums';
@@ -170,7 +171,8 @@
 
 		dragCounter++;
 
-		if (event.dataTransfer?.types.includes('Files')) {
+		const types = event.dataTransfer?.types;
+		if (types && (types.includes('Files') || types.includes(ARTIFACT_DRAG_MIME))) {
 			isDragOver = true;
 		}
 	}
@@ -221,20 +223,31 @@
 		isDragOver = false;
 		dragCounter = 0;
 
-		if (event.dataTransfer?.files) {
-			const files = Array.from(event.dataTransfer.files);
+		// An artifact preview routes its File through the module-level holder
+		// (rather than dataTransfer.items.add) because webkit2gtk's support
+		// for that path is unreliable. Gate the holder on the custom MIME
+		// so a stale artifact drag (e.g. dragend skipped after a mid-drag
+		// unmount) can't shadow a subsequent native file drop.
+		const types = event.dataTransfer?.types;
+		const artifactFile = types?.includes(ARTIFACT_DRAG_MIME) ? artifactDrag.consume() : null;
+		const files = artifactFile
+			? [artifactFile]
+			: event.dataTransfer?.files
+				? Array.from(event.dataTransfer.files)
+				: [];
 
-			if (isEditing()) {
-				const handler = getAddFilesHandler();
+		if (files.length === 0) return;
 
-				if (handler) {
-					handler(files);
-					return;
-				}
+		if (isEditing()) {
+			const handler = getAddFilesHandler();
+
+			if (handler) {
+				handler(files);
+				return;
 			}
-
-			processFiles(files);
 		}
+
+		processFiles(files);
 	}
 
 	function handleFileRemove(fileId: string) {
