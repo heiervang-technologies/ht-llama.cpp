@@ -475,6 +475,11 @@ export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessage
  * for assistant messages.
  */
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
+// FIXME: ChatMessageActions should alias to ChatMessageActionIcons (the rich
+// icon-row toolbar) but its Props differ from the card, so the alias swap
+// cascades type errors through ~20 callers. b9df5c0b9 had the full fix; until
+// we port that surgery onto the post-2026-05-14 master, the toolbar renders
+// the thin card component — see heiervang-technologies/ht-llama.cpp#38.
 export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
 export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
 

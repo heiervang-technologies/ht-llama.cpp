@@ -665,19 +665,6 @@
 <ArtifactDrawer />
 
 <style>
-	/*
-	 * Chrome/WebKit scroll anchoring picks an element near the top of the
-	 * viewport and shifts scrollTop to keep it in view as content grows. In a
-	 * column-reverse streaming chat this fights our AutoScrollController — the
-	 * browser clings to an older message while new tokens arrive, producing a
-	 * "scroll jumps back up" effect. Letting the controller own scroll
-	 * position by disabling the browser heuristic.
-	 */
-	.chat-scroll-container,
-	.chat-scroll-container * {
-		overflow-anchor: none;
-	}
-
 	.conversation-chat-form {
 		position: relative;
 
