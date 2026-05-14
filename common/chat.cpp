@@ -1122,7 +1122,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             auto response_format = p.literal("```json") <<
                 p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)) <<
                 p.literal("```");
-            return start + p.optional(thought) + response_format;
+            return start + p.optional(thought) + response_format + p.end();
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -1183,12 +1183,21 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
             auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>"));
             auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
             auto message = p.rule("message", thought + content);
-            return start + p.zero_or_more(message) + scan_to_toolcall + tool_call;
+            // Anchor with p.end() so the model is forced to terminate after the tool-call
+            // sequence completes. Without this anchor, the lazy grammar's tool_call repeat
+            // (max = -1 under parallel_tool_calls) accepts arbitrarily-long output, and IQ4
+            // quants in particular can fail to emit <end_of_turn> after <tool_call|>,
+            // producing runaway generation that the client sees as indefinite "executing..."
+            // spinners while tokens keep streaming.
+            return start + p.zero_or_more(message) + scan_to_toolcall + tool_call + p.end();
         }
 
         // Gemma 4 may emit an extra <|channel>thought\n<channel|> at the end of the content. It may
         // also emit a single trailing <channel|> token. Consume all complete reasoning blocks and
         // then stop at the first unmatched <channel|> token.
+        // Note: no p.end() anchor here — this is the parser-only path (no grammar constrains
+        // generation), and trailing unmatched <channel|> tokens are part of gemma-4's normal
+        // output that must be tolerated.
         auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>"})));
         auto message = p.rule("message", thought + content);
         return start + p.one_or_more(message);
