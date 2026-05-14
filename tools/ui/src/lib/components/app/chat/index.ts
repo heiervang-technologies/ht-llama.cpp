@@ -475,12 +475,15 @@ export { default as ChatMessageAgenticContent } from './ChatMessages/ChatMessage
  * for assistant messages.
  */
 export { default as ChatMessageActionCard } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
-// FIXME: ChatMessageActions should alias to ChatMessageActionIcons (the rich
-// icon-row toolbar) but its Props differ from the card, so the alias swap
-// cascades type errors through ~20 callers. b9df5c0b9 had the full fix; until
-// we port that surgery onto the post-2026-05-14 master, the toolbar renders
-// the thin card component — see heiervang-technologies/ht-llama.cpp#38.
-export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCard.svelte';
+// Re-pointed to ChatMessageActionIcons (the rich icon-row) — the previous
+// ChatMessageActionCard alias silently broke the action toolbar
+// (copy/edit/regenerate/speak/...) on every message variant. The Props
+// signatures differ, so this surfaces type errors on the ~20 caller sites
+// that pass the card-shaped {icon, message, actions} into a component that
+// now expects ChatMessageActionIcons' Props. Those errors are tracked
+// debt for the strategy-(b) Props re-derivation follow-up — visible
+// rather than masked by an alias to the wrong component.
+export { default as ChatMessageActions } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
 export { default as ChatMessageActionIcons } from './ChatMessages/ChatMessageActions/ChatMessageActionIcons/ChatMessageActionIcons.svelte';
 
 /**
