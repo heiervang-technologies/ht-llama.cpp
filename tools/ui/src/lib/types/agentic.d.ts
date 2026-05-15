@@ -126,6 +126,20 @@ export interface AgenticFlowOptions {
 	model?: string;
 	temperature?: number;
 	max_tokens?: number;
+	/**
+	 * Per-turn override for the agentic loop's max-turns ceiling. Lets a
+	 * single composer submission run a longer loop (e.g. deep-research mode)
+	 * without permanently changing the saved settings.agenticMaxTurns value.
+	 */
+	maxTurnsOverride?: number;
+	/**
+	 * One-shot system message prepended to this flow's sessionMessages only.
+	 * Unlike the conversation-level system prompt (chatStore.addSystemPrompt),
+	 * this is not persisted to the conversation; it shapes the model for
+	 * a single composer turn (e.g. deep-research methodology) and disappears
+	 * on the next turn unless re-supplied.
+	 */
+	systemPromptOverride?: string;
 	[key: string]: unknown;
 }
 

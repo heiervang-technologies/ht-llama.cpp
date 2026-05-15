@@ -272,7 +272,11 @@
 		autoScroll.handleScroll();
 	}
 
-	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
+	async function handleSendMessage(
+		message: string,
+		files?: ChatUploadedFile[],
+		turnOptions?: { deepResearch?: boolean }
+	): Promise<boolean> {
 		// Intercept composer slash commands before the normal chat
 		// pipeline. `/image <prompt>` dispatches the images proxy
 		// directly (no LLM round-trip); `/edit` and `/video` toast a
@@ -313,7 +317,7 @@
 
 		// Enable autoscroll for user-initiated message sending
 		autoScroll.enable();
-		await chatStore.sendMessage(message, mergedExtras);
+		await chatStore.sendMessage(message, mergedExtras, turnOptions);
 		autoScroll.scrollToBottom();
 
 		return true;

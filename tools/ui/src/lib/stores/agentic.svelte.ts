@@ -305,6 +305,18 @@ class AgenticStore {
 		} = callbacks;
 
 		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
+
+		// One-shot system prompt override (e.g. deep-research mode). Prepended
+		// to sessionMessages only — never persisted to the conversation. If a
+		// system message already exists at index 0, this stacks in front of
+		// it so the conversation's permanent system prompt still applies.
+		if (options.systemPromptOverride) {
+			sessionMessages.unshift({
+				role: MessageRole.SYSTEM,
+				content: options.systemPromptOverride
+			});
+		}
+
 		let capturedTimings: ChatMessageTimings | undefined;
 		let totalToolCallCount = 0;
 
@@ -316,7 +328,9 @@ class AgenticStore {
 			perTurn: [],
 			llm: { predicted_n: 0, predicted_ms: 0, prompt_n: 0, prompt_ms: 0 }
 		};
-		const maxTurns = agenticConfig.maxTurns;
+		// Per-turn override beats the saved setting; falls through to the
+		// global agenticConfig.maxTurns when no override is supplied.
+		const maxTurns = options.maxTurnsOverride ?? agenticConfig.maxTurns;
 
 		const effectiveModel = options.model || modelsStore.models[0]?.model || '';
 

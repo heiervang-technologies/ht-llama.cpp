@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { Square } from '@lucide/svelte';
+	import { Square, Telescope } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ChatFormActionAttachmentsDropdown,
 		ChatFormActionAttachmentsSheet,
@@ -31,6 +32,10 @@
 		isRecording?: boolean;
 		isTranscribing?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
+		/** Deep-research mode toggle — sticky across turns within a composer
+		 *  session. When on, the next submission primes the agentic loop
+		 *  with a research-shaped system prompt and a higher turn budget. */
+		deepResearch?: boolean;
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
@@ -47,6 +52,7 @@
 		isRecording = false,
 		isTranscribing = false,
 		uploadedFiles = [],
+		deepResearch = $bindable(false),
 		onFileUpload,
 		onMicClick,
 		onStop,
@@ -231,6 +237,36 @@
 		/>
 
 		<ChatFormActionTools {disabled} />
+
+		<Tooltip.Provider delayDuration={150}>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<Button
+							{...props}
+							type="button"
+							variant="ghost"
+							size="sm"
+							{disabled}
+							aria-pressed={deepResearch}
+							aria-label="Deep research mode"
+							onclick={() => (deepResearch = !deepResearch)}
+							class="h-8 w-8 rounded-full p-0 {deepResearch
+								? 'bg-primary/15 text-primary hover:bg-primary/25 hover:text-primary'
+								: 'text-muted-foreground'}"
+						>
+							<Telescope class="h-4 w-4" />
+							<span class="sr-only">Toggle deep research</span>
+						</Button>
+					{/snippet}
+				</Tooltip.Trigger>
+				<Tooltip.Content side="top">
+					{deepResearch
+						? 'Deep research on — next turn will plan, search, and synthesise with a higher turn budget.'
+						: 'Deep research off — toggle to prime the next turn for thorough, source-cited research.'}
+				</Tooltip.Content>
+			</Tooltip.Root>
+		</Tooltip.Provider>
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
