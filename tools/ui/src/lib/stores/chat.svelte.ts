@@ -39,7 +39,10 @@ import {
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER
 } from '$lib/constants';
-import { DEEP_RESEARCH_MAX_TURNS, DEEP_RESEARCH_SYSTEM_PROMPT } from '$lib/constants/deep-research';
+import {
+	buildDeepResearchSystemPrompt,
+	computeDeepResearchTurnBudget
+} from '$lib/constants/deep-research';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
@@ -887,6 +890,22 @@ class ChatStore {
 
 		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
+			// Per-turn deep-research primers — applied only to this flow,
+			// never persisted to settings or the conversation. The system
+			// prompt and turn budget adapt to the active model's advertised
+			// context size (via /v1/models props cache); a wider window
+			// gets more turns and a higher token-budget hint in the prompt.
+			const deepResearchPrimers = turnOptions?.deepResearch
+				? (() => {
+						const contextSize = effectiveModel
+							? modelsStore.getModelContextSize(effectiveModel)
+							: null;
+						return {
+							systemPromptOverride: buildDeepResearchSystemPrompt(contextSize),
+							maxTurnsOverride: computeDeepResearchTurnBudget(contextSize)
+						};
+					})()
+				: {};
 			try {
 				const agenticResult = await agenticStore.runAgenticFlow({
 					conversationId: convId,
@@ -894,14 +913,7 @@ class ChatStore {
 					options: {
 						...this.getApiOptions(),
 						...(effectiveModel ? { model: effectiveModel } : {}),
-						// Per-turn deep-research primers — only applied to this
-						// flow, never persisted to settings or the conversation.
-						...(turnOptions?.deepResearch
-							? {
-									systemPromptOverride: DEEP_RESEARCH_SYSTEM_PROMPT,
-									maxTurnsOverride: DEEP_RESEARCH_MAX_TURNS
-								}
-							: {})
+						...deepResearchPrimers
 					},
 					callbacks: streamCallbacks,
 					signal: abortController.signal,
