@@ -56,6 +56,8 @@
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
+		/** Bindable per-composer-session toggle for deep-research mode. */
+		deepResearch?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -77,6 +79,7 @@
 		showMcpPromptButton = false,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
+		deepResearch = $bindable(false),
 		onAttachmentRemove,
 		onFilesAdd,
 		onStop,
@@ -702,6 +705,7 @@
 				{isRecording}
 				{isTranscribing}
 				{uploadedFiles}
+				bind:deepResearch
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}

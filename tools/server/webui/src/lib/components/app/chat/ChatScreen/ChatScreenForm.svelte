@@ -11,7 +11,11 @@
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
-		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
+		onSend?: (
+			message: string,
+			files?: ChatUploadedFile[],
+			turnOptions?: { deepResearch?: boolean }
+		) => Promise<boolean>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		showHelperText?: boolean;
@@ -36,6 +40,10 @@
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
+	// Composer-local deep-research toggle. Stays on across turns within
+	// this session so the user can ask follow-ups without re-toggling,
+	// and is cleared when the form unmounts (e.g. conversation switch).
+	let deepResearch = $state(false);
 
 	// Sync message when initialMessage prop changes (e.g., after draft restoration)
 	$effect(() => {
@@ -70,7 +78,8 @@
 
 		chatFormRef?.resetTextareaHeight();
 
-		const success = await onSend?.(messageToSend, filesToSend);
+		const turnOptions = deepResearch ? { deepResearch: true } : undefined;
+		const success = await onSend?.(messageToSend, filesToSend, turnOptions);
 
 		if (!success) {
 			message = messageToSend;
@@ -108,6 +117,7 @@
 		bind:this={chatFormRef}
 		bind:value={message}
 		bind:uploadedFiles
+		bind:deepResearch
 		class={className}
 		{disabled}
 		{isLoading}

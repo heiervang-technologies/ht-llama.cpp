@@ -39,6 +39,10 @@ import {
 	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER
 } from '$lib/constants';
+import {
+	buildDeepResearchSystemPrompt,
+	computeDeepResearchTurnBudget
+} from '$lib/constants/deep-research';
 import type {
 	ChatMessageTimings,
 	ChatMessagePromptProgress,
@@ -60,6 +64,16 @@ import { toast } from 'svelte-sonner';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
+}
+
+/**
+ * Per-turn composer modifiers — applied once for the next submission and
+ * not persisted to the conversation. Used to prime the agentic loop with
+ * a different system prompt / turn budget (e.g. deep-research mode) without
+ * mutating the user's saved settings.
+ */
+export interface TurnOptions {
+	deepResearch?: boolean;
 }
 
 /**
@@ -484,7 +498,11 @@ class ChatStore {
 		);
 	}
 
-	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
+	async sendMessage(
+		content: string,
+		extras?: DatabaseMessageExtra[],
+		turnOptions?: TurnOptions
+	): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 		const activeConv = conversationsStore.activeConversation;
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) return;
@@ -538,7 +556,11 @@ class ChatStore {
 			conversationsStore.addMessageToActive(assistantMessage);
 			await this.streamChatCompletion(
 				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
+				assistantMessage,
+				undefined,
+				undefined,
+				undefined,
+				turnOptions
 			);
 			// ai-patch repair loop: if the assistant turn owned a PatchSession
 			// and it ended with a repairable failure (F2/F3/F6/F7/F11/F14),
@@ -573,7 +595,8 @@ class ChatStore {
 		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void,
-		modelOverride?: string | null
+		modelOverride?: string | null,
+		turnOptions?: TurnOptions
 	): Promise<void> {
 		let effectiveModel = modelOverride;
 
@@ -861,13 +884,30 @@ class ChatStore {
 
 		const agenticConfig = agenticStore.getConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
+			// Per-turn deep-research primers — applied only to this flow,
+			// never persisted to settings or the conversation. The system
+			// prompt and turn budget adapt to the active model's advertised
+			// context size (via /v1/models props cache); a wider window
+			// gets more turns and a higher token-budget hint in the prompt.
+			const deepResearchPrimers = turnOptions?.deepResearch
+				? (() => {
+						const contextSize = effectiveModel
+							? modelsStore.getModelContextSize(effectiveModel)
+							: null;
+						return {
+							systemPromptOverride: buildDeepResearchSystemPrompt(contextSize),
+							maxTurnsOverride: computeDeepResearchTurnBudget(contextSize)
+						};
+					})()
+				: {};
 			try {
 				const agenticResult = await agenticStore.runAgenticFlow({
 					conversationId: convId,
 					messages: allMessages,
 					options: {
 						...this.getApiOptions(),
-						...(effectiveModel ? { model: effectiveModel } : {})
+						...(effectiveModel ? { model: effectiveModel } : {}),
+						...deepResearchPrimers
 					},
 					callbacks: streamCallbacks,
 					signal: abortController.signal,
