@@ -49,6 +49,7 @@
 import { DatabaseService } from './database.service';
 import { artifactGalleryStore } from '$lib/stores/artifact-gallery.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { imageJobs, type ImageJobKind } from '$lib/stores/image-jobs.svelte';
 import { getFetch } from '$lib/utils/tauri-fetch';
 import type { DatabaseArtifactKind } from '$lib/types/database';
 import type { MCPToolCall, OpenAIToolDefinition, ToolExecutionResult } from '$lib/types/mcp';
@@ -841,6 +842,19 @@ export async function runImageGeneration(
 		body.seed = opts.seed;
 	}
 
+	const jobSource: 'chat-tool' | 'playground' | 'slash-command' =
+		opts.source === 'playground'
+			? 'playground'
+			: opts.source === 'direct'
+				? 'slash-command'
+				: 'chat-tool';
+	const jobId = imageJobs.submit({
+		kind: 't2i' as ImageJobKind,
+		model,
+		prompt,
+		source: jobSource
+	});
+
 	let res: Response;
 	try {
 		res = await fetch(`${base}/v1/images/generations`, {
@@ -851,6 +865,7 @@ export async function runImageGeneration(
 		});
 	} catch (fetchErr) {
 		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		imageJobs.fail(jobId, `Network error: ${message}`);
 		throw new Error(`Network error reaching ${base}: ${message}`);
 	}
 
@@ -865,6 +880,7 @@ export async function runImageGeneration(
 				/* ignore */
 			}
 		}
+		imageJobs.fail(jobId, `HTTP ${res.status}`);
 		throw new Error(`Images proxy HTTP ${res.status}: ${detail || 'no body'}`);
 	}
 
@@ -875,6 +891,7 @@ export async function runImageGeneration(
 	const payload = (await res.json()) as GenResp;
 	const items = payload.data ?? [];
 	if (items.length === 0) {
+		imageJobs.fail(jobId, 'Proxy returned no images');
 		throw new Error('Images proxy returned no images.');
 	}
 
@@ -931,9 +948,11 @@ export async function runImageGeneration(
 	}
 
 	if (saved.length === 0) {
+		imageJobs.fail(jobId, 'No usable image in proxy response');
 		throw new Error('Images proxy returned rows but none had usable b64_json or a fetchable url.');
 	}
 
+	imageJobs.complete(jobId);
 	return { model, size: size ?? null, prompt, images: saved };
 }
 
@@ -1174,6 +1193,15 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 		body.seed = opts.seed;
 	}
 
+	const editSource: 'chat-tool' | 'playground' | 'edit' =
+		opts.source === 'playground' ? 'playground' : opts.source === 'direct' ? 'edit' : 'chat-tool';
+	const jobId = imageJobs.submit({
+		kind: 'edit' as ImageJobKind,
+		model,
+		prompt,
+		source: editSource
+	});
+
 	let res: Response;
 	try {
 		res = await fetch(`${base}/v1/images/edits`, {
@@ -1184,6 +1212,7 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 		});
 	} catch (fetchErr) {
 		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		imageJobs.fail(jobId, `Network error: ${message}`);
 		throw new Error(`Network error reaching ${base}: ${message}`);
 	}
 
@@ -1198,6 +1227,7 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 				/* ignore */
 			}
 		}
+		imageJobs.fail(jobId, `HTTP ${res.status}`);
 		throw new Error(`Images-edit proxy HTTP ${res.status}: ${detail || 'no body'}`);
 	}
 
@@ -1207,7 +1237,10 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	};
 	const payload = (await res.json()) as EditResp;
 	const items = payload.data ?? [];
-	if (items.length === 0) throw new Error('Images-edit proxy returned no images.');
+	if (items.length === 0) {
+		imageJobs.fail(jobId, 'Proxy returned no images');
+		throw new Error('Images-edit proxy returned no images.');
+	}
 
 	const saved: RunImageEditResult['images'] = [];
 	for (let i = 0; i < items.length; i++) {
@@ -1264,11 +1297,13 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	}
 
 	if (saved.length === 0) {
+		imageJobs.fail(jobId, 'No usable image in proxy response');
 		throw new Error(
 			'Images-edit proxy returned rows but none had usable b64_json or a fetchable url.'
 		);
 	}
 
+	imageJobs.complete(jobId);
 	return { model, size, prompt, sourceArtifactId, images: saved };
 }
 
@@ -1479,6 +1514,17 @@ export async function runVideoGeneration(
 	// schema). Earlier guesses of `last_frame` got silently dropped.
 	if (cleanLastFrame) body.image_end = cleanLastFrame;
 
+	const videoKind: ImageJobKind =
+		model === 'wan22-s2v' ? 's2v' : model === 'wan21-flf' ? 'flf' : 'i2v';
+	const videoSource: 'chat-tool' | 'playground' =
+		opts.source === 'playground' ? 'playground' : 'chat-tool';
+	const jobId = imageJobs.submit({
+		kind: videoKind,
+		model,
+		prompt: effectivePrompt,
+		source: videoSource
+	});
+
 	let submitRes: Response;
 	try {
 		submitRes = await fetch(`${base}/v1/videos`, {
@@ -1489,6 +1535,7 @@ export async function runVideoGeneration(
 		});
 	} catch (fetchErr) {
 		const message = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+		imageJobs.fail(jobId, `Network error: ${message}`);
 		throw new Error(`Network error reaching ${base}: ${message}`);
 	}
 	if (!submitRes.ok) {
@@ -1502,15 +1549,20 @@ export async function runVideoGeneration(
 				/* ignore */
 			}
 		}
+		imageJobs.fail(jobId, `HTTP ${submitRes.status}`);
 		throw new Error(`Videos proxy HTTP ${submitRes.status}: ${detail || 'no body'}`);
 	}
 
 	const job = (await submitRes.json()) as VideoJobStatus;
-	if (!job.id) throw new Error('Videos proxy returned no job id.');
+	if (!job.id) {
+		imageJobs.fail(jobId, 'No job id from proxy');
+		throw new Error('Videos proxy returned no job id.');
+	}
 
 	const budget = VIDEO_POLL_BUDGET_MS[model] ?? DEFAULT_VIDEO_POLL_BUDGET_MS;
 	const final = await pollVideoJob(base, job.id, headers, budget, opts.signal);
 	if (final.status === 'failed') {
+		imageJobs.fail(jobId, final.error ?? 'job failed');
 		throw new Error(`Video job ${job.id} failed: ${final.error ?? 'no error detail provided'}`);
 	}
 
@@ -1520,6 +1572,7 @@ export async function runVideoGeneration(
 		signal: opts.signal
 	});
 	if (!contentRes.ok) {
+		imageJobs.fail(jobId, `Content HTTP ${contentRes.status}`);
 		throw new Error(
 			`Content fetch HTTP ${contentRes.status} for job ${job.id} (completed but no bytes).`
 		);
@@ -1546,6 +1599,7 @@ export async function runVideoGeneration(
 		}
 	});
 
+	imageJobs.complete(jobId);
 	return {
 		model,
 		size,

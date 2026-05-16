@@ -7,7 +7,8 @@
 	import {
 		ChatSidebar,
 		DialogConversationTitleUpdate,
-		DialogChatSettings
+		DialogChatSettings,
+		ImageJobsPanel
 	} from '$lib/components/app';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
@@ -291,6 +292,8 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
+
+	<ImageJobsPanel />
 
 	<DialogChatSettings
 		open={chatSettingsDialogOpen}

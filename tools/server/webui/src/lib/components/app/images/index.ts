@@ -7,3 +7,4 @@
  * (`playground` here so the four entry points stay distinguishable).
  */
 export { default as ImagesScreen } from './ImagesScreen.svelte';
+export { default as ImageJobsPanel } from './ImageJobsPanel.svelte';
