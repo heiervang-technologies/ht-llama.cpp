@@ -170,6 +170,9 @@ AGENTS.local.md
 /.playwright-mcp/
 /docs/superpowers/
 
+# Pre-commit tracked-debt audit log (HT_TRACKED_DEBT_COMMIT=1 bypass)
+/.ht-tracked-debt.log
+
 # Local scratch (debug scripts, cached diffs, screenshots)
 /fix_deadlocks.py
 /patch_fattn.py
