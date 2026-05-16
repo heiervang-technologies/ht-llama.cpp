@@ -41,7 +41,7 @@
 		// the same terminal focuses the existing window instead of
 		// spawning a duplicate.
 		await openInNewWindow(`#/terminals/${id}`, {
-			title: `${displayName} · ht-llama.cpp`,
+			title: `${displayName} · heierchat`,
 			label: `term-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
 			width: 960,
 			height: 720

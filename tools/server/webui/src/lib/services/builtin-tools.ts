@@ -2173,7 +2173,7 @@ register({
 					// Lots of sites serve different (cleaner) markup to non-browser
 					// User-Agents; a plain UA gets us a static page more often.
 					'User-Agent':
-						'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
+						'Mozilla/5.0 (compatible; heierchat/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
 					Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 				}
 			});
@@ -2332,7 +2332,7 @@ register({
 				signal,
 				headers: {
 					'User-Agent':
-						'Mozilla/5.0 (compatible; ht-llama.cpp/fetch_image; +https://github.com/heiervang-technologies/ht-llama.cpp)',
+						'Mozilla/5.0 (compatible; heierchat/fetch_image; +https://github.com/heiervang-technologies/ht-llama.cpp)',
 					Accept: 'image/*,*/*;q=0.5'
 				}
 			});

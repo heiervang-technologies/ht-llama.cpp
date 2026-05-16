@@ -216,7 +216,7 @@
 		// the existing window instead of duplicating it. Tauri-only;
 		// the helper falls back to window.open in plain browser mode.
 		await openInNewWindow(`#/artifacts/${artifact.id}`, {
-			title: `${artifact.title} · ht-llama.cpp`,
+			title: `${artifact.title} · heierchat`,
 			label: `art-${artifact.id.replace(/[^a-zA-Z0-9_-]/g, '_')}`,
 			width: 1100,
 			height: 800

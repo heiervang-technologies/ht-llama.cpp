@@ -166,7 +166,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - ht-llama.cpp</title>
+	<title>{activeConversation()?.name || 'Chat'} - heierchat</title>
 </svelte:head>
 
 <ChatScreen />

@@ -100,7 +100,7 @@ export async function openInNewWindow(
 	route: string,
 	opts: { title?: string; label?: string; width?: number; height?: number } = {}
 ): Promise<void> {
-	const { title = 'ht-llama.cpp', label, width = 960, height = 720 } = opts;
+	const { title = 'heierchat', label, width = 960, height = 720 } = opts;
 	const url = window.location.pathname + route;
 
 	if (isTauri()) {

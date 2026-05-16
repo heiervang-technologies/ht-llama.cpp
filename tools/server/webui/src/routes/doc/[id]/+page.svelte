@@ -7,7 +7,7 @@
 </script>
 
 <svelte:head>
-	<title>{activeDoc()?.name || 'Document'} - ht-llama.cpp</title>
+	<title>{activeDoc()?.name || 'Document'} - heierchat</title>
 </svelte:head>
 
 {#if docId}

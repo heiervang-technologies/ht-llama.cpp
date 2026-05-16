@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Images — ht-llama.cpp</title>
+	<title>Images — heierchat</title>
 </svelte:head>
 
 <ImagesScreen />

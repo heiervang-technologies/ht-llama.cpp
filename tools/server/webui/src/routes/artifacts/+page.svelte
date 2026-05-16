@@ -3,7 +3,7 @@
 </script>
 
 <svelte:head>
-	<title>Artifacts — ht-llama.cpp</title>
+	<title>Artifacts — heierchat</title>
 </svelte:head>
 
 <ArtifactGallery />

@@ -6,7 +6,7 @@
 </script>
 
 <svelte:head>
-	<title>Artifact — ht-llama.cpp</title>
+	<title>Artifact — heierchat</title>
 </svelte:head>
 
 {#if artifactId}

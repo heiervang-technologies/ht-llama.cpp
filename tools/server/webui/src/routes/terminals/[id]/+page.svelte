@@ -184,7 +184,7 @@
 </script>
 
 <svelte:head>
-	<title>{terminal?.name ?? 'Terminal'} · ht-llama.cpp</title>
+	<title>{terminal?.name ?? 'Terminal'} · heierchat</title>
 </svelte:head>
 
 <div class="flex h-full flex-col">

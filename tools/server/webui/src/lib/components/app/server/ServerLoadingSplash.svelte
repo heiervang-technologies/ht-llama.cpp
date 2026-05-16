@@ -10,7 +10,7 @@
 
 	let {
 		class: className = '',
-		message = 'Initializing connection to ht-llama.cpp server...'
+		message = 'Initializing connection to heierchat server...'
 	}: Props = $props();
 </script>
 

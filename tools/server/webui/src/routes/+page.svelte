@@ -110,7 +110,7 @@
 </script>
 
 <svelte:head>
-	<title>ht-llama.cpp - AI Chat Interface</title>
+	<title>heierchat</title>
 </svelte:head>
 
 <ChatScreen showCenteredEmpty />
