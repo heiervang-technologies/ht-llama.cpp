@@ -1194,7 +1194,11 @@ export async function runImageEdit(opts: RunImageEditOptions): Promise<RunImageE
 	}
 
 	const editSource: 'chat-tool' | 'playground' | 'edit' =
-		opts.source === 'playground' ? 'playground' : opts.source === 'direct' ? 'edit' : 'chat-tool';
+		opts.source === 'playground'
+			? 'playground'
+			: opts.source === 'direct'
+				? 'edit'
+				: 'chat-tool';
 	const jobId = imageJobs.submit({
 		kind: 'edit' as ImageJobKind,
 		model,
@@ -2126,7 +2130,7 @@ register({
 		function: {
 			name: 'fetch_url',
 			description:
-				"Fetch a single URL and return the main article content as Markdown. Uses Mozilla Readability to strip nav / footer / ads and extract the article body, then converts to Markdown. Pair with `web_search` / `search_news`: search to find candidate URLs, then `fetch_url` to actually read the most promising one. Returns `title`, `byline`, `excerpt`, `length` (char count), `markdown`, and the resolved `url` (post-redirect). 4 MB body cap and 60K-char Markdown cap so a single page can't blow out the context window. Does NOT execute JavaScript — if the page is a JS-only SPA the returned markdown will be sparse; in that case fall back to asking the user.",
+				"Fetch a single URL and return its content. Three extractor modes:\n  • `readability` (default, fast): Mozilla Readability strips nav/footer/ads, returns the article body as Markdown. Best for documentation, technical pages with prominent sidebars, anything where the article body is clearly demarcated.\n  • `defuddle`: alternative extractor that's cleaner on article-style pages (news, blog posts, Wikipedia) and surfaces `author` / `published` metadata. Slower (~3-4x) and may pick the sidebar over the article body on doc sites — use when readability gave a noisy or wrong result on the same URL.\n  • `raw`: skip extraction, return the HTML (or text/JSON for non-HTML responses) directly. Use when the page is non-article content or both extractors produced garbage. Capped at 200K chars.\n\nPair with `web_search` / `search_news` to find candidate URLs first. 4 MB body cap and 60K-char Markdown cap (200K for raw) so a single page can't blow out the context window. Does NOT execute JavaScript — JS-only SPAs will return sparse content in any mode.",
 			parameters: {
 				type: 'object',
 				properties: {
@@ -2135,12 +2139,18 @@ register({
 						description:
 							'Full URL to fetch (http:// or https://). Pick from search results; never invent. Anchors (#fragment) are kept; query strings are forwarded as-is.'
 					},
+					extractor: {
+						type: 'string',
+						enum: ['readability', 'defuddle', 'raw'],
+						description:
+							"Which extractor to run after fetching. Default `readability`. Switch to `defuddle` for cleaner article extraction on news/blogs/Wikipedia (also gets author + published date). Switch to `raw` to get unprocessed HTML/text/JSON when the page isn't article-shaped or when both extractors mauled it."
+					},
 					max_chars: {
 						type: 'integer',
 						minimum: 500,
-						maximum: 60000,
+						maximum: 200000,
 						description:
-							'Cap on returned markdown length. Defaults to 60000. Lower this when you only need the lede / first few paragraphs.'
+							'Cap on returned content length. Defaults to 60000 for readability/defuddle, 200000 for raw. Lower this when you only need the lede / first few paragraphs.'
 					}
 				},
 				required: ['url']
@@ -2159,10 +2169,18 @@ register({
 		if (target.protocol !== 'http:' && target.protocol !== 'https:') {
 			return err(`only http(s) URLs are supported; got ${target.protocol}`);
 		}
-		const maxChars = Math.min(
-			FETCH_URL_MAX_MARKDOWN_CHARS,
-			Math.max(500, Number(args.max_chars) || FETCH_URL_MAX_MARKDOWN_CHARS)
-		);
+
+		const rawExtractor = String(args.extractor ?? 'readability').toLowerCase();
+		const extractor: 'readability' | 'defuddle' | 'raw' =
+			rawExtractor === 'defuddle' ? 'defuddle' : rawExtractor === 'raw' ? 'raw' : 'readability';
+		const rawMaxCap = 200_000;
+		const maxChars =
+			extractor === 'raw'
+				? Math.min(rawMaxCap, Math.max(500, Number(args.max_chars) || rawMaxCap))
+				: Math.min(
+						FETCH_URL_MAX_MARKDOWN_CHARS,
+						Math.max(500, Number(args.max_chars) || FETCH_URL_MAX_MARKDOWN_CHARS)
+					);
 
 		const doFetch = await getFetch();
 		let res: Response;
@@ -2174,7 +2192,10 @@ register({
 					// User-Agents; a plain UA gets us a static page more often.
 					'User-Agent':
 						'Mozilla/5.0 (compatible; heierchat/fetch_url; +https://github.com/heiervang-technologies/ht-llama.cpp)',
-					Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+					Accept:
+						extractor === 'raw'
+							? '*/*'
+							: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
 				}
 			});
 		} catch (e) {
@@ -2184,13 +2205,11 @@ register({
 			return err(`HTTP ${res.status} ${res.statusText || ''}`.trim());
 		}
 		const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
-		if (
-			contentType &&
-			!contentType.includes('text/html') &&
-			!contentType.includes('application/xhtml')
-		) {
+		const isHtml =
+			contentType.includes('text/html') || contentType.includes('application/xhtml');
+		if (extractor !== 'raw' && contentType && !isHtml) {
 			return err(
-				`Response is not HTML (content-type: ${contentType}). fetch_url only extracts article content; for raw text or JSON, ask the user to copy/paste the relevant bits.`
+				`Response is not HTML (content-type: ${contentType}). Use extractor: 'raw' to fetch non-HTML responses (text, JSON, etc.).`
 			);
 		}
 		const buf = await res.arrayBuffer();
@@ -2199,63 +2218,100 @@ register({
 				`Response too large (${buf.byteLength} bytes > ${FETCH_URL_MAX_BYTES} cap). The page is likely a media file or massive static dump.`
 			);
 		}
-		const html = new TextDecoder('utf-8', { fatal: false }).decode(buf);
+		const body = new TextDecoder('utf-8', { fatal: false }).decode(buf);
 		const finalUrl = res.url || target.toString();
 
-		// Mozilla Readability needs a Document. DOMParser is available in
-		// the webview / browser context but not in SSR / Node — guard
-		// defensively so the tool fails clean if executed somewhere
-		// unexpected.
+		// Raw mode: skip all extraction, return the decoded body directly.
+		if (extractor === 'raw') {
+			let content = body;
+			let truncated = false;
+			if (content.length > maxChars) {
+				content = content.slice(0, maxChars) + '\n\n…[truncated]';
+				truncated = true;
+			}
+			return ok({
+				url: finalUrl,
+				extractor: 'raw',
+				content_type: contentType || 'unknown',
+				byte_length: buf.byteLength,
+				char_length: body.length,
+				content,
+				truncated
+			});
+		}
+
+		// Readability / Defuddle both need DOMParser.
 		if (typeof DOMParser === 'undefined') {
 			return err('fetch_url requires a browser context (DOMParser missing).');
 		}
 		const parser = new DOMParser();
-		const doc = parser.parseFromString(html, 'text/html');
-		// Strip <script> / <style> — Readability mostly handles this but
-		// being explicit avoids edge cases where leftover JS leaks into
-		// markdown.
+		const doc = parser.parseFromString(body, 'text/html');
 		for (const node of Array.from(doc.querySelectorAll('script, style, noscript, iframe'))) {
 			node.remove();
 		}
 
-		const { Readability } = await import('@mozilla/readability');
 		const { default: TurndownService } = await import('turndown');
-
-		const reader = new Readability(doc, { keepClasses: false });
-		const article = reader.parse();
-
-		if (!article || !article.content) {
-			return err(
-				`Readability could not extract article content from ${finalUrl}. The page may be a JS-rendered SPA, a paywalled article, or non-article content (homepage, login screen, etc.).`
-			);
-		}
-
 		const td = new TurndownService({
 			headingStyle: 'atx',
 			codeBlockStyle: 'fenced',
 			bulletListMarker: '-',
 			emDelimiter: '_'
 		});
-		// Drop empty links and image alt-clutter — keeps the markdown
-		// readable for the model without losing the source URLs.
 		td.addRule('drop-empty-anchors', {
 			filter: (node) =>
 				node.nodeName === 'A' && !node.textContent?.trim() && !node.querySelector('img'),
 			replacement: () => ''
 		});
 
+		if (extractor === 'defuddle') {
+			const { Defuddle } = await import('defuddle');
+			const result = new Defuddle(doc, { url: finalUrl });
+			const parsed = await result.parse();
+			if (!parsed || !parsed.content) {
+				return err(
+					`Defuddle could not extract content from ${finalUrl}. Try extractor: 'readability' or 'raw'.`
+				);
+			}
+			let markdown = td.turndown(parsed.content).trim();
+			markdown = markdown.replace(/\n{3,}/g, '\n\n');
+			let truncated = false;
+			if (markdown.length > maxChars) {
+				markdown = markdown.slice(0, maxChars).trimEnd() + '\n\n…[truncated]';
+				truncated = true;
+			}
+			return ok({
+				url: finalUrl,
+				extractor: 'defuddle',
+				title: parsed.title ?? '',
+				author: parsed.author ?? null,
+				published: parsed.published ?? null,
+				site_name: parsed.site ?? '',
+				word_count: parsed.wordCount ?? null,
+				length: markdown.length,
+				markdown,
+				truncated
+			});
+		}
+
+		// Default: Readability.
+		const { Readability } = await import('@mozilla/readability');
+		const reader = new Readability(doc, { keepClasses: false });
+		const article = reader.parse();
+		if (!article || !article.content) {
+			return err(
+				`Readability could not extract article content from ${finalUrl}. The page may be a JS-rendered SPA, a paywalled article, or non-article content. Try extractor: 'defuddle' for a different extraction strategy, or 'raw' for unprocessed HTML.`
+			);
+		}
 		let markdown = td.turndown(article.content).trim();
-		// Collapse triple+ blank lines down to a single blank — Turndown
-		// can leave a lot of vertical noise on heavy-nested HTML.
 		markdown = markdown.replace(/\n{3,}/g, '\n\n');
 		let truncated = false;
 		if (markdown.length > maxChars) {
 			markdown = markdown.slice(0, maxChars).trimEnd() + '\n\n…[truncated]';
 			truncated = true;
 		}
-
 		return ok({
 			url: finalUrl,
+			extractor: 'readability',
 			title: article.title ?? '',
 			byline: article.byline ?? null,
 			excerpt: article.excerpt ?? '',
