@@ -1,13 +1,19 @@
 # aioc compat probe for ht-llama.cpp's llama-server.
 #
-# Builds llama-server from the PR, boots it on a tiny test model, and
-# probes the OpenAI surface via heiervang-technologies/am-i-openai-compatible.
-# A FAIL row fails the job; WARN rows (e.g. /v1/audio/* on a build that
-# doesn't expose the ComfyUI proxy) are reported but don't fail.
+# Builds llama-server from the PR, boots it in **router mode** with two
+# tiny test models side-loaded via a preset INI, and probes the OpenAI
+# surface via heiervang-technologies/am-i-openai-compatible.
 #
-# Test model: ggml-org/test-model-stories260K (~1 MB, sub-2s startup).
-# It generates gibberish but answers every endpoint shape correctly,
-# which is exactly what aioc's Phase B signature checks need.
+# Models in the matrix:
+#   1. ggml-org/test-model-stories260K (~1 MB) — chat/completions, embeddings.
+#      Generates gibberish but answers every endpoint shape correctly,
+#      which is exactly what aioc's Phase B signature checks need.
+#   2. jimi0209/bge-reranker-base-Q5_K_M-GGUF (~228 MB) — the rerank kind.
+#      aioc's _classify_kind tags models by name substring, so the "rerank"
+#      in the repo id is what flips /v1/reranking Phase B from SKIP to PASS.
+#
+# Both models are pre-loaded at startup (`load-on-startup = 1`) so the
+# probe doesn't trip the autoload cold-path on its first request.
 
 name: aioc compat
 on:
@@ -27,22 +33,45 @@ jobs:
           cmake -B build -DLLAMA_CURL=ON
           cmake --build build --target llama-server -j 4
 
-      - name: Start llama-server
+      - name: Write router preset INI
+        run: |
+          cat >/tmp/aioc-presets.ini <<'INI'
+          version = 1
+
+          [*]
+          ctx-size = 1024
+
+          [ggml-org/test-model-stories260K]
+          hf-repo = ggml-org/test-model-stories260K
+          embeddings = true
+          load-on-startup = 1
+
+          [jimi0209/bge-reranker-base-Q5_K_M-GGUF]
+          hf-repo = jimi0209/bge-reranker-base-Q5_K_M-GGUF
+          reranking = true
+          load-on-startup = 1
+          INI
+
+      - name: Start llama-server (router mode)
         run: |
           ./build/bin/llama-server \
-            -hf ggml-org/test-model-stories260K \
+            --models-preset /tmp/aioc-presets.ini \
             --port 8080 \
-            --embeddings \
             >server.log 2>&1 &
-          for i in {1..60}; do
+          # Wait up to 3 minutes for both models to load (the reranker is
+          # ~230 MB so first-time download dominates this budget).
+          for i in {1..180}; do
             if curl -fs http://127.0.0.1:8080/health >/dev/null; then
-              echo "server ready after ${i}s"
-              exit 0
+              models=$(curl -fs http://127.0.0.1:8080/v1/models | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('data',[])))" 2>/dev/null || echo 0)
+              if [ "$models" -ge 2 ]; then
+                echo "router ready with $models models after ${i}s"
+                exit 0
+              fi
             fi
             sleep 1
           done
-          echo "server failed to come up; last 50 lines of log:"
-          tail -n 50 server.log
+          echo "server failed to come up with both models; last 80 lines of log:"
+          tail -n 80 server.log
           exit 1
 
       - uses: heiervang-technologies/am-i-openai-compatible@v0.2.0-pre2
@@ -55,11 +84,11 @@ jobs:
           # /v1/images/decompositions). 404 on HT rows is FAIL under
           # `ht` profile.
           profile: ht
-          # Discovery mode while ht-llama.cpp ships 0/5 HT endpoints —
+          # Discovery mode while ht-llama.cpp ships 1/5 HT endpoints —
           # `none` keeps the build green regardless of FAIL/WARN row
           # counts; the missing rows are still visible in the step
-          # summary. Flip to FAIL (default) once the first HT endpoint
-          # lands and we want to gate regressions.
+          # summary. Flip to FAIL (default) once the remaining HT
+          # endpoints land and we want to gate regressions.
           fail-on: none
           report-path: aioc-report-ht.json
           # Pin the Python package to the same git ref so the action and
@@ -70,3 +99,11 @@ jobs:
       - name: Stop llama-server
         if: always()
         run: pkill -f llama-server || true
+
+      - name: Upload aioc report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aioc-report-ht
+          path: aioc-report-ht.json
+          if-no-files-found: ignore
