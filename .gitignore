@@ -180,3 +180,4 @@ AGENTS.local.md
 /upstream-pr-*.diff
 /webui-lora*.png
 /theme-picker-*.png
+uv.lock
