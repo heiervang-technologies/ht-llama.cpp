@@ -1,41 +1,112 @@
 use std::sync::Mutex;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use serde::Deserialize;
+use tauri::menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
-/// Shared handles into the tray menu items the webview wants to update at
-/// runtime (currently just the Backend label). Held in app state so Tauri
-/// commands can borrow it.
+/// Shared handles into the tray menu pieces the webview wants to update at
+/// runtime — currently the "Switch backend" submenu and a reference to the
+/// AppHandle for rebuilding child items. Held in app state so Tauri commands
+/// can borrow it.
 struct TrayHandles {
-	backend_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+	backend_submenu: Mutex<Option<Submenu<tauri::Wry>>>,
 }
 
-/// Tauri command — the webview calls this whenever
-/// `config.backendBaseUrl` changes so the tray menu reflects the live
-/// value. Empty / null → "Backend: (not configured)". URLs are truncated
-/// to keep the menu narrow.
+#[derive(Debug, Deserialize)]
+struct BackendPreset {
+	name: String,
+	url: String,
+}
+
+/// Short, menu-friendly version of a URL.
+fn format_url_short(raw: &str) -> String {
+	let display = raw
+		.strip_prefix("https://")
+		.or_else(|| raw.strip_prefix("http://"))
+		.unwrap_or(raw);
+	let trimmed = display.trim_end_matches('/');
+	if trimmed.len() > 40 {
+		format!("{}…", &trimmed[..39])
+	} else {
+		trimmed.to_string()
+	}
+}
+
+/// Tauri command — the webview calls this whenever `config.backendBaseUrl`
+/// or `config.backendPresets` changes. We:
+///   1. Update the Submenu's parent label to the current `active` URL.
+///   2. Rebuild the Submenu's children to reflect the preset list, with
+///      the active preset rendered as a checked item.
+///   3. Each preset child has id `tray-backend-set::<url>`; the menu-event
+///      handler emits a `tray:select-backend` event with the URL when
+///      clicked, and the webview listens to swap `backendBaseUrl`.
 #[tauri::command]
-fn tray_set_backend(handles: State<'_, TrayHandles>, url: Option<String>) {
-	let label = match url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-		Some(raw) => {
-			let display = raw.strip_prefix("https://").or_else(|| raw.strip_prefix("http://")).unwrap_or(raw);
-			let trimmed = display.trim_end_matches('/');
-			let short = if trimmed.len() > 40 {
-				format!("{}…", &trimmed[..39])
-			} else {
-				trimmed.to_string()
-			};
-			format!("Backend: {}", short)
-		}
-		None => "Backend: (not configured)".to_string(),
+fn tray_set_backends(
+	app: AppHandle,
+	handles: State<'_, TrayHandles>,
+	presets: Vec<BackendPreset>,
+	active: Option<String>,
+) {
+	let active_norm = active
+		.as_deref()
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+		.map(|s| s.trim_end_matches('/').to_string());
+
+	let parent_label = match active_norm.as_deref() {
+		Some(url) => format!("Backend: {} ▶", format_url_short(url)),
+		None => "Backend: (not configured) ▶".to_string(),
 	};
-	let item_handle = handles
-		.backend_item
+
+	let submenu_opt = handles
+		.backend_submenu
 		.lock()
 		.ok()
 		.and_then(|g| g.as_ref().cloned());
-	if let Some(item) = item_handle {
-		let _ = item.set_text(&label);
+	let Some(submenu) = submenu_opt else {
+		return;
+	};
+	let _ = submenu.set_text(&parent_label);
+
+	// Wipe the current children. Tauri's Submenu doesn't expose a
+	// `clear()` so iterate and remove. Best-effort — failures here just
+	// leave stale items, the next call will overwrite.
+	if let Ok(items) = submenu.items() {
+		for item in items {
+			let _ = submenu.remove(&item);
+		}
+	}
+
+	if presets.is_empty() {
+		if let Ok(empty) = MenuItem::with_id(
+			&app,
+			"tray-backend-empty",
+			"(no presets — add some in Settings)",
+			false,
+			None::<&str>,
+		) {
+			let _ = submenu.append(&empty);
+		}
+		return;
+	}
+
+	for preset in presets.iter() {
+		let trimmed_url = preset.url.trim().trim_end_matches('/').to_string();
+		if trimmed_url.is_empty() {
+			continue;
+		}
+		let checked = active_norm.as_deref() == Some(trimmed_url.as_str());
+		let label = if preset.name.trim().is_empty() {
+			format_url_short(&trimmed_url)
+		} else {
+			format!("{} — {}", preset.name.trim(), format_url_short(&trimmed_url))
+		};
+		let id = format!("tray-backend-set::{}", trimmed_url);
+		if let Ok(check_item) =
+			CheckMenuItem::with_id(&app, &id, &label, true, checked, None::<&str>)
+		{
+			let _ = submenu.append(&check_item);
+		}
 	}
 }
 
@@ -103,9 +174,9 @@ pub fn run() {
 
 	tauri::Builder::default()
 		.manage(TrayHandles {
-			backend_item: Mutex::new(None),
+			backend_submenu: Mutex::new(None),
 		})
-		.invoke_handler(tauri::generate_handler![tray_set_backend])
+		.invoke_handler(tauri::generate_handler![tray_set_backends])
 		// Pin the embedded server to 127.0.0.1 — left to its default
 		// "localhost" the plugin's tiny-http binds to whichever IP
 		// glibc returns first, which on this stack is `::1`. WebKit2GTK
@@ -173,24 +244,31 @@ pub fn run() {
 			let show_item = MenuItem::with_id(app, "tray-show", "Show heierchat", true, None::<&str>)?;
 			let hide_item = MenuItem::with_id(app, "tray-hide", "Hide window", true, None::<&str>)?;
 			let separator = PredefinedMenuItem::separator(app)?;
-			let backend_item = MenuItem::with_id(
+			let backend_submenu = Submenu::with_id(
 				app,
 				"tray-backend",
-				"Backend: (not configured)",
-				false,
-				None::<&str>,
+				"Backend: (not configured) ▶",
+				true,
 			)?;
-			// Stash the handle so tray_set_backend can update the label
-			// when the webview tells us the backendBaseUrl changed.
+			// Stash the handle so tray_set_backends can rebuild the
+			// submenu's children when the webview tells us the preset
+			// list or active URL changed.
 			{
 				let state: State<TrayHandles> = app.state();
-				let mut guard = state.backend_item.lock().expect("tray state poisoned");
-				*guard = Some(backend_item.clone());
+				let mut guard = state.backend_submenu.lock().expect("tray state poisoned");
+				*guard = Some(backend_submenu.clone());
 			}
 			let quit_item = MenuItem::with_id(app, "tray-quit", "Quit heierchat", true, None::<&str>)?;
 			let menu = Menu::with_items(
 				app,
-				&[&show_item, &hide_item, &separator, &backend_item, &separator, &quit_item],
+				&[
+					&show_item as &dyn IsMenuItem<_>,
+					&hide_item,
+					&separator,
+					&backend_submenu,
+					&separator,
+					&quit_item,
+				],
 			)?;
 
 			let _tray = TrayIconBuilder::with_id("main-tray")
@@ -202,23 +280,38 @@ pub fn run() {
 				}))
 				.menu(&menu)
 				.show_menu_on_left_click(false)
-				.on_menu_event(|app, event| match event.id.as_ref() {
-					"tray-show" => {
-						if let Some(w) = app.get_webview_window("main") {
-							let _ = w.show();
-							let _ = w.set_focus();
-							let _ = w.unminimize();
+				.on_menu_event(|app, event| {
+					let id = event.id.as_ref();
+					match id {
+						"tray-show" => {
+							if let Some(w) = app.get_webview_window("main") {
+								let _ = w.show();
+								let _ = w.set_focus();
+								let _ = w.unminimize();
+							}
 						}
-					}
-					"tray-hide" => {
-						if let Some(w) = app.get_webview_window("main") {
-							let _ = w.hide();
+						"tray-hide" => {
+							if let Some(w) = app.get_webview_window("main") {
+								let _ = w.hide();
+							}
 						}
+						"tray-quit" => {
+							app.exit(0);
+						}
+						other if other.starts_with("tray-backend-set::") => {
+							let url = &other["tray-backend-set::".len()..];
+							// Tell the webview to swap backendBaseUrl. The
+							// frontend listener updates the settings store
+							// + re-invokes tray_set_backends, which moves
+							// the checkmark to the new active preset.
+							let _ = app.emit("tray:select-backend", url.to_string());
+							if let Some(w) = app.get_webview_window("main") {
+								let _ = w.show();
+								let _ = w.set_focus();
+							}
+						}
+						_ => {}
 					}
-					"tray-quit" => {
-						app.exit(0);
-					}
-					_ => {}
 				})
 				.on_tray_icon_event(|tray, event| {
 					if let TrayIconEvent::Click {

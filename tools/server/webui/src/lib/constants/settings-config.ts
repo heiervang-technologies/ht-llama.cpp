@@ -6,6 +6,12 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean | 
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
 	backendBaseUrl: '',
+	// JSON array of {name, url} preset entries the tray uses for the
+	// "Switch backend" submenu. Stored as a JSON string to fit the
+	// flat-config constraint above. Empty string falls back to a
+	// synthetic single entry derived from `backendBaseUrl` at runtime
+	// so the tray submenu is never completely empty.
+	backendPresets: '',
 	systemMessage: '',
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
@@ -191,6 +197,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	backendBaseUrl:
 		'Base URL of the llama-server backend (e.g. <code>http://192.168.8.158:30184</code>). Leave empty to use the same origin as the webui. When set, a pill in the header shows the active hostname.',
+	backendPresets:
+		'JSON array of named backends for the tray\'s "Switch backend" submenu, e.g. <code>[{"name":"Titan","url":"http://192.168.8.170:30184"},{"name":"Local","url":"http://127.0.0.1:8080"}]</code>. Leave empty to surface only the current Backend URL as a single preset.',
 	systemMessage: 'The starting message that defines how model should behave.',
 	showSystemMessage: 'Display the system message at the top of each conversation.',
 	theme:

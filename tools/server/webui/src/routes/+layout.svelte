@@ -182,25 +182,70 @@
 		}
 	});
 
-	// Mirror the current backendBaseUrl into the Tauri tray menu so the
-	// user can see at a glance which backend they're talking to without
-	// opening Settings. No-op outside Tauri (e.g. when serving the webui
-	// from llama-server in a normal browser); the import is guarded so
-	// missing tauri APIs don't break the layout.
+	// Mirror the current backend + presets into the Tauri tray's
+	// "Switch backend" submenu. The active preset is checked; clicking
+	// any other preset emits `tray:select-backend` from Rust → handled
+	// by the listener below.
+	//
+	// If the user hasn't configured any presets but does have a
+	// backendBaseUrl set, surface a synthetic single entry so the
+	// submenu always shows at least the current backend. Otherwise it
+	// renders "(no presets — add some in Settings)".
 	$effect(() => {
 		const url = String(config().backendBaseUrl ?? '').trim();
+		const presetsJson = String(config().backendPresets ?? '').trim();
 		if (!isTauri()) return;
+		let presets: Array<{ name: string; url: string }> = [];
+		if (presetsJson) {
+			try {
+				const parsed = JSON.parse(presetsJson);
+				if (Array.isArray(parsed)) {
+					presets = parsed
+						.filter((p) => p && typeof p.url === 'string')
+						.map((p) => ({
+							name: typeof p.name === 'string' ? p.name : '',
+							url: p.url
+						}));
+				}
+			} catch (err) {
+				console.warn('[tray] backendPresets JSON parse failed:', err);
+			}
+		}
+		if (presets.length === 0 && url) {
+			presets = [{ name: 'Default', url }];
+		}
 		(async () => {
 			try {
 				const { invoke } = await import('@tauri-apps/api/core');
-				await invoke('tray_set_backend', { url: url || null });
+				await invoke('tray_set_backends', { presets, active: url || null });
 			} catch (err) {
-				// First-launch race: invoke can throw if the Rust command
-				// hasn't been registered yet (older binary). Soft-fail —
-				// the menu will just show the default label.
-				console.debug('[tray] tray_set_backend skipped:', err);
+				console.debug('[tray] tray_set_backends skipped:', err);
 			}
 		})();
+	});
+
+	// Rust → JS dispatch: when the user clicks a preset in the tray
+	// submenu, Rust emits `tray:select-backend` with the URL. Update
+	// `backendBaseUrl` so the active marker in the submenu moves and
+	// the rest of the app re-points at the new endpoint.
+	$effect(() => {
+		if (!isTauri()) return;
+		let unlisten: (() => void) | null = null;
+		(async () => {
+			try {
+				const { listen } = await import('@tauri-apps/api/event');
+				unlisten = await listen<string>('tray:select-backend', (event) => {
+					const next = String(event.payload ?? '').trim();
+					if (!next) return;
+					settingsStore.updateConfig('backendBaseUrl', next);
+				});
+			} catch (err) {
+				console.debug('[tray] event listener skipped:', err);
+			}
+		})();
+		return () => {
+			if (unlisten) unlisten();
+		};
 	});
 
 	// Sync settings when server props are loaded
