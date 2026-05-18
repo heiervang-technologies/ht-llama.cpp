@@ -1,4 +1,6 @@
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 
 /// Port the embedded frontend is served on in release builds.
 ///
@@ -120,10 +122,102 @@ pub fn run() {
 				}
 			}
 
+			// System tray icon + menu. Click on the icon shows/hides the
+			// main window; the menu carries Show / Hide / Quit plus a
+			// placeholder slot for the backend selector we'll wire up
+			// once the Settings → backendBaseUrl plumbing is exposed to
+			// the Rust side. Window hide-on-close (Tauri's RunEvent
+			// branch below) keeps the app running in the tray when the
+			// user closes the main window — Docker Desktop pattern.
+			let show_item = MenuItem::with_id(app, "tray-show", "Show heierchat", true, None::<&str>)?;
+			let hide_item = MenuItem::with_id(app, "tray-hide", "Hide window", true, None::<&str>)?;
+			let separator = PredefinedMenuItem::separator(app)?;
+			let backend_item = MenuItem::with_id(
+				app,
+				"tray-backend",
+				"Backend: (configured in Settings)",
+				false,
+				None::<&str>,
+			)?;
+			let quit_item = MenuItem::with_id(app, "tray-quit", "Quit heierchat", true, None::<&str>)?;
+			let menu = Menu::with_items(
+				app,
+				&[&show_item, &hide_item, &separator, &backend_item, &separator, &quit_item],
+			)?;
+
+			let _tray = TrayIconBuilder::with_id("main-tray")
+				.tooltip("heierchat")
+				.icon(app.default_window_icon().cloned().unwrap_or_else(|| {
+					// Fall back to a transparent 1×1 RGBA so the tray slot still
+					// appears even on platforms where the bundled icon is missing.
+					tauri::image::Image::new_owned(vec![0u8; 4], 1, 1)
+				}))
+				.menu(&menu)
+				.show_menu_on_left_click(false)
+				.on_menu_event(|app, event| match event.id.as_ref() {
+					"tray-show" => {
+						if let Some(w) = app.get_webview_window("main") {
+							let _ = w.show();
+							let _ = w.set_focus();
+							let _ = w.unminimize();
+						}
+					}
+					"tray-hide" => {
+						if let Some(w) = app.get_webview_window("main") {
+							let _ = w.hide();
+						}
+					}
+					"tray-quit" => {
+						app.exit(0);
+					}
+					_ => {}
+				})
+				.on_tray_icon_event(|tray, event| {
+					if let TrayIconEvent::Click {
+						button: MouseButton::Left,
+						button_state: MouseButtonState::Up,
+						..
+					} = event
+					{
+						let app = tray.app_handle();
+						if let Some(w) = app.get_webview_window("main") {
+							if w.is_visible().unwrap_or(false) {
+								let _ = w.hide();
+							} else {
+								let _ = w.show();
+								let _ = w.set_focus();
+							}
+						}
+					}
+				})
+				.build(app)?;
+
 			Ok(())
 		})
-		.run(tauri::generate_context!())
-		.expect("error while running tauri application");
+		.build(tauri::generate_context!())
+		.expect("error while building tauri application")
+		.run(|app, event| {
+			// Close-to-tray: intercept the main window's close request,
+			// prevent the actual close, and hide it instead. The user
+			// re-opens via the tray icon (left-click toggle) or the
+			// Show heierchat menu item. Quit is reachable from the tray
+			// menu and from app.exit() programmatically. Docker Desktop
+			// pattern: closing the window doesn't quit the app, it just
+			// minimises it to the tray.
+			if let RunEvent::WindowEvent {
+				label,
+				event: WindowEvent::CloseRequested { api, .. },
+				..
+			} = event
+			{
+				if label == "main" {
+					api.prevent_close();
+					if let Some(w) = app.get_webview_window("main") {
+						let _ = w.hide();
+					}
+				}
+			}
+		});
 }
 
 /// Defaults baked into the bundle at build time. Read by the webui as
