@@ -182,6 +182,27 @@
 		}
 	});
 
+	// Mirror the current backendBaseUrl into the Tauri tray menu so the
+	// user can see at a glance which backend they're talking to without
+	// opening Settings. No-op outside Tauri (e.g. when serving the webui
+	// from llama-server in a normal browser); the import is guarded so
+	// missing tauri APIs don't break the layout.
+	$effect(() => {
+		const url = String(config().backendBaseUrl ?? '').trim();
+		if (!isTauri()) return;
+		(async () => {
+			try {
+				const { invoke } = await import('@tauri-apps/api/core');
+				await invoke('tray_set_backend', { url: url || null });
+			} catch (err) {
+				// First-launch race: invoke can throw if the Rust command
+				// hasn't been registered yet (older binary). Soft-fail —
+				// the menu will just show the default label.
+				console.debug('[tray] tray_set_backend skipped:', err);
+			}
+		})();
+	});
+
 	// Sync settings when server props are loaded
 	$effect(() => {
 		const serverProps = serverStore.props;

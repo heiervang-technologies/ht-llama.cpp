@@ -1,6 +1,43 @@
+use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent, State, WindowEvent};
+
+/// Shared handles into the tray menu items the webview wants to update at
+/// runtime (currently just the Backend label). Held in app state so Tauri
+/// commands can borrow it.
+struct TrayHandles {
+	backend_item: Mutex<Option<MenuItem<tauri::Wry>>>,
+}
+
+/// Tauri command — the webview calls this whenever
+/// `config.backendBaseUrl` changes so the tray menu reflects the live
+/// value. Empty / null → "Backend: (not configured)". URLs are truncated
+/// to keep the menu narrow.
+#[tauri::command]
+fn tray_set_backend(handles: State<'_, TrayHandles>, url: Option<String>) {
+	let label = match url.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+		Some(raw) => {
+			let display = raw.strip_prefix("https://").or_else(|| raw.strip_prefix("http://")).unwrap_or(raw);
+			let trimmed = display.trim_end_matches('/');
+			let short = if trimmed.len() > 40 {
+				format!("{}…", &trimmed[..39])
+			} else {
+				trimmed.to_string()
+			};
+			format!("Backend: {}", short)
+		}
+		None => "Backend: (not configured)".to_string(),
+	};
+	let item_handle = handles
+		.backend_item
+		.lock()
+		.ok()
+		.and_then(|g| g.as_ref().cloned());
+	if let Some(item) = item_handle {
+		let _ = item.set_text(&label);
+	}
+}
 
 /// Port the embedded frontend is served on in release builds.
 ///
@@ -65,6 +102,10 @@ pub fn run() {
 	}
 
 	tauri::Builder::default()
+		.manage(TrayHandles {
+			backend_item: Mutex::new(None),
+		})
+		.invoke_handler(tauri::generate_handler![tray_set_backend])
 		// Pin the embedded server to 127.0.0.1 — left to its default
 		// "localhost" the plugin's tiny-http binds to whichever IP
 		// glibc returns first, which on this stack is `::1`. WebKit2GTK
@@ -135,10 +176,17 @@ pub fn run() {
 			let backend_item = MenuItem::with_id(
 				app,
 				"tray-backend",
-				"Backend: (configured in Settings)",
+				"Backend: (not configured)",
 				false,
 				None::<&str>,
 			)?;
+			// Stash the handle so tray_set_backend can update the label
+			// when the webview tells us the backendBaseUrl changed.
+			{
+				let state: State<TrayHandles> = app.state();
+				let mut guard = state.backend_item.lock().expect("tray state poisoned");
+				*guard = Some(backend_item.clone());
+			}
 			let quit_item = MenuItem::with_id(app, "tray-quit", "Quit heierchat", true, None::<&str>)?;
 			let menu = Menu::with_items(
 				app,
