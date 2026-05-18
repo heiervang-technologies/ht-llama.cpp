@@ -25,6 +25,7 @@
 	import TtsRefAudioPicker from './TtsRefAudioPicker.svelte';
 	import AiCommandsEditor from './AiCommandsEditor.svelte';
 	import NextcloudConnectionPanel from './NextcloudConnectionPanel.svelte';
+	import BackendPresetsPanel from './BackendPresetsPanel.svelte';
 	import { toast } from 'svelte-sonner';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -778,6 +779,8 @@
 						/>
 
 						{#if currentSection.title === SETTINGS_SECTION_TITLES.GENERAL}
+							<BackendPresetsPanel {localConfig} onConfigChange={handleConfigChange} />
+
 							<ThemeHuePicker
 								primary={Number.isFinite(Number(localConfig.themePrimaryHue))
 									? Number(localConfig.themePrimaryHue)
