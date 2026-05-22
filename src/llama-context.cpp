@@ -368,6 +368,16 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
+        // DFlash: mark context as decoder if it has a target model
+        if (model.arch == LLM_ARCH_DFLASH && params.target_model != nullptr) {
+            dflash_decoder_ctx = true;
+            // Pre-fill cross with reservation size so build_inp_cross_embd
+            // uses cparams.n_ctx instead of hparams.n_ctx_train
+            cross.n_embd = model.hparams.n_embd;
+            cross.n_enc  = (int64_t)cparams.n_ctx;
+            cross.v_embd.resize((size_t)(cross.n_embd * cross.n_enc), 0.0f);
+        }
+
         sched_reserve();
 
         if (!cparams.flash_attn) {
@@ -1246,7 +1256,84 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+//
+// DFlash speculative decoding — extraction pipeline
+//
+
+void llama_context::set_dflash(const llama_model * model) {
+    cparams.dflash_extract_enabled = !!model;
+    if (!cparams.dflash_extract_enabled) {
+        return;
+    }
+
+    sched_need_reserve = true;
+
+    const auto & dflash_hparams = model->hparams;
+
+    dflash.extract_layer_indices.assign(
+            dflash_hparams.dflash_target_layer_ids.begin(),
+            dflash_hparams.dflash_target_layer_ids.end()
+            );
+
+    dflash.extract_tensors.resize(dflash.extract_layer_indices.size(), nullptr);
+
+    LLAMA_LOG_INFO("%s: DFlash extraction enabled for %zu layers\n", __func__,
+            dflash.extract_layer_indices.size());
+}
+
+const float * llama_context::get_dflash_target_features() const {
+    GGML_ASSERT(!dflash.target_features.empty() && "DFlash target features not extracted");
+    return dflash.target_features.data();
+}
+
+void llama_context::set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens) {
+    GGML_ASSERT(data != nullptr);
+    const size_t size = (size_t)n_embd * n_tokens;
+    cross.n_embd = n_embd;
+    cross.n_enc  = n_tokens;
+    cross.v_embd.resize(size);
+    std::memcpy(cross.v_embd.data(), data, size * sizeof(float));
+}
+
+void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
+    const int64_t n_tokens = ubatch.n_tokens;
+    const int64_t n_embd = model.hparams.n_embd;
+    const size_t n_layers = dflash.extract_tensors.size();
+
+    const int64_t n_embd_concat = n_embd * (int64_t)n_layers;
+    dflash.target_features.resize((size_t)(n_embd_concat * n_tokens));
+
+    static thread_local std::vector<float> temp_layer_features;
+    temp_layer_features.resize((size_t)(n_embd * n_tokens));
+
+    LLAMA_LOG_DEBUG("extract_dflash_features: %zu layers, %lld tokens, %lld embd\n",
+                    n_layers, (long long)n_tokens, (long long)n_embd);
+
+    for (size_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
+        ggml_tensor * tensor = dflash.extract_tensors[layer_idx];
+        GGML_ASSERT(tensor != nullptr && "DFlash extraction tensor is null");
+
+        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
+        GGML_ASSERT(backend != nullptr && "DFlash tensor has no backend");
+
+        const size_t size_bytes = (size_t)n_embd * (size_t)n_tokens * sizeof(float);
+        ggml_backend_tensor_get_async(backend, tensor, temp_layer_features.data(), 0, size_bytes);
+        ggml_backend_sched_synchronize(sched.get());
+
+        for (int64_t token_idx = 0; token_idx < n_tokens; ++token_idx) {
+            const float * src = temp_layer_features.data() + token_idx * n_embd;
+            float * dest = dflash.target_features.data() + token_idx * n_embd_concat + (int64_t)layer_idx * n_embd;
+            std::memcpy(dest, src, (size_t)n_embd * sizeof(float));
+        }
+    }
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // DFlash decoder runs through encode path due to no kv-cache, but needs decoder graph type
+    if (model.arch == LLM_ARCH_DFLASH && dflash_decoder_ctx && gtype == LLM_GRAPH_TYPE_ENCODER) {
+        gtype = LLM_GRAPH_TYPE_DECODER;
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1303,6 +1390,22 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
 
+        // DFlash: Fill position tensor for decoder
+        if (model.arch == LLM_ARCH_DFLASH && gtype == LLM_GRAPH_TYPE_DECODER && !cross.v_embd.empty()) {
+            const int64_t n_ctx = cross.n_enc;
+            const int64_t n_noise = ubatch.n_tokens;
+            const int64_t n_total = n_ctx + n_noise;
+
+            ggml_tensor * pos_full = ggml_graph_get_tensor(gf, "inp_pos_full");
+            if (pos_full) {
+                std::vector<int32_t> pos_data((size_t)n_total);
+                for (int64_t i = 0; i < n_total; ++i) {
+                    pos_data[(size_t)i] = (int32_t)i;
+                }
+                ggml_backend_tensor_set(pos_full, pos_data.data(), 0, (size_t)n_total * sizeof(int32_t));
+            }
+        }
+
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
@@ -1311,6 +1414,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
+    }
+
+    // DFlash: Extract intermediate layer features after graph execution
+    if (cparams.dflash_extract_enabled && !dflash.extract_tensors.empty()) {
+        extract_dflash_features(ubatch);
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -2297,6 +2405,7 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.dflash      =*/ &dflash,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -2339,6 +2448,21 @@ llm_graph_cb llama_context::graph_get_cb() const {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
             ggml_set_name(cur, name);
+        }
+
+        // DFlash: capture intermediate hidden states tagged "dflash_extract_N"
+        // during graph build so they can be read after graph compute
+        if (cparams.dflash_extract_enabled) {
+            static constexpr const char * prefix = "dflash_extract_";
+            static constexpr size_t prefix_len = 15;
+
+            if (strncmp(name, prefix, prefix_len) == 0) {
+                size_t extract_idx = 0;
+                if (sscanf(name + prefix_len, "%zu", &extract_idx) == 1 && extract_idx < dflash.extract_tensors.size()) {
+                    ggml_set_output(cur);
+                    dflash.extract_tensors[extract_idx] = cur;
+                }
+            }
         }
 
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
@@ -3363,6 +3487,7 @@ llama_context_params llama_context_default_params() {
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
+        /*.target_model                =*/ nullptr,
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,

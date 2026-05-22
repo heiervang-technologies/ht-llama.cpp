@@ -126,6 +126,20 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
+        // DFlash: tag hidden states at target layers for extraction
+        if (dflash && !dflash->extract_layer_indices.empty()) {
+            static const char * dflash_extract_names[] = {
+                "dflash_extract_0", "dflash_extract_1", "dflash_extract_2",
+                "dflash_extract_3", "dflash_extract_4"
+            };
+            for (size_t i = 0; i < dflash->extract_layer_indices.size() && i < 5; ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    cb(inpL, dflash_extract_names[i], il);
+                    break;
+                }
+            }
+        }
+
         // norm
         cur = build_norm(inpL,
                 model.layers[il].attn_norm, NULL,

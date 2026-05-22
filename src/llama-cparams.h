@@ -41,6 +41,7 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool dflash_extract_enabled;  // enable layer extraction for DFlash speculative decoding
     bool pipeline_parallel;
 
     enum llama_context_type ctx_type;

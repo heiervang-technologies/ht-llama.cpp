@@ -74,6 +74,19 @@ struct llama_cross {
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
 };
 
+
+// DFlash speculative decoding intermediate results
+struct llama_dflash {
+    std::vector<int> extract_layer_indices;
+    std::vector<float> target_features;
+    std::vector<ggml_tensor *> extract_tensors;
+
+    void clear() {
+        target_features.clear();
+        extract_tensors.clear();
+    }
+};
+
 struct llm_graph_params;
 
 //
@@ -545,6 +558,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_dflash           * dflash = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -762,6 +776,7 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_dflash           * dflash = nullptr;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
