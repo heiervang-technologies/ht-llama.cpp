@@ -125,6 +125,8 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    void set_dflash(const llama_model * model);
+
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
@@ -212,6 +214,9 @@ struct llama_context {
             int64_t                          t_loop_start);
 
 private:
+
+    // DFlash: Extract intermediate layer features from target model
+    void extract_dflash_features(const llama_ubatch & ubatch);
     //
     // output
     //
@@ -242,9 +247,18 @@ public:
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
+    // DFlash: Get pointer to target model features extracted for DFlash encoder
+    const float * get_dflash_target_features() const;
+
+    // DFlash: Set accumulated target_ctx from encoder output for decoder input
+    void set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens);
+
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
+
+    // DFlash: Extract intermediate layer features from target model
+    void extract_dflash_features(const llama_ubatch & ubatch);
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
@@ -272,6 +286,11 @@ private:
     llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+
+    mutable llama_dflash dflash;
+
+    // temp fix: avoid DFlash encoder/decoder mis-detection
+    bool dflash_decoder_ctx = false;
 
     std::unique_ptr<llama_memory_i> memory;
 

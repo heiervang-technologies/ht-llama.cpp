@@ -2179,6 +2179,14 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
 }
 
 int32_t llama_model_n_swa(const llama_model * model) {
+
+int32_t llama_model_dflash_block_size(const llama_model * model) {
+    return (int32_t) model->hparams.dflash_block_size;
+}
+
+int32_t llama_model_dflash_mask_token_id(const llama_model * model) {
+    return (int32_t) model->hparams.dflash_mask_token_id;
+}
     return model->hparams.n_swa;
 }
 

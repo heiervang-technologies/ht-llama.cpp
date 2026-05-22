@@ -127,6 +127,8 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
     { LLM_ARCH_MISTRAL4,         "mistral4"         },
+    { LLM_ARCH_EAGLE3,           "eagle3"           },
+    { LLM_ARCH_DFLASH,           "dflash"           },
     { LLM_ARCH_PADDLEOCR,        "paddleocr"        },
     { LLM_ARCH_MIMO2,            "mimo2"            },
     { LLM_ARCH_STEP35,           "step35"           },
@@ -232,7 +234,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,       "%s.attention.sliding_window_pattern"       },
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_OUTPUT_SCALE,                 "%s.attention.output_scale"                 },
-    { LLM_KV_ATTENTION_VALUE_SCALE,                  "%s.attention.value_scale"                  },
     { LLM_KV_ATTENTION_TEMPERATURE_LENGTH,           "%s.attention.temperature_length"           },
     { LLM_KV_ATTENTION_TEMPERATURE_SCALE,            "%s.attention.temperature_scale"            },
     { LLM_KV_ATTENTION_KEY_LENGTH_MLA,               "%s.attention.key_length_mla"               },
@@ -284,6 +285,14 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_CONVNEXT_BLOCK_COUNT,      "%s.convnext.block_count"      },
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
+
+    { LLM_KV_EAGLE3_EXTRACT_LAYERS,        "%s.extract_layers"        },
+    { LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"    },
+    { LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual"  },
+
+    { LLM_KV_DFLASH_TARGET_LAYER_IDS,     "%s.target_layer_ids"     },
+    { LLM_KV_DFLASH_BLOCK_SIZE,           "%s.block_size"           },
+    { LLM_KV_DFLASH_MASK_TOKEN_ID,        "%s.mask_token_id"        },
 
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
     // sentence-transformers dense modules feature dims
@@ -548,6 +557,13 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_INDEXER_PROJ,                           "blk.%d.indexer.proj" },
     { LLM_TENSOR_INDEXER_ATTN_K,                         "blk.%d.indexer.attn_k" },
     { LLM_TENSOR_INDEXER_ATTN_Q_B,                       "blk.%d.indexer.attn_q_b" },
+    // EAGLE-3 specific layers
+    { LLM_TENSOR_EAGLE3_HIDDEN_NORM,                     "blk.%d.hidden_norm" },
+    { LLM_TENSOR_EAGLE3_FC,                              "fc" },
+    { LLM_TENSOR_EAGLE3_D2T,                             "d2t" },
+    // DFlash specific layers
+    { LLM_TENSOR_DFLASH_FC,                              "fc" },
+    { LLM_TENSOR_DFLASH_HIDDEN_NORM,                     "hidden_norm" },
 };
 
 // declare information about the model weight tensors:
@@ -757,18 +773,24 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_INDEXER_PROJ,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_INDEXER_ATTN_Q_B,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    // NextN/MTP tensors are stored per-block (blk.%d.nextn.*) even though only the
-    // last nextn_predict_layers blocks carry them. Classify as LAYER_REPEATING so
-    // the model loader doesn't fault on the block index.
-    {LLM_TENSOR_NEXTN_EH_PROJ,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_NEXTN_EMBED_TOKENS,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_GET_ROWS}},
-    {LLM_TENSOR_NEXTN_ENORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
-    {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
-    {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // NextN/MTP tensors are currently ignored (reserved for future MTP support)
+    // These tensors only exist in the last layer(s) and are treated as output tensors
+    {LLM_TENSOR_NEXTN_EH_PROJ,              {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_EMBED_TOKENS,         {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_GET_ROWS}},
+    {LLM_TENSOR_NEXTN_ENORM,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_GET_ROWS}},
+    {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
     // Nemotron 3 Super
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_LATENT_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // EAGLE-3 tensors
+    {LLM_TENSOR_EAGLE3_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_EAGLE3_HIDDEN_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_EAGLE3_D2T,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
+    // DFlash tensors
+    {LLM_TENSOR_DFLASH_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_HIDDEN_NORM,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
