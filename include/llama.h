@@ -338,9 +338,11 @@ extern "C" {
         uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
         uint32_t n_ubatch;          // physical maximum batch size
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
+        uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
 
+        enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
@@ -379,10 +381,6 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-
-        // EAGLE3 extraction configuration
-        const struct llama_model * target_model; // reference to target model
-                                                 // only used to share embedding layer with eagle3 model
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -539,6 +537,7 @@ extern "C" {
     LLAMA_API uint32_t llama_n_batch    (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_ubatch   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);
+    LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
 
     DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
     DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
@@ -562,12 +561,6 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
-
-    // DFlash draft model: block size used as number of draft tokens
-    LLAMA_API int32_t llama_model_dflash_block_size(const struct llama_model * model);
-
-    // DFlash draft model: mask token id used as filler in the noise block
-    LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
@@ -700,14 +693,6 @@ extern "C" {
                          int32_t   n_embd,
                          int32_t   il_start,
                          int32_t   il_end);
-
-    //
-    // eagle3 (tmp)
-    //
-
-    LLAMA_API void llama_set_eagle3(
-            struct llama_context * ctx,
-            const struct llama_model * model);
 
     //
     // Memory
@@ -881,11 +866,16 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
+#define LLAMA_STATE_SEQ_FLAGS_NONE 0
+
 // for backwards-compat
 #define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
 
 // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
 #define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
+
+// keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load)
+#define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
 
     typedef uint32_t llama_state_seq_flags;
 
@@ -908,35 +898,13 @@ extern "C" {
                     llama_seq_id   dest_seq_id,
            llama_state_seq_flags   flags);
 
-    //
-    // EAGLE3 draft model support
-    //
-
-    // Get pointer to target model features extracted for EAGLE3 encoder
-    // Returns NULL if no features are available
-    // Format: [3*n_embd, n_tokens] - use model.hparams.n_embd and batch.n_tokens for dimensions
-    LLAMA_API const float * llama_get_eagle3_target_features(struct llama_context * ctx);
-
-    // Set g_embeddings from EAGLE3 encoder output for decoder input
-    // g_embd: pointer to encoder output embeddings
-    LLAMA_API void llama_set_eagle3_g_embeddings(
-            struct llama_context * ctx,
-                   const float * g_embd,
-                       int32_t   n_embd,
-                       int32_t   n_tokens);
-
-    //
-    // DFlash draft model support (similar to EAGLE3)
-    //
-
-    // Enable DFlash target feature extraction on the target context
+    // DFlash
     LLAMA_API void llama_set_dflash(
             struct llama_context * ctx,
             const struct llama_model * model);
 
     LLAMA_API const float * llama_get_dflash_target_features(struct llama_context * ctx);
 
-    // Set accumulated target_ctx for DFlash decoder
     LLAMA_API void llama_set_dflash_accumulated_target_ctx(
             struct llama_context * ctx,
                    const float * data,
