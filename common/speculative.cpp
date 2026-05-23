@@ -858,8 +858,26 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
             const size_t new_size = (size_t)n_target_features * (size_t)n_new;
             accumulated_ctx.insert(accumulated_ctx.end(), features, features + new_size);
 
+            // Diagnostics for accept-rate debugging — first 5 floats of the newly
+            // appended features + dflash_n_past advancement. Only fires when
+            // LLAMA_DFLASH_DEBUG env var is set, so production runs stay quiet.
+            static const bool dflash_debug = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_DEBUG");
+                return e && e[0] != '\0' && e[0] != '0';
+            }();
+            if (dflash_debug) {
+                LOG_INF("dflash feat debug: n_new=%d n=%d dflash_n_past_old=%d "
+                        "first5=[%.4f %.4f %.4f %.4f %.4f]\n",
+                        n_new, n, dflash_n_past,
+                        features[0], features[1], features[2], features[3], features[4]);
+            }
+
             const int n_ctx_total = (int)(accumulated_ctx.size() / (size_t)n_target_features);
-            static constexpr int ctx_window = 512;
+            // Set LLAMA_DFLASH_CTX_WINDOW=0 to disable truncation (use full accumulated ctx).
+            static const int ctx_window = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_CTX_WINDOW");
+                return e ? std::atoi(e) : 512;
+            }();
             const int n_ctx_used = ctx_window > 0 ? std::min(n_ctx_total, ctx_window) : n_ctx_total;
             const float * ctx_data = accumulated_ctx.data() + (size_t)(n_ctx_total - n_ctx_used) * (size_t)n_target_features;
 

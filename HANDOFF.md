@@ -34,31 +34,72 @@ claim does not land yet.
    `dflash.target_layer_ids = [1, 12, 23, 35, 46, 57]`. All ids are in
    range for the 60-layer target.
 
-## Prime suspect: feature/commit alignment in `common/speculative.cpp`
+## Updated diagnosis (round 2)
 
-In `common_speculative_impl_dflash::draft()` (around line 855):
-```cpp
-const float * features = llama_get_dflash_target_features(ctx_tgt);
-const size_t new_size = (size_t)n_target_features * (size_t)n_new;
-accumulated_ctx.insert(accumulated_ctx.end(), features, features + new_size);
-```
+The slice in `common/speculative.cpp:855-860` is actually **correct on
+paper**:
+- After verification, target's `extract_dflash_features` stores K+1
+  features in ubatch order: `[id_last, draft0, draft1, ..., draftK-1]`
+  at positions `[n_past_old, n_past_old+1, ..., n_past_old+K]`.
+- Speculative algorithm always accepts drafts in prefix order: m accepts
+  → first m+1 ubatch positions ARE the committed tokens.
+- Taking `features[0..n_new]` with `n_new = m+1` aligns correctly with
+  the m+1 newly-committed tokens.
 
-`llama_get_dflash_target_features(ctx_tgt)` returns features for the
-**last ubatch the target processed**, which during verification is K+1
-tokens (K drafts + 1 fall-through). But `n_new` is the number of tokens
-just committed (typically 1 or 2). Taking the first `n_new` rows of that
-buffer assumes the first `n_new` ubatch positions == the `n_new` committed
-tokens. If acceptance order doesn't line up, the drafter gets fed features
-for **discarded** draft tokens instead of committed ones, leading to
-cascading misalignment.
+So the alignment is right **IF** features and ubatch positions are in
+the same order, which they are in the standard verification flow.
 
-**Suggested next step:** instrument `extract_dflash_features` to log token
-ids per ubatch, and instrument `draft()` to log which features it picks
-and what `dflash_n_past` value it advances to. Compare the captured token
-ids against the committed sequence.
+## Structural integration is consistent with the drafter GGUF
 
-Secondary suspect: the warmup path runs the dflash decoder graph before
-`cross.v_embd` is populated — verify warmup is skipped or handled.
+Compared our `src/models/dflash.cpp` graph against the `dflash-pr` POC
+branch's older graph. Key insight: **the POC was written for a different
+drafter variant**. POC uses `LLM_TENSOR_FFN_NORM` ("blk.N.ffn_norm");
+our drafter GGUF has `LLM_TENSOR_ATTN_POST_NORM`
+("blk.N.post_attention_norm") and no `ffn_norm`. Our graph uses
+`layer.attn_post_norm` — correct for our GGUF.
+
+POC also has no bucket-rounding/masking; it rebuilds the graph every
+step. We bucket-round + mask padding for graph reuse — masking logic in
+`llm_graph_input_dflash::set_input` looks correct (masks `[n_real,
+ctx_len)`).
+
+## Concrete next experiments (in priority order)
+
+1. **Disable graph reuse via env**: run with
+   `LLAMA_GRAPH_REUSE_DISABLE=1 ./build-cuda/bin/llama-speculative-simple
+   ...`. If accept jumps significantly, graph reuse is corrupting input
+   tensors across iterations. Cost: zero code changes, one bench window.
+
+2. **Drop bucket rounding** (or set `ctx_window = -1` to force full
+   length): if accept improves, then bucket masking is the bug. Edit
+   `common/speculative.cpp:862` `ctx_window = 512` → `0` (means use
+   full n_ctx_total without truncation).
+
+3. **Try the BF16 drafter** (`gemma4-31b-it-dflash-bf16.gguf`, 2.9 GB):
+   if accept improves materially, Q4_K_M drafter quantization is
+   degrading drafts more than expected. Q8_0 also worth trying as a
+   middle ground.
+
+4. **Try IQ4_XS target** (`gemma-4-31B-it-IQ4_XS.gguf`): if the drafter
+   was trained on hidden states extracted from a different target
+   quant, swapping target quant could realign.
+
+5. **Instrument extraction tokens**: log the actual token ids per
+   ubatch in `extract_dflash_features` and the token ids per features
+   slice in `common_speculative_impl_dflash::draft()`. Confirm the
+   alignment matches the committed sequence in `prompt_tgt`.
+
+6. **Hidden state extraction point**: try moving the `cb("dflash_extract_N")`
+   tag from after `build_cvec(cur, il)` to before — i.e., capture the
+   pre-control-vector hidden state. Or to right after `attn_residual`
+   (before FFN). Either could matter if the drafter was trained on a
+   specific intermediate representation.
+
+7. **Warmup interference**: the drafter ctx warmup runs the dflash graph
+   with `cross.v_embd.empty()` → `ctx_len = n_ctx = 4096`. The first
+   real call should reset via `sched_need_reserve` when bucket changes
+   from 0 → small bucket. Verify by adding a log to `sched_reserve` to
+   see if it's actually triggered between warmup and first real draft.
 
 ## What works
 
