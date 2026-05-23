@@ -152,7 +152,10 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     inpL = build_inp_embd(model.tok_embd);
 
     // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
-    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
+    // Match Gemma4 training-time BF16 rounding before DFlash hidden capture.
+    inpL = ggml_cast(ctx0, inpL, GGML_TYPE_BF16);
+    inpL = ggml_cast(ctx0, inpL, GGML_TYPE_F32);
+    inpL = ggml_scale(ctx0, inpL, ubatch.token ? ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf(n_embd))) : 1.0f);
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions
@@ -181,6 +184,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
         const float freq_base_l  = model.get_rope_freq_base(cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+
         const int   n_rot_l      = hparams.n_rot(il);
 
         // norm
@@ -284,8 +288,11 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur_moe, "ffn_norm_2", il);
 
             // custom MoE logits calculation (router operates on attn_out, not cur)
-            ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
-            tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
+            // Match Gemma4 router BF16 rounding used by the DFlash reference fork.
+            ggml_tensor * tmp = ggml_cast(ctx0, attn_out, GGML_TYPE_BF16);
+            tmp = ggml_cast(ctx0, tmp, GGML_TYPE_F32);
+            tmp = ggml_rms_norm(ctx0, tmp, hparams.f_norm_rms_eps);
+            tmp = ggml_scale(ctx0, tmp, 1.0f / ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf((float) n_embd))));
             tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
             ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
             cb(logits, "ffn_moe_logits", il);
@@ -367,6 +374,17 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
+        // DFlash target layer ids refer to post-layer hidden states.
+        if (dflash && !dflash->extract_layer_indices.empty()) {
+            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    const std::string name = "dflash_extract_" + std::to_string(i);
+                    cb(cur, name.c_str(), il);
+                    break;
+                }
+            }
+        }
+
         // input for next layer
         inpL = cur;
     }
@@ -408,7 +426,9 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
 
         inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
-        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        inp_per_layer = ggml_cast      (ctx0, inp_per_layer, GGML_TYPE_BF16);
+        inp_per_layer = ggml_cast      (ctx0, inp_per_layer, GGML_TYPE_F32);
+        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, ggml_bf16_to_fp32(ggml_fp32_to_bf16(tok_embd_scale)));
         cb(inp_per_layer, "inp_per_layer_selected", -1);
 
         res->add_input(std::move(inp));

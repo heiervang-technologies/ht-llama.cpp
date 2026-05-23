@@ -350,6 +350,7 @@ enum llm_kv {
     LLM_KV_DFLASH_TARGET_LAYER_IDS,
     LLM_KV_DFLASH_BLOCK_SIZE,
     LLM_KV_DFLASH_MASK_TOKEN_ID,
+    LLM_KV_DFLASH_N_TARGET_FEATURES,
 };
 
 enum llm_tensor {
@@ -573,9 +574,11 @@ enum llm_tensor_layer {
 
 struct LLM_KV {
     LLM_KV(llm_arch arch, const char * suffix = nullptr);
+    LLM_KV(llm_arch arch, const std::string & arch_name_override, const char * suffix = nullptr);
 
     llm_arch arch;
     const char * suffix;
+    std::string arch_name_override;
 
     std::string operator()(llm_kv kv) const;
 };

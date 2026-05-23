@@ -847,10 +847,18 @@ private:
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
+            if (params_base.speculative.dflash) {
+                cparams.target_model = model_tgt;
+            }
+
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
             cparams.n_rs_seq = 0;
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            if (params_base.speculative.dflash) {
+                llama_set_dflash(ctx_tgt, model_dft.get());
+            }
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 

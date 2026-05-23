@@ -371,11 +371,11 @@ llama_context::llama_context(
         // DFlash: mark context as decoder if it has a target model
         if (model.arch == LLM_ARCH_DFLASH && params.target_model != nullptr) {
             dflash_decoder_ctx = true;
-            // Pre-fill cross with reservation size so build_inp_cross_embd
-            // uses cparams.n_ctx instead of hparams.n_ctx_train
-            cross.n_embd = model.hparams.n_embd;
-            cross.n_enc  = (int64_t)cparams.n_ctx;
-            cross.v_embd.resize((size_t)(cross.n_embd * cross.n_enc), 0.0f);
+
+            auto & dflash_model = const_cast<llama_model &>(model);
+            dflash_model.tok_embd = params.target_model->tok_embd;
+            dflash_model.output   = params.target_model->output ? params.target_model->output : params.target_model->tok_embd;
+            dflash_model.output_s = params.target_model->output_s;
         }
 
         sched_reserve();
@@ -1270,10 +1270,13 @@ void llama_context::set_dflash(const llama_model * model) {
 
     const auto & dflash_hparams = model->hparams;
 
-    dflash.extract_layer_indices.assign(
-            dflash_hparams.dflash_target_layer_ids.begin(),
-            dflash_hparams.dflash_target_layer_ids.end()
-            );
+    dflash.extract_layer_indices.clear();
+    for (const int il : dflash_hparams.dflash_target_layer_ids) {
+        if (il < 0) {
+            break;
+        }
+        dflash.extract_layer_indices.push_back(il);
+    }
 
     dflash.extract_tensors.resize(dflash.extract_layer_indices.size(), nullptr);
 
@@ -1286,13 +1289,58 @@ const float * llama_context::get_dflash_target_features() const {
     return dflash.target_features.data();
 }
 
+static void llama_dflash_read_hidden_2d(ggml_tensor * tensor, std::vector<float> & dst, int64_t n_embd, int64_t n_tokens) {
+    GGML_ASSERT(tensor != nullptr);
+    GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+    GGML_ASSERT(tensor->ne[0] == n_embd);
+    GGML_ASSERT(tensor->ne[1] >= n_tokens);
+
+    dst.resize((size_t)n_embd * (size_t)n_tokens);
+
+    const size_t row_bytes = (size_t)n_embd * sizeof(float);
+    for (int64_t token_idx = 0; token_idx < n_tokens; ++token_idx) {
+        const size_t src_offset = (size_t)token_idx * (size_t)tensor->nb[1];
+        float * row = dst.data() + (size_t)token_idx * (size_t)n_embd;
+
+        if (ggml_backend_buffer_is_host(tensor->buffer)) {
+            std::memcpy(row, (const char *)tensor->data + src_offset, row_bytes);
+        } else {
+            ggml_backend_tensor_get(tensor, row, src_offset, row_bytes);
+        }
+    }
+}
+
 void llama_context::set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens) {
     GGML_ASSERT(data != nullptr);
-    const size_t size = (size_t)n_embd * n_tokens;
+    GGML_ASSERT(n_embd > 0);
+    GGML_ASSERT(n_tokens > 0);
+    auto cross_bucket = [](int32_t n) -> int32_t {
+        if (n <= 16) {
+            return 16;
+        }
+        int32_t bucket = 1;
+        while (bucket < n) {
+            bucket <<= 1;
+        }
+        return bucket;
+    };
+
+    const int32_t bucket = cross_bucket(n_tokens);
+    if (cross.n_enc != bucket) {
+        sched_need_reserve = true;
+    }
+
+    const size_t data_size = (size_t)n_embd * n_tokens;
+    const size_t bucket_size = (size_t)n_embd * bucket;
     cross.n_embd = n_embd;
-    cross.n_enc  = n_tokens;
-    cross.v_embd.resize(size);
-    std::memcpy(cross.v_embd.data(), data, size * sizeof(float));
+    cross.n_enc  = bucket;
+    cross.n_enc_real = n_tokens;
+    cross.v_embd.assign(bucket_size, 0.0f);
+    std::memcpy(cross.v_embd.data(), data, data_size * sizeof(float));
+
+    if (model.arch == LLM_ARCH_DFLASH && dflash_decoder_ctx) {
+        gf_res_prev->reset();
+    }
 }
 
 void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
@@ -1304,7 +1352,6 @@ void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
     dflash.target_features.resize((size_t)(n_embd_concat * n_tokens));
 
     static thread_local std::vector<float> temp_layer_features;
-    temp_layer_features.resize((size_t)(n_embd * n_tokens));
 
     LLAMA_LOG_DEBUG("extract_dflash_features: %zu layers, %lld tokens, %lld embd\n",
                     n_layers, (long long)n_tokens, (long long)n_embd);
@@ -1313,12 +1360,7 @@ void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
         ggml_tensor * tensor = dflash.extract_tensors[layer_idx];
         GGML_ASSERT(tensor != nullptr && "DFlash extraction tensor is null");
 
-        ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
-        GGML_ASSERT(backend != nullptr && "DFlash tensor has no backend");
-
-        const size_t size_bytes = (size_t)n_embd * (size_t)n_tokens * sizeof(float);
-        ggml_backend_tensor_get_async(backend, tensor, temp_layer_features.data(), 0, size_bytes);
-        ggml_backend_sched_synchronize(sched.get());
+        llama_dflash_read_hidden_2d(tensor, temp_layer_features, n_embd, n_tokens);
 
         for (int64_t token_idx = 0; token_idx < n_tokens; ++token_idx) {
             const float * src = temp_layer_features.data() + token_idx * n_embd;
@@ -1398,7 +1440,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
             ggml_tensor * pos_full = ggml_graph_get_tensor(gf, "inp_pos_full");
             if (pos_full) {
-                std::vector<int32_t> pos_data((size_t)n_total);
+                static thread_local std::vector<int32_t> pos_data;
+                pos_data.resize((size_t)n_total);
                 for (int64_t i = 0; i < n_total; ++i) {
                     pos_data[(size_t)i] = (int32_t)i;
                 }

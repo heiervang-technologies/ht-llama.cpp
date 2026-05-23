@@ -66,6 +66,7 @@ struct llama_cross {
 
     int64_t n_embd = 0;
     int64_t n_enc  = 0;
+    int64_t n_enc_real = 0;
 
     // embeddings data copied to host memory (tmp)
     std::vector<float> v_embd;
@@ -271,6 +272,24 @@ public:
     ggml_tensor * cross_embd; // F32 [n_embd, n_outputs_enc]
 
     const llama_cross * cross;
+};
+
+class llm_graph_input_dflash : public llm_graph_input_i {
+public:
+    llm_graph_input_dflash(const llama_cross * cross, int64_t ctx_len, int64_t n_block)
+        : cross(cross), ctx_len(ctx_len), n_block(n_block) {}
+    virtual ~llm_graph_input_dflash() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * target_hidden = nullptr; // F32 [n_target_features, ctx_len]
+    ggml_tensor * pos_ctx       = nullptr; // I32 [ctx_len]
+    ggml_tensor * kq_mask       = nullptr; // F32 [ctx_len + n_block, n_block, 1, 1]
+    ggml_tensor * kq_mask_cnv   = nullptr;
+
+    const llama_cross * cross;
+    int64_t ctx_len;
+    int64_t n_block;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {

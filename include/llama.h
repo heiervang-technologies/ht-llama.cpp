@@ -569,6 +569,7 @@ extern "C" {
     // DFlash draft model metadata
     LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);

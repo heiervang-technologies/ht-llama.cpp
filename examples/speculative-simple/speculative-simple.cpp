@@ -75,7 +75,14 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+        if (params.speculative.dflash) {
+            cparams.target_model = model_tgt;
+        }
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+        if (params.speculative.dflash) {
+            llama_set_dflash(ctx_tgt, model_dft.get());
+        }
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
         params.speculative.draft.ctx_dft = ctx_dft.get();
@@ -83,7 +90,7 @@ int main(int argc, char ** argv) {
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
-    const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    const bool use_ckpt_dft = !params.speculative.dflash && (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -130,8 +137,10 @@ int main(int argc, char ** argv) {
     common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
 
     // eval the prompt
-    llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    if (!params.speculative.dflash) {
+        llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    }
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -201,9 +210,11 @@ int main(int argc, char ** argv) {
             }
 
             {
-                ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                if (!params.speculative.dflash) {
+                    ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                }
             }
         } else {
             // we have a previous (partial) draft to reuse from checkpoint restoration
@@ -227,10 +238,14 @@ int main(int argc, char ** argv) {
             llama_decode(ctx_tgt, batch_tgt);
         }
 
-        // evaluate the same batch with the draft model
-        {
+        if (!params.speculative.dflash) {
             // TODO: extend to support MTP, Eagle, etc. See server code for reference
             llama_decode(ctx_dft.get(), batch_tgt);
+        }
+
+        if (!common_speculative_process(spec, batch_tgt)) {
+            LOG_ERR("failed to process speculative batch\n");
+            break;
         }
 
         // only save the sampler sampler state if we use checkpoints
@@ -267,9 +282,11 @@ int main(int argc, char ** argv) {
             }
 
             {
-                ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+                if (!params.speculative.dflash) {
+                    ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY | LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                }
             }
 
             prompt_tgt.resize(ckpt.n_tokens);
@@ -320,8 +337,10 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_memory_seq_rm(llama_get_memory(ctx_tgt),       seq_id, n_past, -1);
-            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, n_past, -1);
+            if (!params.speculative.dflash) {
+                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            }
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {

@@ -49,8 +49,8 @@ static void test_dflash_tensor_infos() {
 //
 static void test_dflash_hparams_defaults() {
     llama_hparams hparams;
-    for (int i = 0; i < 5; i++) {
-        GGML_ASSERT(hparams.dflash_target_layer_ids[i] == 0);
+    for (int i = 0; i < 16; i++) {
+        GGML_ASSERT(hparams.dflash_target_layer_ids[i] == -1);
     }
     GGML_ASSERT(hparams.dflash_block_size == 16);
     GGML_ASSERT(hparams.dflash_mask_token_id == 0);

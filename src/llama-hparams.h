@@ -215,9 +215,10 @@ struct llama_hparams {
     uint32_t n_deepstack_layers = 0;
 
     // DFlash draft model
-    std::array<int, 5> dflash_target_layer_ids = {};
+    std::array<int, 16> dflash_target_layer_ids = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     uint32_t dflash_block_size     = 16;
     uint32_t dflash_mask_token_id  = 0;
+    uint32_t dflash_n_target_features = 0;
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
