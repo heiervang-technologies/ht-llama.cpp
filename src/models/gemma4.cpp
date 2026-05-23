@@ -341,6 +341,25 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         // residual connection
         cur = ggml_add(ctx0, cur, attn_out);
 
+        // DFlash target layer ids (early extraction point — before per-layer
+        // embedding processing and out_scale). Toggle via env var
+        // LLAMA_DFLASH_EXTRACT=early. Default extraction stays after l_out.
+        if (dflash && !dflash->extract_layer_indices.empty()) {
+            static const bool early = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_EXTRACT");
+                return e && std::string(e) == "early";
+            }();
+            if (early) {
+                for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                    if (dflash->extract_layer_indices[i] == il) {
+                        const std::string name = "dflash_extract_" + std::to_string(i);
+                        cb(cur, name.c_str(), il);
+                        break;
+                    }
+                }
+            }
+        }
+
         // per-layer embedding
         if (inp_per_layer) {
             ggml_tensor * pe_in = cur;
@@ -374,13 +393,20 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        // DFlash target layer ids refer to post-layer hidden states.
+        // DFlash target layer ids — default extraction point (after l_out).
+        // Skipped when LLAMA_DFLASH_EXTRACT=early (tagged earlier above).
         if (dflash && !dflash->extract_layer_indices.empty()) {
-            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
-                if (dflash->extract_layer_indices[i] == il) {
-                    const std::string name = "dflash_extract_" + std::to_string(i);
-                    cb(cur, name.c_str(), il);
-                    break;
+            static const bool early = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_EXTRACT");
+                return e && std::string(e) == "early";
+            }();
+            if (!early) {
+                for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                    if (dflash->extract_layer_indices[i] == il) {
+                        const std::string name = "dflash_extract_" + std::to_string(i);
+                        cb(cur, name.c_str(), il);
+                        break;
+                    }
                 }
             }
         }

@@ -63,6 +63,63 @@ step. We bucket-round + mask padding for graph reuse — masking logic in
 `llm_graph_input_dflash::set_input` looks correct (masks `[n_real,
 ctx_len)`).
 
+## Round-3 bench: extraction point
+
+| run                                | accept |
+|------------------------------------|-------:|
+| Q6_K late (after l_out, default)   | 10.69% |
+| Q6_K early (before per-layer-embd) |  6.22% |
+| Q4_K_M late                        |  4.92% |
+| Q4_K_M early                       |  5.56% |
+
+Late extraction (current default, post-`l_out`) is correct. Toggle via
+`LLAMA_DFLASH_EXTRACT=early` for ablation.
+
+## Round-2 bench results (2026-05-23 ~20:06-20:09 UTC)
+
+| run                                                | accept | gen t/s |
+|----------------------------------------------------|-------:|--------:|
+| Q4_K_M drafter, ctx_window=512 (baseline-dflash)   |  4.92% |  14.95  |
+| Q4_K_M + `LLAMA_GRAPH_REUSE_DISABLE=1`             |  4.92% |  13.85  |
+| Q4_K_M + `LLAMA_DFLASH_CTX_WINDOW=0`               |  6.22% |  14.44  |
+| Q5_K_M drafter                                      |  3.70% |  13.23  |
+| Q6_K drafter (same prompt)                          | 10.69% |  15.78  |
+| Q6_K drafter (different longer prompt)              |  8.01% |  14.47  |
+| Q8_0 drafter                                        |  7.60% |  14.81  |
+| BF16 drafter (ctx=2048, q8_0 KV)                    |  9.42% |  14.30  |
+
+Two conclusions land cleanly:
+
+1. **Graph reuse is innocent.** Same accept rate to 4 sig figs with and
+   without `LLAMA_GRAPH_REUSE_DISABLE=1`. The graph caching mechanism
+   isn't corrupting input tensors across iterations.
+
+2. **Drafter quantization has real but bounded effect.** Q6_K is ~2× Q4_K_M.
+   But the absolute ceiling here is ~10% accept — vs published DFlash
+   30-50%. So the drafter is fundamentally under-conditioned by the
+   target features even at high precision.
+
+Truncation (`ctx_window`) costs a few percent but is not the main bug.
+
+## Remaining hypotheses
+
+- **Extraction point is wrong.** `cb("dflash_extract_N", il)` currently
+  tags `cur` right after `build_cvec(cur, il)` in both `llama.cpp` and
+  `gemma4.cpp`. The drafter may have been trained on a different
+  intermediate (pre-cvec, post-attn-residual, post-ffn-residual, or
+  the pre-norm output before attention).
+- **Per-layer renorm of `fused_target`.** Our `dflash.cpp` decoder
+  norms `fused_target` once with `dflash_hidden_norm` at the start and
+  reuses it across all 5 layers. If the model expects per-layer
+  re-norm before `wk`/`wv` projection (i.e. apply `layer.attn_norm` to
+  ctx too, not just to noise), our K_ctx/V_ctx are wrong-scaled past
+  layer 0.
+- **RoPE position scheme.** Drafter's `dflash.target_layer_ids =
+  [1,12,23,35,46,57]` and `block_size=16`. Maybe the drafter trained
+  with absolute target-position embeddings (raw sequence positions
+  from the original conversation) rather than the local
+  `[0..n_ctx_used-1]` scheme we use after ctx truncation.
+
 ## Concrete next experiments (in priority order)
 
 1. **Disable graph reuse via env**: run with
