@@ -140,6 +140,11 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    // resolve the "any" sentinel: pick a model that is currently resident in memory.
+    // prefers LOADED over SLEEPING, and within each tier picks the most-recently-used.
+    // returns the canonical model name, or empty string if nothing is resident.
+    std::string pick_any_resident();
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
