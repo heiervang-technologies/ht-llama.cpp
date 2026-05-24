@@ -248,17 +248,13 @@ qwen3_dflash, drafter GGUF metadata dump). Audit summary:
 
 ### Divergences identified
 
-1. **Sliding-window attention not implemented in drafter graph.**
-   Drafter GGUF has `dflash-draft.attention.sliding_window = 2048`
-   and `sliding_window_pattern = [True, True, True, True, False]` —
-   layers blk.0..blk.3 use SWA-2048, blk.4 uses full. Our
-   `src/models/dflash.cpp` decoder uses uniform full attention with
-   only bucket-padding masking. Latent at our typical
-   `ctx_window=512` (max ctx-to-noise distance ~528 < 2048 window).
-   **Would matter the moment `LLAMA_DFLASH_CTX_WINDOW > 2048`** —
-   ctx tokens beyond window 2048 would attend in our graph but be
-   masked in the drafter's training distribution. Worth fixing for
-   correctness even though bench-neutral today.
+1. ~~**Sliding-window attention not implemented in drafter graph.**~~
+   **FIXED in 4b10869a7** (2026-05-24). load_arch_hparams now reads
+   `attention.sliding_window` and `attention.sliding_window_pattern`
+   into hparams.n_swa + hparams.swa_layers. Decoder graph allocates
+   a second `kq_mask_swa` with per-(q_pos,k_pos) windowing; layer
+   loop routes SWA layers through it. Bench-neutral at ctx<=2048
+   (window matches full attention numerically) as expected.
 
 2. **Position scheme is RoPE-relative-only (acknowledged shortcut).**
    Reference PyTorch uses absolute target-sequence positions
