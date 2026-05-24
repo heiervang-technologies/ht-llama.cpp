@@ -141,6 +141,66 @@ static void test_dflash_api_symbols() {
     LOG_INF("test_dflash_api_symbols: PASS\n");
 }
 
+//
+// Test 9: SWA defaults + per-layer routing (no SWA layers by default)
+//
+static void test_dflash_swa_defaults() {
+    llama_hparams hparams;
+    GGML_ASSERT(hparams.n_swa == 0);
+    GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE);
+    GGML_ASSERT(!hparams.is_swa_any());
+
+    // Even with SWA layers marked, is_swa_any returns true only when at least one is set
+    hparams.n_layer = 5;
+    for (uint32_t il = 0; il < 5; ++il) {
+        GGML_ASSERT(hparams.swa_layers[il] == 0);
+    }
+    LOG_INF("test_dflash_swa_defaults: PASS\n");
+}
+
+//
+// Test 10: SWA per-layer pattern matching Anbeeld drafter [T,T,T,T,F]
+//
+static void test_dflash_swa_anbeeld_pattern() {
+    llama_hparams hparams;
+    hparams.n_layer = 5;
+    hparams.n_swa = 2048;
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+    hparams.swa_layers[0] = 1;
+    hparams.swa_layers[1] = 1;
+    hparams.swa_layers[2] = 1;
+    hparams.swa_layers[3] = 1;
+    hparams.swa_layers[4] = 0;
+
+    GGML_ASSERT(hparams.is_swa_any());
+    GGML_ASSERT(hparams.is_swa(0));
+    GGML_ASSERT(hparams.is_swa(1));
+    GGML_ASSERT(hparams.is_swa(2));
+    GGML_ASSERT(hparams.is_swa(3));
+    GGML_ASSERT(!hparams.is_swa(4));
+    LOG_INF("test_dflash_swa_anbeeld_pattern: PASS\n");
+}
+
+//
+// Test 11: llm_graph_input_dflash carries n_swa through constructor
+//
+static void test_dflash_input_swa_ctor() {
+    // No SWA: n_swa defaults to 0
+    {
+        llm_graph_input_dflash input(nullptr, /*ctx_len=*/64, /*n_block=*/16);
+        GGML_ASSERT(input.n_swa == 0);
+        GGML_ASSERT(input.kq_mask_swa == nullptr);
+    }
+    // With SWA: explicit window plumbed
+    {
+        llm_graph_input_dflash input(nullptr, /*ctx_len=*/64, /*n_block=*/16, /*n_swa=*/2048);
+        GGML_ASSERT(input.n_swa == 2048);
+        // kq_mask_swa is set by build_arch_graph, not constructor — null here is correct
+        GGML_ASSERT(input.kq_mask_swa == nullptr);
+    }
+    LOG_INF("test_dflash_input_swa_ctor: PASS\n");
+}
+
 int main(void) {
     ggml_time_init();
 
@@ -152,6 +212,9 @@ int main(void) {
     test_dflash_speculative_type();
     test_dflash_context_params();
     test_dflash_api_symbols();
+    test_dflash_swa_defaults();
+    test_dflash_swa_anbeeld_pattern();
+    test_dflash_input_swa_ctor();
 
     LOG_INF("All DFlash unit tests passed.\n");
     return 0;
