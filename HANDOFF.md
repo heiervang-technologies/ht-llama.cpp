@@ -127,57 +127,130 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
-## Remaining hypotheses
+## Round-5: correctness audit vs upstream PR #22105 + z-lab reference (2026-05-24)
 
-- **Extraction point is wrong.** `cb("dflash_extract_N", il)` currently
-  tags `cur` right after `build_cvec(cur, il)` in both `llama.cpp` and
-  `gemma4.cpp`. The drafter may have been trained on a different
-  intermediate (pre-cvec, post-attn-residual, post-ffn-residual, or
-  the pre-norm output before attention).
-- **GGUF conversion fidelity.** Compare Anbeeld safetensors → CPU fp32
-  reference drafter logits on identical inputs against our Q-quant
-  drafter. If logits diverge beyond quantization noise, the conversion
-  pipeline (HF → GGUF) dropped or misnamed a tensor. Requires HF
-  download (~6 GB safetensors) + reference inference setup.
-- **RoPE position scheme.** Drafter's `dflash.target_layer_ids =
-  [1,12,23,35,46,57]` and `block_size=16`. Maybe the drafter trained
-  with absolute target-position embeddings (raw sequence positions
-  from the original conversation) rather than the local
-  `[0..n_ctx_used-1]` scheme we use after ctx truncation.
+Stopped chasing single-knob hypotheses on the bench and ran a full
+implementation audit against authoritative sources (upstream PR
+ggml-org/llama.cpp#22105, z-lab/dflash PyTorch reference, vLLM
+qwen3_dflash, drafter GGUF metadata dump). Audit summary:
 
-## Concrete next experiments (in priority order)
+### What matches the reference cleanly
 
-1. **Disable graph reuse via env**: run with
-   `LLAMA_GRAPH_REUSE_DISABLE=1 ./build-cuda/bin/llama-speculative-simple
-   ...`. If accept jumps significantly, graph reuse is corrupting input
-   tensors across iterations. Cost: zero code changes, one bench window.
+| Item | Reference | Ours | Status |
+|------|-----------|------|--------|
+| `fc` + `dflash_hidden_norm` location | Once outside layer loop | Once at dflash.cpp:72-74 | ✓ |
+| No per-layer renorm of `fused_target` | Confirmed Round-4 | Default off | ✓ |
+| K/V concat order | `[ctx, noise]` | `[ctx, noise]` (dim 2) | ✓ |
+| K/V projection shares same `wk`/`wv` for ctx + noise | Yes | Yes | ✓ |
+| `attn_norm` applied to noise only | Yes | Yes | ✓ |
+| `attn_q_norm` on Q post-reshape | Yes | dflash.cpp:89 | ✓ |
+| `attn_k_norm` on K post-reshape | Yes (post-concat) | Per-side pre-concat (mathematically equivalent for per-token RMSNorm) | ✓ |
+| V not normed, not RoPE'd | Confirmed | dflash.cpp:118-128 | ✓ |
+| Block content `[id_last, MASK×(K-1)]` | Confirmed | speculative.cpp:892-895 | ✓ |
+| Drafts sampled from positions `[1..K-1]` | Confirmed | speculative.cpp:908 | ✓ |
+| `attn_post_norm` as FFN-input norm | Gemma-specific (drafter tensor list) | dflash.cpp:148 | ✓ |
+| FFN type SwiGLU | Confirmed | `LLM_FFN_SILU + PAR` | ✓ |
+| lm_head shared with target | Confirmed | llama-context.cpp:377 binds `model.output` to target's | ✓ |
+| `tok_embd` shared with target | Confirmed | llama-context.cpp:376 binds | ✓ |
+| Non-causal attention | Drafter GGUF has `attention.causal = False` | Our `kq_mask` only masks bucket padding | ✓ |
+| mask_token_id | Drafter GGUF: `4` (matches tokenizer `<mask>` at id 4) | Loaded from KV | ✓ |
+| block_size | 16 (drafter KV) | Loaded from KV | ✓ |
 
-2. **Drop bucket rounding** (or set `ctx_window = -1` to force full
-   length): if accept improves, then bucket masking is the bug. Edit
-   `common/speculative.cpp:862` `ctx_window = 512` → `0` (means use
-   full n_ctx_total without truncation).
+### Divergences identified
 
-3. **Try the BF16 drafter** (`gemma4-31b-it-dflash-bf16.gguf`, 2.9 GB):
-   if accept improves materially, Q4_K_M drafter quantization is
-   degrading drafts more than expected. Q8_0 also worth trying as a
-   middle ground.
+1. **Sliding-window attention not implemented in drafter graph.**
+   Drafter GGUF has `dflash-draft.attention.sliding_window = 2048`
+   and `sliding_window_pattern = [True, True, True, True, False]` —
+   layers blk.0..blk.3 use SWA-2048, blk.4 uses full. Our
+   `src/models/dflash.cpp` decoder uses uniform full attention with
+   only bucket-padding masking. Probably irrelevant at our typical
+   `ctx_window=512` (max ctx-to-noise distance ~528 < 2048 window),
+   but could matter if `LLAMA_DFLASH_CTX_WINDOW>2048`. Worth fixing
+   for correctness even if it doesn't move the bench.
 
-4. **Try IQ4_XS target** (`gemma-4-31B-it-IQ4_XS.gguf`): if the drafter
+2. **Position scheme is RoPE-relative-only (acknowledged shortcut).**
+   Reference PyTorch uses absolute target-sequence positions
+   monotonically across iterations. We use `[0..n_ctx_used-1]` for
+   ctx and `[n_ctx_used..n_ctx_used+15]` for noise — local positions
+   reset each step. Equivalent under RoPE-relative attention. Upstream
+   PR comment explicitly calls this out as "no draft KV cache" mode.
+
+3. **Extraction point convention.** Tested in Round-5 below — not
+   the bug.
+
+### Round-5 bench: extraction-point ablation, 3x3, q8_0 KV
+
+Added `LLAMA_DFLASH_EXTRACT=upstream` mode in `gemma4.cpp` that tags
+`inpL` at layer start (matches upstream PR #22105's convention where
+the converter applies `+1` to layer ids). A/B vs current default:
+
+| run | mode=late (current) | mode=upstream (PR convention) |
+|----:|--------------------:|------------------------------:|
+| 1   | 8.51%               | 4.49%                          |
+| 2   | 7.64%               | 7.64%                          |
+| 3   | 4.49%               | 5.23%                          |
+| **mean** | **6.88%**     | **5.79%**                      |
+
+Means overlap within one standard deviation. Exact counts repeat
+across modes (11/144 in late_2 and upstream_2; 7/156 in late_3 and
+upstream_1) — there are ~3 distinct "states" the bench lands in and
+extraction-point is not the decision boundary. Late wins by a hair
+which weakly suggests Anbeeld's Gemma converter did NOT apply the
+`+1` shift (i.e. GGUF `target_layer_ids` are raw Python indices).
+
+### Conclusion of audit
+
+Implementation is mostly correct on every architectural detail we
+can verify. The 4-8% accept ceiling vs published 30-50% is not
+explainable by any single structural bug at the llama.cpp level.
+
+Remaining real candidates (in rough order of plausibility):
+
+- **GGUF conversion fidelity vs Anbeeld safetensors.** Compare
+  drafter logits between Anbeeld GGUF and the original z-lab
+  safetensors → CPU fp32 reference on identical inputs. If the
+  GGUF is malformed (missing tensor, wrong shape, miscalibrated
+  scale), this is the most likely culprit. Requires ~6 GB HF
+  download + reference Python inference. **Highest priority.**
+- **Run-to-run variance (CUDA non-determinism).** ±2-3pp variance
+  on same seed/prompt is real. Likely from float reduction order
+  in CUDA flash-attention near tie-break thresholds in greedy
+  sampling, possibly amplified by bidirectional attention. Not a
+  correctness bug per se but pollutes all bench signal. Mitigation:
+  bench at temp>0 with many samples, or move to CPU backend for
+  determinism testing.
+- **SWA implementation gap.** Add SWA-2048 mask to first 4 drafter
+  layers. Low-priority at current ctx sizes but correctness fix.
+
+### Concrete next experiments (revised priority order)
+
+1. **GGUF↔safetensors drafter logit parity.** Download Anbeeld's
+   z-lab/gemma-4-31B-it-DFlash safetensors. Run reference PyTorch
+   forward (single layer at a time if needed) on a fixed input,
+   compare logits to our drafter's logits on the same input. If they
+   diverge beyond ~1% relative error per-position, the GGUF
+   conversion is the bug. Largest single workpiece (~6 GB download +
+   reference inference setup), highest-confidence root-cause signal.
+
+2. **Reduce variance by averaging.** Run 10x same-seed bench at temp 0
+   AND 10x at temp 0.7 with different seeds. Report mean ± std for
+   each mode. Without variance reduction, sub-2pp deltas are noise.
+
+3. **Add SWA mask for blk.0..blk.3 of drafter.** Drafter GGUF
+   has `sliding_window=2048` + pattern `[T,T,T,T,F]`. Currently no
+   SWA enforcement. Add windowing to `llm_graph_input_dflash::set_input`
+   for layers where `is_swa(il)`. Correctness fix; likely
+   bench-neutral at `ctx_window=512` but principled.
+
+4. **Disable graph reuse via env**: `LLAMA_GRAPH_REUSE_DISABLE=1`.
+   Already tested 2026-05-23 — identical accept (4.92%) with and
+   without. Innocent. Re-run only if other variables move.
+
+5. **Try IQ4_XS target** (`gemma-4-31B-it-IQ4_XS.gguf`): if the drafter
    was trained on hidden states extracted from a different target
-   quant, swapping target quant could realign.
+   quant, swapping target quant could realign. Untested.
 
-5. **Instrument extraction tokens**: log the actual token ids per
-   ubatch in `extract_dflash_features` and the token ids per features
-   slice in `common_speculative_impl_dflash::draft()`. Confirm the
-   alignment matches the committed sequence in `prompt_tgt`.
-
-6. **Hidden state extraction point**: try moving the `cb("dflash_extract_N")`
-   tag from after `build_cvec(cur, il)` to before — i.e., capture the
-   pre-control-vector hidden state. Or to right after `attn_residual`
-   (before FFN). Either could matter if the drafter was trained on a
-   specific intermediate representation.
-
-7. **Warmup interference**: the drafter ctx warmup runs the dflash graph
+6. **Warmup interference**: the drafter ctx warmup runs the dflash graph
    with `cross.v_embd.empty()` → `ctx_len = n_ctx = 4096`. The first
    real call should reset via `sched_need_reserve` when bucket changes
    from 0 → small bucket. Verify by adding a log to `sched_reserve` to

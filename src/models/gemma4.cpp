@@ -175,7 +175,34 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    // DFlash extraction mode selector — runs once per process.
+    // - "late"     (default): extract after l_out (full layer output incl per_layer_embd + out_scale + cvec)
+    // - "early":              extract after FFN residual, before per_layer_embd processing
+    // - "upstream":           extract inpL at start of layer iteration (matches upstream PR #22105 +1-shift convention)
+    enum dflash_extract_mode { DFLASH_EXTRACT_LATE, DFLASH_EXTRACT_EARLY, DFLASH_EXTRACT_UPSTREAM };
+    static const int dflash_mode = []() {
+        const char * e = std::getenv("LLAMA_DFLASH_EXTRACT");
+        if (!e) return (int)DFLASH_EXTRACT_LATE;
+        const std::string s(e);
+        if (s == "early")    return (int)DFLASH_EXTRACT_EARLY;
+        if (s == "upstream") return (int)DFLASH_EXTRACT_UPSTREAM;
+        return (int)DFLASH_EXTRACT_LATE;
+    }();
+
     for (int il = 0; il < n_layer; ++il) {
+        // DFlash upstream-convention extraction: tag inpL at layer start (pre-attn_norm).
+        // Matches upstream PR #22105's `cb(inpL, dflash_extract_N, il)` convention, where
+        // the converter writes target_layer_ids with a +1 shift so inpL[il] = HF hidden_states[il].
+        if (dflash_mode == DFLASH_EXTRACT_UPSTREAM && dflash && !dflash->extract_layer_indices.empty()) {
+            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    const std::string name = "dflash_extract_" + std::to_string(i);
+                    cb(inpL, name.c_str(), il);
+                    break;
+                }
+            }
+        }
+
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
 
@@ -341,21 +368,14 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         // residual connection
         cur = ggml_add(ctx0, cur, attn_out);
 
-        // DFlash target layer ids (early extraction point — before per-layer
-        // embedding processing and out_scale). Toggle via env var
-        // LLAMA_DFLASH_EXTRACT=early. Default extraction stays after l_out.
-        if (dflash && !dflash->extract_layer_indices.empty()) {
-            static const bool early = []() {
-                const char * e = std::getenv("LLAMA_DFLASH_EXTRACT");
-                return e && std::string(e) == "early";
-            }();
-            if (early) {
-                for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
-                    if (dflash->extract_layer_indices[i] == il) {
-                        const std::string name = "dflash_extract_" + std::to_string(i);
-                        cb(cur, name.c_str(), il);
-                        break;
-                    }
+        // DFlash early extraction (LLAMA_DFLASH_EXTRACT=early): tag here, after FFN+attn
+        // residual, before per_layer_embd processing and out_scale.
+        if (dflash_mode == DFLASH_EXTRACT_EARLY && dflash && !dflash->extract_layer_indices.empty()) {
+            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    const std::string name = "dflash_extract_" + std::to_string(i);
+                    cb(cur, name.c_str(), il);
+                    break;
                 }
             }
         }
@@ -393,20 +413,14 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        // DFlash target layer ids — default extraction point (after l_out).
-        // Skipped when LLAMA_DFLASH_EXTRACT=early (tagged earlier above).
-        if (dflash && !dflash->extract_layer_indices.empty()) {
-            static const bool early = []() {
-                const char * e = std::getenv("LLAMA_DFLASH_EXTRACT");
-                return e && std::string(e) == "early";
-            }();
-            if (!early) {
-                for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
-                    if (dflash->extract_layer_indices[i] == il) {
-                        const std::string name = "dflash_extract_" + std::to_string(i);
-                        cb(cur, name.c_str(), il);
-                        break;
-                    }
+        // DFlash default (late) extraction point (after l_out — full layer output incl
+        // per_layer_embd + out_scale + cvec). Skipped for other modes (tagged elsewhere).
+        if (dflash_mode == DFLASH_EXTRACT_LATE && dflash && !dflash->extract_layer_indices.empty()) {
+            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    const std::string name = "dflash_extract_" + std::to_string(i);
+                    cb(cur, name.c_str(), il);
+                    break;
                 }
             }
         }
