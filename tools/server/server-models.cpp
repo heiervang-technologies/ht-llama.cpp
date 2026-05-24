@@ -1154,13 +1154,16 @@ void server_models_routes::init_routes() {
                 status["failed"]    = true;
             }
             models_json.push_back(json {
-                {"id",       meta.name},
-                {"aliases",  meta.aliases},
-                {"tags",     meta.tags},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"status",   status},
+                {"id",           meta.name},
+                {"aliases",      meta.aliases},
+                {"tags",         meta.tags},
+                {"object",       "model"},    // for OAI-compat
+                {"owned_by",     "llamacpp"}, // for OAI-compat
+                {"created",      t},          // for OAI-compat
+                {"status",       status},
+                // last-used wall-clock (epoch ms via ggml_time_ms). 0 means never used since router started.
+                // Lets clients sort by MRU when picking among resident models (e.g. heierchat's pickLoadedModel).
+                {"last_used_ms", meta.last_used},
                 // TODO: add other fields, may require reading GGUF metadata
             });
         }
