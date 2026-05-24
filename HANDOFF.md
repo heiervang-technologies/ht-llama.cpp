@@ -156,11 +156,29 @@ Anbeeld GGUF tensor list via `gguf-dump` + `safetensors.safe_open`.
 RULED OUT.** Every safetensors tensor maps cleanly to a same-shape
 GGUF entry. Conversion didn't drop, rename, or mis-shape anything.
 
-Caveat: this verifies tensor INVENTORY, not VALUES. Q6_K quantization
-of bf16 weights could still degrade drafter output. The cleanest
-numerical comparison (bf16 reference values vs Q6_K dequantized
-values, per-tensor RMS error) is the next logical diagnostic but
-requires torch + ggml-py and a few hours of script writing.
+**Round-7b: per-tensor numerical comparison** (`/tmp/compare_dflash_weights.py`):
+
+Loaded bf16 safetensors via raw byte → uint16 → fp32 reinterpret cast,
+dequantized GGUF Q6_K via `gguf.quants.dequantize`, compared per-tensor.
+
+| group | count | mean rel RMS error |
+|---|---:|---:|
+| F32 norm tensors | 22 | **0.000%** (exact) |
+| Q6_K projection tensors | 36 | **1.78%** |
+
+Worst tensor: `fc.weight` (Q6_K) at 2.155% relative RMS error — normal
+for Q6_K quantization. No outlier tensor indicating conversion bug.
+
+**Hypothesis 1 is FULLY ruled out** at both inventory AND numerical
+fidelity levels. The Anbeeld GGUF Q6_K is a clean quantization of the
+z-lab safetensors bf16. Any remaining accept-rate gap is NOT from
+conversion bugs.
+
+Q6_K's ~2% per-tensor error compounds through 5 drafter layers
+(weight × act, then attention softmax, then weight × act, etc.).
+Could plausibly account for several percentage points of accept-rate
+degradation vs bf16. Confirming this requires a BF16 drafter bench
+(currently OOMs at ctx=4096; needs ctx ≤ 2048 + VRAM coordination).
 
 ## Round-6: Gemma4 embedding-scale + softcap fix (2026-05-24, b0a828e8e)
 
