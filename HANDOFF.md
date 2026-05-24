@@ -101,6 +101,32 @@ Two conclusions land cleanly:
 
 Truncation (`ctx_window`) costs a few percent but is not the main bug.
 
+## Round-4: hypothesis 2 (per-layer renorm) — RULED OUT (2026-05-24)
+
+Implemented env-gated experiment in `src/models/dflash.cpp` to apply
+`layer.attn_norm` to `fused_target` before each layer's wk/wv
+(`LLAMA_DFLASH_PER_LAYER_RENORM=1`). Clean 3x3 A/B on Q6_K with VRAM
+free (centurion-llm scaled to 0):
+
+| run | renorm OFF | renorm ON |
+|----:|-----------:|----------:|
+| 1   | 5.56%      | 2.02%     |
+| 2   | 6.22%      | 4.92%     |
+| 3   | 6.22%      | 4.30%     |
+| **mean** | **6.00%** | **3.75%** |
+
+Per-layer renorm makes accept rate **~2.25pp WORSE** on Q6_K. Strong
+signal that the drafter was NOT trained with per-layer ctx renorm —
+current implementation (single `dflash_hidden_norm` at entry,
+following POC design) matches what the drafter expects. The env-gate
+stays in dflash.cpp for future ablation symmetry but defaults off.
+
+**Variance caveat.** Q6_K baseline run-to-run variance is ±2pp on
+same seed/prompt/code. The HANDOFF Round-3 table value of 10.69%
+for Q6_K appears to be an outlier or stale-code state; reproducible
+range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
+table accordingly when next bench cycle happens.
+
 ## Remaining hypotheses
 
 - **Extraction point is wrong.** `cb("dflash_extract_N", il)` currently
@@ -108,12 +134,11 @@ Truncation (`ctx_window`) costs a few percent but is not the main bug.
   `gemma4.cpp`. The drafter may have been trained on a different
   intermediate (pre-cvec, post-attn-residual, post-ffn-residual, or
   the pre-norm output before attention).
-- **Per-layer renorm of `fused_target`.** Our `dflash.cpp` decoder
-  norms `fused_target` once with `dflash_hidden_norm` at the start and
-  reuses it across all 5 layers. If the model expects per-layer
-  re-norm before `wk`/`wv` projection (i.e. apply `layer.attn_norm` to
-  ctx too, not just to noise), our K_ctx/V_ctx are wrong-scaled past
-  layer 0.
+- **GGUF conversion fidelity.** Compare Anbeeld safetensors → CPU fp32
+  reference drafter logits on identical inputs against our Q-quant
+  drafter. If logits diverge beyond quantization noise, the conversion
+  pipeline (HF → GGUF) dropped or misnamed a tensor. Requires HF
+  download (~6 GB safetensors) + reference inference setup.
 - **RoPE position scheme.** Drafter's `dflash.target_layer_ids =
   [1,12,23,35,46,57]` and `block_size=16`. Maybe the drafter trained
   with absolute target-position embeddings (raw sequence positions

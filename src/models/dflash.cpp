@@ -37,6 +37,13 @@ llm_build_dflash_encode::llm_build_dflash_encode(const llama_model & model, cons
 // ==========================================================================
 
 llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+    // env-gated experiment: re-apply layer.attn_norm to fused_target before each layer's wk/wv
+    // hypothesis: drafter trained with per-layer ctx renorm; without it K_ctx/V_ctx are wrong-scaled past layer 0
+    static const bool dflash_per_layer_renorm = []() {
+        const char * e = std::getenv("LLAMA_DFLASH_PER_LAYER_RENORM");
+        return e && e[0] != '\0' && e[0] != '0';
+    }();
+
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -82,6 +89,12 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
         ggml_tensor * cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
+        ggml_tensor * ctx_src = fused_target;
+        if (dflash_per_layer_renorm) {
+            ctx_src = build_norm(fused_target, layer.attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(ctx_src, "ctx_attn_norm", il);
+        }
+
         // Q from noise only
         ggml_tensor * Qcur = build_lora_mm(layer.wq, cur);
         if (layer.wq_b) { Qcur = ggml_add(ctx0, Qcur, layer.wq_b); }
@@ -105,7 +118,7 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
                 ext_factor, attn_factor, beta_fast, beta_slow);
         cb(K_noise, "Kcur_noise", il);
 
-        ggml_tensor * K_ctx = build_lora_mm(layer.wk, fused_target);
+        ggml_tensor * K_ctx = build_lora_mm(layer.wk, ctx_src);
         if (layer.wk_b) { K_ctx = ggml_add(ctx0, K_ctx, layer.wk_b); }
         K_ctx = ggml_reshape_3d(ctx0, K_ctx, n_embd_head, n_head_kv, ctx_len);
         K_ctx = build_norm(K_ctx, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
@@ -122,7 +135,7 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
         V_noise = ggml_reshape_3d(ctx0, V_noise, n_embd_head, n_head_kv, n_tokens);
         cb(V_noise, "Vcur_noise", il);
 
-        ggml_tensor * V_ctx = build_lora_mm(layer.wv, fused_target);
+        ggml_tensor * V_ctx = build_lora_mm(layer.wv, ctx_src);
         if (layer.wv_b) { V_ctx = ggml_add(ctx0, V_ctx, layer.wv_b); }
         V_ctx = ggml_reshape_3d(ctx0, V_ctx, n_embd_head, n_head_kv, ctx_len);
         cb(V_ctx, "Vcur_ctx", il);
