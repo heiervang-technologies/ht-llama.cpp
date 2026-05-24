@@ -135,6 +135,33 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
+## Round-7: GGUF tensor-inventory parity vs safetensors (2026-05-24)
+
+Compared `models/dflash-gemma4-31b/model.safetensors` against the
+Anbeeld GGUF tensor list via `gguf-dump` + `safetensors.safe_open`.
+
+| | safetensors | GGUF (Q6_K) | match |
+|---|---:|---:|---|
+| Total tensors | 58 | 58 | ✓ |
+| fc.weight | (5376, 32256) bf16 | dflash_fc.weight (32256, 5376) Q6_K | ✓ shape (transposed for GGUF row layout) |
+| hidden_norm.weight | (5376,) bf16 | dflash_hidden_norm.weight (5376,) F32 | ✓ |
+| 5 × layers.N.{input,post_attention}_layernorm | (5376,) | blk.N.{attn_norm,post_attention_norm} (5376,) F32 | ✓ all 5 layers |
+| 5 × layers.N.self_attn.{q,k,v,o}_proj | dims match per head config | blk.N.{attn_q,attn_k,attn_v,attn_output} | ✓ all 5 layers |
+| 5 × layers.N.self_attn.{q,k}_norm | (128,) per-head-dim | blk.N.{attn_q_norm,attn_k_norm} | ✓ all 5 layers |
+| 5 × layers.N.mlp.{down,gate,up}_proj | dims match intermediate=10752 | blk.N.{ffn_down,ffn_gate,ffn_up} | ✓ all 5 layers |
+| norm.weight | (5376,) | output_norm.weight (5376,) F32 | ✓ |
+| tok_embd / lm_head | n/a (tied/shared) | none in drafter, bound to target at runtime | ✓ |
+
+**Hypothesis 1 (GGUF conversion fidelity at the inventory level) is
+RULED OUT.** Every safetensors tensor maps cleanly to a same-shape
+GGUF entry. Conversion didn't drop, rename, or mis-shape anything.
+
+Caveat: this verifies tensor INVENTORY, not VALUES. Q6_K quantization
+of bf16 weights could still degrade drafter output. The cleanest
+numerical comparison (bf16 reference values vs Q6_K dequantized
+values, per-tensor RMS error) is the next logical diagnostic but
+requires torch + ggml-py and a few hours of script writing.
+
 ## Round-6: Gemma4 embedding-scale + softcap fix (2026-05-24, b0a828e8e)
 
 Root-cause find from vLLM PR #41703: drafter shares target's tok_embd
