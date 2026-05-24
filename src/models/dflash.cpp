@@ -71,6 +71,9 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
     res->add_input(std::move(inp_dflash));
 
     GGML_ASSERT(model.tok_embd != nullptr && "DFlash decoder requires target model's tok_embd");
+    // build_inp_embd auto-applies hparams.f_embedding_scale when non-zero — this is how
+    // we inherit Gemma4's sqrt(n_embd) noise embedding normalization via the cross-binding
+    // in llama-context.cpp. See vLLM PR #41703 for the architectural rationale.
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "inp_noise_embd", -1);
 
@@ -183,6 +186,16 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
 
     if (model.output) {
         cur = build_lora_mm(model.output, cur, model.output_s);
+
+        // Apply target-architecture-specific final logit softcap (Gemma4: 30.0).
+        // Monotonic transform, so does not change argmax for greedy sampling, but
+        // matches the distribution the drafter was trained against. See vLLM PR #41703.
+        if (hparams.f_final_logit_softcapping != 0.0f) {
+            cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+            cur = ggml_tanh(ctx0, cur);
+            cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+        }
+
         cb(cur, "result_output", -1);
         res->t_logits = cur;
     }

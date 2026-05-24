@@ -376,6 +376,22 @@ llama_context::llama_context(
             dflash_model.tok_embd = params.target_model->tok_embd;
             dflash_model.output   = params.target_model->output ? params.target_model->output : params.target_model->tok_embd;
             dflash_model.output_s = params.target_model->output_s;
+
+            // Inherit target-architecture-specific transforms applied around the shared
+            // tok_embd / lm_head. Gemma4 normalizes noise embeddings by sqrt(n_embd) and
+            // applies a final logit softcap; the drafter was trained against those, so
+            // the dflash decoder graph must replicate them. See vLLM PR #41703.
+            if (params.target_model->arch == LLM_ARCH_GEMMA4) {
+                const float n_embd_target = (float) params.target_model->hparams.n_embd;
+                // Match Gemma4 training-time BF16 rounding of sqrt(n_embd).
+                dflash_model.hparams.f_embedding_scale =
+                    ggml_bf16_to_fp32(ggml_fp32_to_bf16(sqrtf(n_embd_target)));
+                dflash_model.hparams.f_final_logit_softcapping =
+                    params.target_model->hparams.f_final_logit_softcapping;
+            } else {
+                dflash_model.hparams.f_embedding_scale = 1.0f;
+                dflash_model.hparams.f_final_logit_softcapping = 0.0f;
+            }
         }
 
         sched_reserve();
