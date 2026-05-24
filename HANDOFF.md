@@ -1,19 +1,27 @@
 # DFlash Handoff — Gemma 4 31B + DFlash drafter
 
-## Current status (2026-05-23, build b9286-266a6f69d)
+## Current status (2026-05-24, build with b0a828e8e)
 
-End-to-end DFlash speculative decoding **compiles, loads, and runs**, but the
-**acceptance rate is 4.9%** — well below the floor where speculation pays off.
-Net result on the centurion 3090 with `gemma-4-31B-it-Q4_K_M` (FA on, ngl 99,
-temp 0):
+End-to-end DFlash speculative decoding works. **Best acceptance crossed
+double digits** (11.36% Q6_K best, 8.89% mean) after fixing the Gemma4
+embedding-scale + softcap inheritance per vLLM PR #41703. Still
+significantly under the published ~21% MT-Bench / 44% HumanEval acceptance.
 
-| run                                         | gen t/s | accept |
-|---------------------------------------------|--------:|-------:|
-| baseline (`llama-cli`, target alone)        |   29.1  |   —    |
-| DFlash spec (`llama-speculative-simple`, Q4_K_M drafter, `--dflash`) | 14.9 | 4.9% |
+| run                                          | gen t/s | accept (mean of 3) | best |
+|---------------------------------------------|--------:|-------------------:|-----:|
+| baseline (`llama-cli`, target alone)        |   29.1  |          —         |   —  |
+| Round-3 (Q4_K_M drafter, pre-fix)            | 14.9   |          4.92%     | -    |
+| Round-5 (Q6_K drafter, pre-fix)              | 10-11  |          6.88%     | 8.51% |
+| **Round-6 (Q6_K, embed-scale+softcap fix)**  | 10-11  |        **8.89%**   | **11.36%** |
+| Round-6 (Q4_K_M, embed-scale+softcap fix)    | 10-11  |          6.76%     | 8.16% |
 
-DFlash is ~2× **slower** than baseline. Functional integration works; perf
-claim does not land yet.
+Reference target for our prompt class (conversational, MT-Bench-like)
+is **~21% acceptance per vLLM PR #41703**. We're at 8.89% mean — gap
+of ~12pp remains. HumanEval-class prompts (code) would target ~44%.
+
+DFlash is still slower than baseline because acceptance rate is below
+the break-even point (block_size=16 means even 1/16 accept is "free
+draft cost amortization"; need ~25% accept for net speedup vs target alone).
 
 ## What we ruled out
 
@@ -126,6 +134,43 @@ same seed/prompt/code. The HANDOFF Round-3 table value of 10.69%
 for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
+
+## Round-6: Gemma4 embedding-scale + softcap fix (2026-05-24, b0a828e8e)
+
+Root-cause find from vLLM PR #41703: drafter shares target's tok_embd
++ lm_head. For Gemma4 targets, the drafter must inherit two transforms
+that target applies around the shared weights:
+
+1. **`sqrt(n_embd)` noise embedding normalization** (Gemma4 pipeline).
+   Without it, noise embeddings are ~73× too small.
+2. **`final_logit_softcapping = 30.0`** on drafter's lm_head output.
+   Monotonic; doesn't affect greedy argmax but matches training distribution.
+
+Implementation: `llama-context.cpp:380-395` cross-binding inherits these
+from `target_model->arch == LLM_ARCH_GEMMA4`. `dflash.cpp` consumes via
+`hparams.f_embedding_scale` (applied automatically by `build_inp_embd`'s
+Granite-arch code path — see footgun note below) and a manual softcap
+block matching `gemma4.cpp:443-447`.
+
+**Footgun for future arch ports:** `llama-graph.cpp:1827-1829`
+auto-applies `hparams.f_embedding_scale` inside `build_inp_embd` (originally
+added for Granite). If you also add a manual `ggml_scale(inpL, scale)`
+in your model graph, you get DOUBLE scaling and a quietly broken model.
+Grep for `f_embedding_scale` usages before adding new manual scales.
+First attempt of this fix did double-scale and tanked Q6_K to 2.65%
+mean. Removing manual scale fixed it.
+
+Bench result (Q6_K drafter, 3 runs, q8_0 KV, same prompt/seed):
+
+| pre-fix | with fix |
+|--------:|---------:|
+| 8.51%   | 6.80%    |
+| 7.64%   | 11.36%   |
+| 4.49%   | 8.51%    |
+| **mean 6.88%** | **mean 8.89%** |
+
++2pp lift, first clean cross of 10% threshold. Confirms hypothesis but
+doesn't close the gap to vLLM's ~21% MT-Bench reference.
 
 ## Round-5: correctness audit vs upstream PR #22105 + z-lab reference (2026-05-24)
 
