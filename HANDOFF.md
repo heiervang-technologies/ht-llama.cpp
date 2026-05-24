@@ -163,10 +163,12 @@ qwen3_dflash, drafter GGUF metadata dump). Audit summary:
    and `sliding_window_pattern = [True, True, True, True, False]` —
    layers blk.0..blk.3 use SWA-2048, blk.4 uses full. Our
    `src/models/dflash.cpp` decoder uses uniform full attention with
-   only bucket-padding masking. Probably irrelevant at our typical
-   `ctx_window=512` (max ctx-to-noise distance ~528 < 2048 window),
-   but could matter if `LLAMA_DFLASH_CTX_WINDOW>2048`. Worth fixing
-   for correctness even if it doesn't move the bench.
+   only bucket-padding masking. Latent at our typical
+   `ctx_window=512` (max ctx-to-noise distance ~528 < 2048 window).
+   **Would matter the moment `LLAMA_DFLASH_CTX_WINDOW > 2048`** —
+   ctx tokens beyond window 2048 would attend in our graph but be
+   masked in the drafter's training distribution. Worth fixing for
+   correctness even though bench-neutral today.
 
 2. **Position scheme is RoPE-relative-only (acknowledged shortcut).**
    Reference PyTorch uses absolute target-sequence positions
