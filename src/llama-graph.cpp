@@ -368,13 +368,35 @@ void llm_graph_input_dflash::set_input(const llama_ubatch * ubatch) {
         }
     }
 
+    const int64_t n_kv = ctx_len + n_block;
+
     if (kq_mask && kq_mask->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
         auto * data = (float *) kq_mask->data;
-        const int64_t n_kv = ctx_len + n_block;
         for (int64_t q = 0; q < n_block; ++q) {
             for (int64_t k = 0; k < n_kv; ++k) {
                 data[q * n_kv + k] = (k >= n_real && k < ctx_len) ? -INFINITY : 0.0f;
+            }
+        }
+    }
+
+    // SWA mask variant: same bucket-padding mask PLUS sliding-window mask between noise
+    // (q at absolute pos n_real+q) and ctx (k at absolute pos k for k<n_real).  Noise→noise
+    // distances are small (<= n_block); ctx→ctx unused here (q is noise only).
+    if (kq_mask_swa && kq_mask_swa->buffer && n_swa > 0) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask_swa->buffer));
+        auto * data = (float *) kq_mask_swa->data;
+        for (int64_t q = 0; q < n_block; ++q) {
+            const int64_t q_pos = n_real + q;
+            for (int64_t k = 0; k < n_kv; ++k) {
+                // bucket padding always masked
+                if (k >= n_real && k < ctx_len) {
+                    data[q * n_kv + k] = -INFINITY;
+                    continue;
+                }
+                // determine k's absolute position: ctx region [0..n_real), noise region [ctx_len..ctx_len+n_block)
+                const int64_t k_pos = (k < ctx_len) ? k : (n_real + (k - ctx_len));
+                data[q * n_kv + k] = (q_pos - k_pos >= n_swa) ? -INFINITY : 0.0f;
             }
         }
     }

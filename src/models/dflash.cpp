@@ -51,7 +51,9 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
     const int64_t ctx_len = (cross && !cross->v_embd.empty()) ? cross->n_enc : n_ctx;
     const int64_t n_kv_total = ctx_len + n_tokens;
 
-    auto inp_dflash = std::make_unique<llm_graph_input_dflash>(cross, ctx_len, n_tokens);
+    const bool dflash_has_swa = hparams.is_swa_any() && hparams.n_swa > 0;
+    auto inp_dflash = std::make_unique<llm_graph_input_dflash>(
+        cross, ctx_len, n_tokens, dflash_has_swa ? (int64_t)hparams.n_swa : 0);
     inp_dflash->target_hidden = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_target_features, ctx_len);
     ggml_set_input(inp_dflash->target_hidden);
     cb(inp_dflash->target_hidden, "dflash_target_hidden", -1);
@@ -64,7 +66,14 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
     ggml_set_input(inp_dflash->kq_mask);
     inp_dflash->kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_dflash->kq_mask, GGML_TYPE_F16) : inp_dflash->kq_mask;
 
+    if (dflash_has_swa) {
+        inp_dflash->kq_mask_swa = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_kv_total, n_tokens, 1, 1);
+        ggml_set_input(inp_dflash->kq_mask_swa);
+        inp_dflash->kq_mask_swa_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp_dflash->kq_mask_swa, GGML_TYPE_F16) : inp_dflash->kq_mask_swa;
+    }
+
     ggml_tensor * kq_mask       = inp_dflash->kq_mask_cnv;
+    ggml_tensor * kq_mask_swa   = inp_dflash->kq_mask_swa_cnv;
     ggml_tensor * pos_ctx       = inp_dflash->pos_ctx;
     ggml_tensor * target_hidden = inp_dflash->target_hidden;
 
@@ -152,7 +161,11 @@ llm_build_dflash_decode::llm_build_dflash_decode(const llama_model & model, cons
         ggml_build_forward_expand(gf, Kcur);
         ggml_build_forward_expand(gf, Vcur);
 
-        cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, kq_mask, nullptr, nullptr, kq_scale, il);
+        // Per-layer mask selection: SWA layers use the windowed mask (kq_mask_swa) so noise
+        // tokens only attend to ctx tokens within the trained sliding window.  Dense layers
+        // use the full mask.  At ctx_len <= n_swa this is a no-op (no key is windowed out).
+        ggml_tensor * layer_kq_mask = (kq_mask_swa && hparams.is_swa(il)) ? kq_mask_swa : kq_mask;
+        cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, layer_kq_mask, nullptr, nullptr, kq_scale, il);
         cb(cur, "kqv_out", il);
 
         cur = build_lora_mm(layer.wo, cur);
@@ -214,6 +227,27 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_DFLASH_N_TARGET_FEATURES, hparams.dflash_n_target_features, false);
     if (!ml.get_arr(LLM_KV_DFLASH_TARGET_LAYER_IDS, hparams.dflash_target_layer_ids, true)) {
         throw std::runtime_error("missing DFlash target_layer_ids");
+    }
+
+    // Sliding Window Attention: drafter GGUF may carry per-layer sliding_window_pattern
+    // (e.g. Anbeeld Gemma4 drafter: [T,T,T,T,F] with sliding_window=2048).  Latent at small
+    // ctx_window (<=2048) but required for correctness once ctx grows past the window.
+    if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+        // Re-use std::array<int,16> (already template-instantiated by dflash_target_layer_ids)
+        // to receive the BOOL/INT array.  Filled with 0 by default so unset slots are dense.
+        std::array<int, 16> pattern{};
+        if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern, false)) {
+            const uint32_t n = std::min<uint32_t>(pattern.size(), hparams.n_layer);
+            for (uint32_t il = 0; il < n; ++il) {
+                hparams.swa_layers[il] = pattern[il] != 0 ? 1u : 0u;
+            }
+        } else {
+            // No per-layer pattern: assume all layers are SWA.
+            for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                hparams.swa_layers[il] = 1u;
+            }
+        }
     }
 }
 
