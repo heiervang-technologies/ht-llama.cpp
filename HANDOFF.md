@@ -156,7 +156,7 @@ Anbeeld GGUF tensor list via `gguf-dump` + `safetensors.safe_open`.
 RULED OUT.** Every safetensors tensor maps cleanly to a same-shape
 GGUF entry. Conversion didn't drop, rename, or mis-shape anything.
 
-**Round-7b: per-tensor numerical comparison** (`/tmp/compare_dflash_weights.py`):
+**Round-7b: per-tensor numerical comparison** (`scripts/compare-dflash-weights.py`):
 
 Loaded bf16 safetensors via raw byte → uint16 → fp32 reinterpret cast,
 dequantized GGUF Q6_K via `gguf.quants.dequantize`, compared per-tensor.
