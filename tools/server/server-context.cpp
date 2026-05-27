@@ -2740,6 +2740,25 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
+                                    // DFlash + checkpoint restore is the third cache mechanism in the
+                                    // same bug class as the prompt_cache + per-slot reuse gates above.
+                                    // load_tgt restores the target's KV state for cached positions,
+                                    // but does NOT re-extract dflash target features for them. The
+                                    // subsequent decode only fills features for [n_past..n_total),
+                                    // while the drafter reads n_new = n_total - dflash_n_past entries
+                                    // (with dflash_n_past=0 right after common_speculative_begin) →
+                                    // OOB read past end of buffer → NaN logits → 0% accept.
+                                    //
+                                    // Rarely reachable with --parallel >= 4 (requests spread across
+                                    // slots, fewer checkpoints per slot), but trivially fires under
+                                    // --parallel 1 + repeated-prompt traffic. Force a full re-prefill
+                                    // when dflash is active. Mission m-20260527-103737, verified on
+                                    // titan with default cache_prompt:true going from 0/873 -> 96/1179
+                                    // (8.14%) accept on the chat-completions smoke after this gate.
+                                    if (params_base.speculative.dflash) {
+                                        do_reset = true;
+                                    }
+
                                     if (!do_reset) {
                                         // restore the context checkpoint
 
