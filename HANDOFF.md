@@ -135,6 +135,29 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
+## Round-8: shipped to titan (2026-05-27, unified-llm:dflash-794ddb2df)
+
+`feat/dflash-integration` tip (with surgical `--remap-developer-role` port
+required by titan-llm's entrypoint) baked into `unified-llm:dflash-794ddb2df`
+by snoop-kube, deployed on titan-llm. Preset `gemma-4-31b-dflash-Q6_K` live
+on `http://192.168.8.158:30184`. End-to-end smoke green via
+`scripts/smoke-dflash-deployed.sh`.
+
+Live accept rate on titan: **4.48%** on a single 256-token code prompt
+(670 drafted, 30 accepted). Below centurion bench mean of **8.89%** on Q6_K.
+
+Snoop's three hypotheses for the delta (deferred — not user-blocking):
+1. Target Q4_K_M numerical difference titan vs centurion (low likelihood, same model file).
+2. ctx-size=4096 in preset clipping draft proposals on longer rolling contexts.
+3. Titan's 2×3090 tensor-split splitting a draft layer awkwardly across cards
+   (even with `n-gpu-layers-draft=99` — worth pinning `--tensor-split` to
+   single-card for the drafter as an A/B).
+
+DFlash is functional in production. Net throughput is below break-even
+(target alone ~29 t/s on centurion; with dflash at 4.48% accept the speedup
+is < 1.0×) but heierchat picker UX works, route resolves cleanly, drafter
+loads alongside target.
+
 ## Round-7: GGUF tensor-inventory parity vs safetensors (2026-05-24)
 
 Compared `models/dflash-gemma4-31b/model.safetensors` against the
