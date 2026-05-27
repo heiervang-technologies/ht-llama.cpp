@@ -135,6 +135,66 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
+## Round-10: third gate — checkpoint restore (2026-05-27, 44ea35688)
+
+Round-9 gates A+B passed local but titan continued failing on the same
+chat-completions smoke (0/873 accept, NaN signature intact) even after
+the .so was confirmed loaded with both gates. After elimination — Gate B
+was correctly skipping the per-slot reuse branch on titan because
+heierchat already sets `cache_prompt: false` client-side, so Gate B
+never *had* to fire there. Some OTHER cache mechanism was firing.
+
+**Third path:** server-context.cpp:2756 — context-checkpoint restore.
+
+When `pos_min >= pos_min_thold` (SWA-driven), the slot prefill flow
+searches `slot.prompt.checkpoints` for a usable checkpoint and, if
+found, calls `it->load_tgt(ctx_tgt, ...)`. Same bug class as A+B:
+target KV gets restored for cached positions but dflash target
+features for those positions are NOT re-extracted; the drafter's
+subsequent read overflows the buffer.
+
+Why local probes missed it: with `--parallel >= 4` requests spread
+across slots and checkpoints stay small per slot, so the path rarely
+triggers. Titan ran `--parallel 1`, so a single slot accumulated
+checkpoints across consecutive identical-prompt smoke runs — every
+iteration past the first hit the restore path.
+
+**Fix (44ea35688) — Gate C:** force `do_reset = true` at the
+checkpoint-restore site whenever `params_base.speculative.dflash`,
+making the slot full-re-prefill instead of restoring KV.
+
+**Iteration loop:** built locally on centurion (Arch glibc 2.38) →
+snoop's `kubectl cp` blew up on glibc mismatch with the pod's
+Ubuntu 22.04 (glibc 2.35). Set up `nvidia/cuda:12.4.1-devel-ubuntu22.04`
+build container on centurion (`ht-llama-build`); subsequent rebuilds
+take ~30s incrementally. Hot-patch loop = build .so in container →
+`kubectl cp` to `/app/libllama-server-impl.so` → `pkill -f` the dflash
+child → router auto-respawns child mmap'ing the fresh .so.
+
+Co-investigators: big-dog (third-path hypothesis from the audit of all
+load_tgt/load_dft sites + the `--parallel 1 vs 4` mechanism call);
+snoop-kube (build-container setup, hot-patch flow, smoke verification);
+heierchat (client-side `cache_prompt:false` defensive workaround that
+isolated the Gate-C path by eliminating Gate-B's contribution).
+
+**Verified on titan with default `cache_prompt:true` (no client workaround):**
+  baseline (pre-Gate-C):    0/873 accept   — NaN signature
+  with Gate C (44ea35688):  96/1179 (8.14%) — zero NaN, 5/5 PASS
+
+**Latent follow-up (deferred):**
+  Spec-decode partial-accept rollback path at server-context.cpp:3352
+  (the `n_rollback > 0 && use_ckpt_tgt` branch) restores KV without
+  resetting `dflash_n_past`. In practice the rollback shrinks the
+  prompt so subsequent `draft()` calls see `n_new < 1` and skip
+  (early-exit at common/speculative.cpp:852), not OOB. Worth fixing
+  cleanly by making `common_speculative_impl_dflash::accept()` trim
+  `accumulated_ctx` and adjust `dflash_n_past` on rollback, but the
+  current behavior is correctness-safe, just suboptimal.
+
+**Ops note:** the running pod is hot-patched, not baked. Next image
+build off this commit should be tagged + rolled normally so the .so
+is durable across pod restarts.
+
 ## Round-9: prompt-cache + DFlash NaN bug (2026-05-27, d7a88fdbc)
 
 Hit a production regression: dflash on titan emitted all-NaN drafter
