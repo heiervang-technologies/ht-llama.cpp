@@ -64,10 +64,12 @@ fi
 step "2. POST /v1/chat/completions — drafter loads + non-empty completion"
 last_used_before=$(echo "$entry" | jq -r '.last_used_ms // 0')
 
+# enable_thinking:false to keep Gemma4-style targets from burning the small max_tokens
+# budget on reasoning_content. max_tokens=64 gives enough headroom even for verbose templates.
 t_start=$(date +%s%N)
 response=$(curl -sS --max-time 120 -X POST "$PEER/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with exactly the word OK\"}],\"max_tokens\":8,\"stream\":false,\"temperature\":0}" 2>/dev/null)
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with exactly the word OK\"}],\"max_tokens\":64,\"stream\":false,\"temperature\":0,\"chat_template_kwargs\":{\"enable_thinking\":false}}" 2>/dev/null)
 t_end=$(date +%s%N)
 elapsed_ms=$(( (t_end - t_start) / 1000000 ))
 
@@ -77,13 +79,27 @@ if [[ -n "$err" ]]; then
     exit 1
 fi
 
+# content can land in .content (normal) or .reasoning_content (thinking-mode models like Gemma4).
+# Either one means the model actually generated something.
 content=$(echo "$response" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+reasoning=$(echo "$response" | jq -r '.choices[0].message.reasoning_content // empty' 2>/dev/null)
 resolved_model=$(echo "$response" | jq -r '.model // empty' 2>/dev/null)
+draft_n=$(echo "$response" | jq -r '.timings.draft_n // 0' 2>/dev/null)
+draft_accepted=$(echo "$response" | jq -r '.timings.draft_n_accepted // 0' 2>/dev/null)
 
-if [[ -z "$content" ]]; then
-    bad "completion content is empty"
+if [[ -n "$content" ]]; then
+    ok "completion returned ($elapsed_ms ms): '${content:0:60}'"
+elif [[ -n "$reasoning" ]]; then
+    ok "completion in reasoning_content ($elapsed_ms ms): '${reasoning:0:60}'"
 else
-    ok "completion returned ($elapsed_ms ms): '$content'"
+    bad "completion content AND reasoning_content are both empty"
+fi
+
+if (( draft_n > 0 )); then
+    pct=$(awk "BEGIN{printf \"%.2f\", 100*$draft_accepted/$draft_n}")
+    ok "drafter active: $draft_n drafted, $draft_accepted accepted (${pct}%)"
+else
+    bad "drafter inactive: timings.draft_n == 0 — dflash did not engage"
 fi
 
 if [[ "$resolved_model" == "$MODEL" ]]; then
@@ -105,13 +121,14 @@ step "4. Sanity — second request to confirm drafter stays warm"
 t_start=$(date +%s%N)
 response2=$(curl -sS --max-time 60 -X POST "$PEER/v1/chat/completions" \
     -H "Content-Type: application/json" \
-    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with just YES\"}],\"max_tokens\":4,\"stream\":false,\"temperature\":0}" 2>/dev/null)
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"reply with just YES\"}],\"max_tokens\":64,\"stream\":false,\"temperature\":0,\"chat_template_kwargs\":{\"enable_thinking\":false}}" 2>/dev/null)
 t_end=$(date +%s%N)
 elapsed_ms2=$(( (t_end - t_start) / 1000000 ))
 
 content2=$(echo "$response2" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
-if [[ -n "$content2" ]]; then
-    ok "second request ($elapsed_ms2 ms): '$content2'"
+reasoning2=$(echo "$response2" | jq -r '.choices[0].message.reasoning_content // empty' 2>/dev/null)
+if [[ -n "$content2" || -n "$reasoning2" ]]; then
+    ok "second request ($elapsed_ms2 ms): '${content2:-$reasoning2}'"
 else
     bad "second request returned empty"
 fi
