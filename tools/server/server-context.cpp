@@ -1243,6 +1243,30 @@ private:
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
 
+            // DFlash + prompt cache reuse causes drafter NaN logits.
+            //
+            // Background: prompt cache restores the target's KV state for cached prefix tokens
+            // via llama_state_seq_set_data_ext, but DOES NOT re-extract dflash target features
+            // for those positions. After restore, only NEW tokens get decoded → only NEW token
+            // features end up in ctx_tgt's dflash.target_features buffer.
+            //
+            // Then dflash impl's draft() reads `n_new = n - dflash_n_past` features from that
+            // buffer, where `n_new` counts ALL prompt tokens (cached + new). The read overflows
+            // the buffer past its actual size (just the NEW token count) → out-of-bounds read
+            // → garbage features fed to drafter → NaN logits → 0% accept rate.
+            //
+            // Until the dflash impl learns to skip cached positions (or the cache restore path
+            // re-extracts features for them), the safest fix is to disable prompt cache reuse
+            // when this slot's task is configured for DFlash speculation. Performance impact:
+            // first request pays full prompt-eval cost; subsequent dflash requests already
+            // benefit from spec acceptance and don't strictly need prefix caching.
+            //
+            // Mission m-20260527-103737. Confirmed via cache_prompt=false workaround → 6.74%
+            // accept on the same request that hits 0% NaN with default cache_prompt=true.
+            if (params_base.speculative.dflash) {
+                update_cache = false;
+            }
+
             if (update_cache) {
                 SRV_INF("%s", "updating prompt cache\n");
 
