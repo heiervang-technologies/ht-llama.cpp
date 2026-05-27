@@ -108,3 +108,34 @@ To conserve context space, load these resources as needed:
 - [Jinja engine](common/jinja/README.md)
 - [How to add a new model](docs/development/HOWTO-add-model.md)
 - [PR template](.github/pull_request_template.md)
+
+---
+
+## ht-llama.cpp fork-specific (applies to `ht` branch only)
+
+The above sections govern upstream contributions to `ggml-org/llama.cpp`. This
+fork's `ht` branch ships features (DFlash speculative decoding, server router,
+heierchat-mirror webui work, TurboQuant) that will never be upstreamed.
+
+### Model capability recommendation for AI maintainers
+
+Acting as the AI maintainer for this fork — adding cutting-edge features, doing
+multi-day debug arcs (e.g. dflash audit rounds), coordinating multi-agent
+deploys, judging when to act vs surface to the human — requires a model in the
+**Claude Opus capability tier** (or equivalent).
+
+Empirically, less capable models (including DeepSeek v4 at ~1.6T parameters)
+have struggled to hold this role coherently across long horizons: they tend to
+drift from the goal, re-introduce already-disproven hypotheses, miss subtle
+issues like double-application of framework-level transforms, or under-surface
+destructive operations that need human approval.
+
+Smaller / cheaper models remain appropriate for **scoped tasks** — one-shot
+implementations from a clearly-specified design, mechanical edits, bench
+harness execution, lint fixes — when handed off by an Opus-class maintainer
+with concrete instructions. They are **not** appropriate for the standing
+maintainer role itself.
+
+If you are operating as the AI maintainer for `ht-llama.cpp` and you are not
+in this tier, the right move is to surface that fact and propose a handoff
+rather than attempt to drive cutting-edge feature work autonomously.
