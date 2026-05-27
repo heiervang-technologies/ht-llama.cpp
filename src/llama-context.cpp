@@ -1404,6 +1404,10 @@ void llama_context::clear_dflash_target_features() {
     dflash.target_features.clear();
 }
 
+void llama_context::set_dflash_need_reserve() {
+    sched_need_reserve = true;
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     // DFlash decoder runs through encode path due to no kv-cache, but needs decoder graph type
     if (model.arch == LLM_ARCH_DFLASH && dflash_decoder_ctx && gtype == LLM_GRAPH_TYPE_ENCODER) {
@@ -1887,13 +1891,24 @@ int llama_context::decode(const llama_batch & batch_inp) {
     embd_seq.clear();
     output_swaps.clear();
 
-    // DFlash: clear target_features at the start of each decode call. The
-    // intra-decode ubatch loop below extends it via extract_dflash_features
-    // (APPEND mode). Inter-decode clear ensures the drafter's read at offset
-    // 0 picks up exactly this decode's features, not stale ones from earlier
-    // decodes. Mission m-20260527-103737 multi-ubatch + rollback fix.
+    // DFlash: clear target_features at the start of a decode call ONLY if it
+    // contains the beginning of a prompt (any token with pos == 0). This allows
+    // target_features to accumulate features across consecutive prefill decodes,
+    // which is needed for split-prefill prompts (checkpoints or large batches).
+    // The buffer is cleared at the end of draft() once the features are consumed.
     if (cparams.dflash_extract_enabled && !dflash.extract_tensors.empty()) {
-        dflash.target_features.clear();
+        bool has_pos_0 = false;
+        if (batch_inp.pos != nullptr) {
+            for (int32_t i = 0; i < batch_inp.n_tokens; ++i) {
+                if (batch_inp.pos[i] == 0) {
+                    has_pos_0 = true;
+                    break;
+                }
+            }
+        }
+        if (has_pos_0) {
+            dflash.target_features.clear();
+        }
     }
 
     sched_reserve();

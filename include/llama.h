@@ -925,6 +925,9 @@ extern "C" {
                        int32_t   n_embd,
                        int32_t   n_tokens);
 
+    LLAMA_API void llama_set_dflash_need_reserve(
+            struct llama_context * ctx);
+
     //
     // Decoding
     //

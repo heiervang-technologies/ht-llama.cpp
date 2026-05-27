@@ -833,6 +833,7 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
         // do NOT clear it here because begin() fires AFTER the prompt-prefill
         // decode has already extracted the prompt features that the first
         // draft() call is about to consume.
+        llama_set_dflash_need_reserve(ctx_dft_dec);
     }
 
     bool process(const llama_batch & /*batch*/) override {
@@ -851,7 +852,11 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
             }
 
             auto & result = *dp.result;
-            const int n = (int)dp.prompt->size();
+            int n = (int)dp.prompt->size();
+            if (n < dflash_n_past) {
+                accumulated_ctx.resize((size_t)n * (size_t)n_target_features);
+                dflash_n_past = n;
+            }
             const int n_new = n - dflash_n_past;
 
             if (n_new < 1) {
@@ -967,6 +972,7 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
                 LOG_INF("dflash draft debug: ctx=%d block=%d draft:%s\n", n_ctx_used, block_size, dbg.c_str());
             }
         }
+        llama_clear_dflash_target_features(ctx_tgt);
     }
 
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {

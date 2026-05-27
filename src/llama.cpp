@@ -602,3 +602,7 @@ void llama_set_dflash_accumulated_target_ctx(
     ctx->set_dflash_accumulated_target_ctx(data, n_embd, n_tokens);
 }
 
+void llama_set_dflash_need_reserve(struct llama_context * ctx) {
+    ctx->set_dflash_need_reserve();
+}
+
