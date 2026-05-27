@@ -1366,11 +1366,11 @@ void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
 
     const int64_t n_embd_concat = n_embd * (int64_t)n_layers;
 
-    // APPEND across ubatches and across decode calls. Drafter consumes the
-    // buffer via llama_get_dflash_target_features and reads from offset
-    // (dflash_n_past * n_target_features), so the buffer must hold features
-    // for all tokens processed since the last clear (which fires on a fresh
-    // common_speculative_begin via llama_dflash_clear_target_features).
+    // APPEND across ubatches WITHIN a single decode call. llama_context::decode()
+    // clears target_features at its start (before the ubatch loop), and each
+    // ubatch's extract appends its features at the current end. Drafter then
+    // reads from offset 0 — the buffer holds exactly the features for the
+    // tokens decoded in this call.
     //
     // Pre-fix the buffer was resize()'d per ubatch, dropping every earlier
     // ubatch's features. For prompts that span multiple ubatches (any prompt
@@ -1886,6 +1886,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
     output_swaps.clear();
+
+    // DFlash: clear target_features at the start of each decode call. The
+    // intra-decode ubatch loop below extends it via extract_dflash_features
+    // (APPEND mode). Inter-decode clear ensures the drafter's read at offset
+    // 0 picks up exactly this decode's features, not stale ones from earlier
+    // decodes. Mission m-20260527-103737 multi-ubatch + rollback fix.
+    if (cparams.dflash_extract_enabled && !dflash.extract_tensors.empty()) {
+        dflash.target_features.clear();
+    }
 
     sched_reserve();
 

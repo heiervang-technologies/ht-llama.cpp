@@ -828,12 +828,11 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
     void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
         dflash_n_past = 0;
         accumulated_ctx.clear();
-        // ctx_tgt's target_features buffer is the cross-process pipe between
-        // target ubatches and this drafter. Clear it here so the buffer
-        // starts at offset 0 for the new request and the offset arithmetic
-        // in draft() lines up. Without this, leftover features from the
-        // previous request would shift our reads off-by-N.
-        llama_clear_dflash_target_features(ctx_tgt);
+        // Note: target_features is owned by ctx_tgt and reset at the start of
+        // each llama_decode() (see extract_dflash_features). We deliberately
+        // do NOT clear it here because begin() fires AFTER the prompt-prefill
+        // decode has already extracted the prompt features that the first
+        // draft() call is about to consume.
     }
 
     bool process(const llama_batch & /*batch*/) override {
@@ -861,17 +860,17 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
             // Step 1: append raw target features for newly committed tokens.  The
             // DFlash graph performs the trained dflash_fc fusion internally.
             //
-            // The target's target_features buffer accumulates features for ALL
-            // tokens processed since begin() (across ubatches + decode calls).
-            // We read the slice for the n_new newly committed tokens, which
-            // lives at offset (dflash_n_past * n_target_features). The legacy
-            // shape (read from offset 0) only worked when n_new == 1 + last
-            // ubatch's token count, which silently broke for multi-ubatch
-            // prefill — see APPEND comment in extract_dflash_features.
+            // The target's target_features buffer is cleared at the start of
+            // every llama_decode() call (see extract_dflash_features). So
+            // immediately after the target's most recent decode, the buffer
+            // holds exactly the features for the tokens decoded in that call,
+            // in order — which is precisely the slice this draft() needs.
+            // The first draft() after prompt prefill consumes prompt features
+            // (T_0); subsequent draft()s after spec-verify decodes consume
+            // the first n_new positions (sampled + accepted drafts).
             const float * features = llama_get_dflash_target_features(ctx_tgt);
-            const size_t offset   = (size_t)dflash_n_past * (size_t)n_target_features;
             const size_t new_size = (size_t)n_target_features * (size_t)n_new;
-            accumulated_ctx.insert(accumulated_ctx.end(), features + offset, features + offset + new_size);
+            accumulated_ctx.insert(accumulated_ctx.end(), features, features + new_size);
 
             // Diagnostics for accept-rate debugging — first 5 floats of the newly
             // appended features + dflash_n_past advancement. Only fires when
