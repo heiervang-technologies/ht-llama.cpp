@@ -1134,6 +1134,7 @@ private:
 
             chat_params = {
                 /* use_jinja             */ params_base.use_jinja,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* prefill_assistant     */ params_base.prefill_assistant,
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
