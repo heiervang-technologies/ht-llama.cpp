@@ -813,6 +813,18 @@ private:
             // TODO speculative: move to common/speculative.cpp?
             const auto & params_spec = params_base.speculative.draft;
 
+            // DFlash extracts target hidden states into a single ctx_tgt-scoped buffer
+            // (dflash.target_features). Under continuous batching with n_parallel > 1,
+            // multiple slots co-decode in one batched llama_decode() call and their
+            // features interleave in that buffer, so per-slot draft() reads garbage.
+            // Until target_features is keyed per seq_id, refuse to start.
+            if (params_base.speculative.dflash && params_base.n_parallel > 1) {
+                SRV_ERR("DFlash speculative decoding requires --parallel 1 (got --parallel %d); "
+                        "multi-slot continuous batching is not yet supported by the dflash feature buffer\n",
+                        params_base.n_parallel);
+                return false;
+            }
+
             SRV_INF("loading draft model '%s'\n", params_spec.mparams.path.c_str());
 
             auto params_dft = params_base;
