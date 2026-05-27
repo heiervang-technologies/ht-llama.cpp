@@ -167,17 +167,34 @@ snoop-kube + heierchat.
   `/v1/completions` had the same vulnerability — just happened to land
   on a fresh slot in early probes by luck.
 
-**Fix shipped (Round-9, d7a88fdbc):**
-  One-line gate at server-context.cpp slot allocation:
-  when `params_base.speculative.dflash` is true, set `update_cache = false`
-  so prompt cache reuse is skipped for this slot. Tradeoff: first-request
-  prompt-eval cost is paid every request; spec gains still net win on
-  any non-trivial generation.
+**Fix shipped — TWO gates (Round-9, d7a88fdbc + 65f46f0f8):**
+  llama-server has TWO independent cache mechanisms that both let the
+  target skip decoding cached prefix tokens. Both have to be gated for
+  dflash to work correctly.
 
-**Local verification:**
-  3 sequential chat completions, default `cache_prompt`:
-    Pre-fix:  0% / 0% / 0% accept, NaN cascade
-    Post-fix: 3.51% / 5.88% / 8.33% accept, **zero NaN** lines in dflash debug log
+  Gate A (d7a88fdbc) — at slot allocation, disables the GLOBAL
+  `server_prompt_cache` load path when `params_base.speculative.dflash`
+  is true:
+    update_cache = false  // skip global prompt cache when dflash active
+
+  Gate B (65f46f0f8) — at slot prefill, disables the per-slot prompt
+  prefix reuse driven by `slot.task->params.cache_prompt`:
+    if (slot.task->params.cache_prompt && !dflash_active) { /* reuse */ }
+
+  Either alone is insufficient. d7a88fdbc shipped first; titan smoke
+  still failed with identical-prompt requests because Gate B (the
+  per-slot path) wasn't gated. Different-prompt requests partially worked
+  (small common prefix → small OOB). Both gates together cover both
+  request patterns.
+
+  Tradeoff: first-request prompt-eval cost is paid every request; spec
+  gains still net win on any non-trivial generation.
+
+**Local verification (titan-matched: --parallel 1, --jinja, --cont-batching):**
+  5 sequential IDENTICAL prompts (matches snoop's smoke pattern):
+    Pre-both-gates:                0/0/0/0/0% NaN cascade
+    Gate A only (d7a88fdbc):       0/0/0/0/0% NaN (Gate B path still wins)
+    Both gates (65f46f0f8):        7.36/9.35/9.24/8.84/6.90% accept, **zero NaN**
 
 **Field workaround (still works without rebuild):**
   Set `cache_prompt: false` in the request body.
