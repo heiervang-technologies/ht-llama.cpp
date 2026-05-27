@@ -135,6 +135,79 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
+## Round-9: prompt-cache + DFlash NaN bug (2026-05-27, d7a88fdbc)
+
+Hit a production regression: dflash on titan emitted all-NaN drafter
+logits on `/v1/chat/completions`, looked like "1 token then stops" in
+heierchat (Markus's screenshot). Root-caused after a long hunt with
+snoop-kube + heierchat.
+
+**Symptom shape:**
+  - `/v1/completions`: 6.94% accept, clean logits
+  - `/v1/chat/completions`: 0% accept, all-NaN drafter logits at every position
+  - drafter argmaxes to `<pad>` (token 0) every time
+  - target generates real tokens, dflash adds zero value but doesn't crash
+
+**Root cause:**
+  Slot prompt cache (server-context.cpp prompt_load) restores target KV
+  state via `llama_state_seq_set_data_ext` for cached prefix tokens but
+  does NOT re-extract DFlash target features for those positions. Only
+  NEW tokens decoded after cache hit get their features extracted.
+
+  Then `common_speculative_impl_dflash::draft()` (common/speculative.cpp:857)
+  reads `n_new = n - dflash_n_past` features, where `n_new` counts ALL
+  prompt tokens (cached + new). The read overflows the
+  `dflash.target_features` buffer past its actual size (only NEW token
+  count) → OOB read → garbage values → drafter consumes them as
+  "target features" via fc + hidden_norm + per-layer K_ctx → NaN logits
+  → argmax(<NaN, NaN, ...>) = token 0 (<pad>) → target rejects every
+  draft → 0% accept.
+
+  Affected every chat completion after the first for any given slot.
+  `/v1/completions` had the same vulnerability — just happened to land
+  on a fresh slot in early probes by luck.
+
+**Fix shipped (Round-9, d7a88fdbc):**
+  One-line gate at server-context.cpp slot allocation:
+  when `params_base.speculative.dflash` is true, set `update_cache = false`
+  so prompt cache reuse is skipped for this slot. Tradeoff: first-request
+  prompt-eval cost is paid every request; spec gains still net win on
+  any non-trivial generation.
+
+**Local verification:**
+  3 sequential chat completions, default `cache_prompt`:
+    Pre-fix:  0% / 0% / 0% accept, NaN cascade
+    Post-fix: 3.51% / 5.88% / 8.33% accept, **zero NaN** lines in dflash debug log
+
+**Field workaround (still works without rebuild):**
+  Set `cache_prompt: false` in the request body.
+
+**Proper fix (deferred — Round-10 candidate):**
+  Two architectural paths to recover prompt cache benefit while keeping
+  dflash correct:
+
+  (a) Re-extract features for the cached prefix on slot restore. Pseudo:
+      after `prompt_load`, run a single full-prefix forward through the
+      target to populate `dflash.target_features`. Adds back the prompt-
+      eval cost we just dropped, but exact KV cache stays intact.
+
+  (b) Cache the DFlash target features alongside the KV cache snapshot.
+      Extend `server_prompt_cache::states[].data` to carry the
+      per-position dflash feature vectors. On restore, write features
+      back into ctx_tgt's `dflash.target_features`. Memory-heavier
+      (~32 KB/token at n_target_features=32256 floats * 4 bytes — wait,
+      that's 130 KB/token; for a 4096-ctx prompt cache this is ~530 MB,
+      noticeable but cap-able). Preserves the prompt-cache perf win
+      end-to-end. Cleanest fix.
+
+  Pick (a) for low-risk; (b) for the long term.
+
+**Co-investigators:** snoop-kube (titan log mining, side-by-side
+A/B between `/v1/completions` vs `/v1/chat/completions`); heierchat
+(client-side stream-shape debugging that ruled out UI bug); big-dog
+(coordination); aioc (hint that framing tokens were downstream of
+prompt structure, not independent).
+
 ## Round-8: shipped to titan (2026-05-27, unified-llm:dflash-794ddb2df)
 
 `feat/dflash-integration` tip (with surgical `--remap-developer-role` port
