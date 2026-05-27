@@ -248,6 +248,7 @@ public:
     void set_dflash(const llama_model * model);
     const float * get_dflash_target_features() const;
     void set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens);
+    void clear_dflash_target_features();
 
 private:
     llm_graph_params graph_params(

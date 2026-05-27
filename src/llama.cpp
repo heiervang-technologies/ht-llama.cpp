@@ -590,6 +590,10 @@ const float * llama_get_dflash_target_features(struct llama_context * ctx) {
     return ctx->get_dflash_target_features();
 }
 
+void llama_clear_dflash_target_features(struct llama_context * ctx) {
+    ctx->clear_dflash_target_features();
+}
+
 void llama_set_dflash_accumulated_target_ctx(
         struct llama_context * ctx,
                const float * data,

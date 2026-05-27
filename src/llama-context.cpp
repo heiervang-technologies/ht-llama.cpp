@@ -1365,12 +1365,26 @@ void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
     const size_t n_layers = dflash.extract_tensors.size();
 
     const int64_t n_embd_concat = n_embd * (int64_t)n_layers;
-    dflash.target_features.resize((size_t)(n_embd_concat * n_tokens));
+
+    // APPEND across ubatches and across decode calls. Drafter consumes the
+    // buffer via llama_get_dflash_target_features and reads from offset
+    // (dflash_n_past * n_target_features), so the buffer must hold features
+    // for all tokens processed since the last clear (which fires on a fresh
+    // common_speculative_begin via llama_dflash_clear_target_features).
+    //
+    // Pre-fix the buffer was resize()'d per ubatch, dropping every earlier
+    // ubatch's features. For prompts that span multiple ubatches (any prompt
+    // larger than n_ubatch, default 512) the drafter's n_new read would
+    // overflow into adjacent heap → SIGSEGV. Mission m-20260527-103737
+    // post-Gate-C heierchat-streaming crash.
+    const size_t prev_floats = dflash.target_features.size();
+    dflash.target_features.resize(prev_floats + (size_t)(n_embd_concat * n_tokens));
+    float * dest_base = dflash.target_features.data() + prev_floats;
 
     static thread_local std::vector<float> temp_layer_features;
 
-    LLAMA_LOG_DEBUG("extract_dflash_features: %zu layers, %lld tokens, %lld embd\n",
-                    n_layers, (long long)n_tokens, (long long)n_embd);
+    LLAMA_LOG_DEBUG("extract_dflash_features: %zu layers, %lld tokens, %lld embd, append-base %zu\n",
+                    n_layers, (long long)n_tokens, (long long)n_embd, prev_floats);
 
     for (size_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
         ggml_tensor * tensor = dflash.extract_tensors[layer_idx];
@@ -1380,10 +1394,14 @@ void llama_context::extract_dflash_features(const llama_ubatch & ubatch) {
 
         for (int64_t token_idx = 0; token_idx < n_tokens; ++token_idx) {
             const float * src = temp_layer_features.data() + token_idx * n_embd;
-            float * dest = dflash.target_features.data() + token_idx * n_embd_concat + (int64_t)layer_idx * n_embd;
+            float * dest = dest_base + token_idx * n_embd_concat + (int64_t)layer_idx * n_embd;
             std::memcpy(dest, src, (size_t)n_embd * sizeof(float));
         }
     }
+}
+
+void llama_context::clear_dflash_target_features() {
+    dflash.target_features.clear();
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {

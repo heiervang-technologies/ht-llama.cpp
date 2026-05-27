@@ -914,6 +914,11 @@ extern "C" {
 
     LLAMA_API const float * llama_get_dflash_target_features(struct llama_context * ctx);
 
+    // Clears the accumulated DFlash target-features buffer on ctx. Call this
+    // when starting a new draft "session" (e.g. in common_speculative_begin)
+    // so the buffer doesn't retain features from the previous request.
+    LLAMA_API void llama_clear_dflash_target_features(struct llama_context * ctx);
+
     LLAMA_API void llama_set_dflash_accumulated_target_ctx(
             struct llama_context * ctx,
                    const float * data,
