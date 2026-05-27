@@ -2579,7 +2579,17 @@ private:
                                 continue;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            // DFlash + per-slot prompt reuse causes drafter NaN logits. Same
+                            // bug class as the prompt_cache gate above: any path that lets the
+                            // target skip decoding cached prefix tokens means the dflash feature
+                            // buffer only has features for the NEW tokens, but the drafter still
+                            // reads n_new = n_total - dflash_n_past entries -> OOB read -> NaN.
+                            // The auto-gate at the prompt_cache load site only covers one of two
+                            // cache mechanisms. This per-slot prompt-token-reuse path (different
+                            // from the global server_prompt_cache) also has to be force-disabled
+                            // when DFlash is on. Mission m-20260527-103737.
+                            const bool dflash_active = params_base.speculative.dflash;
+                            if (slot.task->params.cache_prompt && !dflash_active) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
