@@ -135,6 +135,104 @@ for Q6_K appears to be an outlier or stale-code state; reproducible
 range under current HEAD (d74f7e1c6) is 4.3-6.2%. Update Round-3
 table accordingly when next bench cycle happens.
 
+## Round-11: post-Gate-C lifecycle fixes (2026-05-27..28)
+
+After Gate C verified on titan (8.14% accept, zero NaN on the smoke
+harness) heierchat tripped on the first real streaming chat request
+and the dflash child died. Investigation surfaced four additional
+issues; this round patched all of them and added a startup-time
+refusal for multi-slot configurations the design doesn't yet support.
+
+| commit     | summary |
+|------------|---------|
+| 770fed433  | extract_dflash_features APPENDs across ubatches (multi-ubatch prefill correctness) |
+| b6b96bbb2  | clear target_features at decode start; drop begin()-clear |
+| fbefb9657  | refuse to start when DFlash + --parallel > 1 |
+| 327f94791  | slot-reuse NaNs, split-prefill segfaults, rollback drift |
+
+### Multi-ubatch prefill overflow (770fed433)
+
+`extract_dflash_features` was calling `target_features.resize(n_embd *
+n_tokens)` once per ubatch, so for any prompt > `n_ubatch` (default
+512) the buffer ended up holding ONLY the last ubatch's features. The
+drafter then read `n_new = n_total - dflash_n_past` features from
+offset 0, overflowing past `target_features.size()` into adjacent heap
+→ SIGSEGV → dflash child exited unreaped → router saw zombie → 500s
+to clients.
+
+Round-9/10 smoke prompts ("Write five short haikus about the ocean")
+were ~35 tokens and fit in a single ubatch, so the buffer happened to
+be sized correctly and the bug never tripped on smoke. Real chat-
+history with a system prompt + a few turns crosses 512 trivially.
+
+Fix: APPEND per ubatch (`resize(prev + new)`). The drafter reads from
+`dflash_n_past * n_target_features` since the buffer holds everything
+since `begin()`. New public API `llama_clear_dflash_target_features`
+for the drafter to reset at request boundaries.
+
+### Lifecycle scope wrong (b6b96bbb2)
+
+The 770fed433 lifecycle had three flaws (reviewer + my own re-read):
+
+- `begin()` clear fires AFTER the prompt-prefill decode, so the very
+  next `draft()` read an empty buffer.
+- `begin()` clear also wipes sibling-slot features sharing `ctx_tgt`.
+- APPEND-with-offset-read drifts post-rollback because `dflash_n_past`
+  stays stale while re-decoded features extend the buffer past the
+  offset the drafter reads from.
+
+Fix: scope `target_features` lifetime to a single decode call —
+APPEND within decode, clear at decode start, `draft()` reads offset 0.
+Bounded memory, no cross-slot stomping, no rollback drift.
+
+### --parallel > 1 unsafe (fbefb9657)
+
+Reviewer flagged that `target_features` is a single flat vector
+shared across slots; under continuous batching with `--parallel > 1`
+slots co-decode in one `llama_decode()` call and their features
+interleave — per-slot `draft()` gets garbage (not OOB as the review
+trace suggested, but wrong-features-in-bounds). The hazard predates
+the Round-11 redesign — it's been latent since day one — but became
+more obvious with the v2 single-decode-scope lifetime.
+
+Fix (Path A from review): fail fast in `load_model()` if dflash +
+`n_parallel > 1` — refuse to start the server. Production preset is
+`--parallel 1`, so nothing in flight is affected. Path B (per-seq_id
+`target_features`) is filed as task #107 for the longer-term multi-
+slot unblock.
+
+### Slot-reuse + split-prefill + rollback (327f94791)
+
+Three more issues caught after the gate landed:
+
+- **Slot-reuse NaNs:** `begin()` didn't mark the draft context as
+  needing a fresh `sched_reserve`, so reused slots could inherit
+  stale graph reservations. Fix: `begin()` calls
+  `llama_set_dflash_need_reserve(ctx_dft_dec)` (new public API).
+- **Split-prefill segfaults:** the v2 clear-at-every-decode-start
+  broke split-prefill (checkpoints or batches > `n_batch`) because
+  each subsequent decode wiped the partially-accumulated prompt
+  features. Fix: only clear `target_features` when the batch
+  contains `pos == 0` (start of a prompt); otherwise accumulate
+  across consecutive prefill decodes. The drafter clears the buffer
+  itself at the end of `draft()` once features are consumed.
+- **Rollback drift:** `draft()` now truncates `accumulated_ctx` and
+  resets `dflash_n_past` when `n < dflash_n_past`, handling
+  partial-accept rollback directly (closes the deferred follow-up
+  flagged at the end of Round-10).
+
+### Status
+
+All four commits are on `origin/feat/dflash-integration`. PR #53
+points at HEAD = 327f94791. Individual verification notes live in
+each commit message; no fresh end-to-end accept-rate bench was run
+in Round-11 — these were correctness restorations on configurations
+that crashed or NaN'd, not perf tuning.
+
+The `--parallel > 1` gate is a hard refusal at startup; if anything
+on titan ever flips `--parallel` higher, server load_model() returns
+false and the dflash drafter does not initialize.
+
 ## Round-10: third gate — checkpoint restore (2026-05-27, 44ea35688)
 
 Round-9 gates A+B passed local but titan continued failing on the same
