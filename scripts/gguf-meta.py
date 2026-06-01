@@ -72,8 +72,13 @@ def _rval(f, t):
 def read_meta(path):
     """Return dict of header KV fields, plus _has_chat_template / _ok flags.
 
-    Raises ValueError on a non-GGUF / truncated file."""
+    Raises ValueError on a non-GGUF / truncated file. Also walks the tensor-info
+    section to confirm the tensor DATA is actually present (catches a file whose
+    header parses cleanly but whose weights were truncated — same failure class
+    as the HF-xet silent shard drop). Sets _data_complete / _min_size_bytes."""
+    import os
     meta = {}
+    file_size = os.path.getsize(path)
     with open(path, 'rb') as f:
         magic = _rd(f, '<I', 4)
         if magic != GGUF_MAGIC:
@@ -88,15 +93,45 @@ def read_meta(path):
         meta["_version"] = ver
         meta["_n_tensors"] = n_tensors
         has_ct = False
+        alignment = 32  # GGUF default; overridden by general.alignment if present
         for _ in range(n_kv):
             key = _rstr(f)
             t = _rd(f, '<I', 4)
             v = _rval(f, t)
             if key == "tokenizer.chat_template":
                 has_ct = True
+            if key == "general.alignment":
+                alignment = int(v) or 32
             if key in WANT:
                 meta[key] = v
         meta["_has_chat_template"] = has_ct
+
+        # Walk the tensor-info section: name, n_dims, dims[], type, offset.
+        # The max offset is a lower bound on how far the data section must extend,
+        # so the file must be at least data_start + max_offset long.
+        max_offset = 0
+        try:
+            for _ in range(n_tensors):
+                _rstr(f)                       # tensor name
+                ndim = _rd(f, '<I', 4)
+                for _d in range(ndim):
+                    _rd(f, '<Q', 8)            # dim
+                _rd(f, '<I', 4)               # ggml type
+                off = _rd(f, '<Q', 8)         # data offset (relative to data section)
+                if off > max_offset:
+                    max_offset = off
+            data_start = f.tell()
+            if alignment > 1 and (data_start % alignment) != 0:
+                data_start += alignment - (data_start % alignment)
+            min_size = data_start + max_offset + 1  # last tensor needs >=1 byte
+            meta["_min_size_bytes"] = min_size
+            meta["_actual_size_bytes"] = file_size
+            meta["_data_complete"] = file_size >= min_size
+        except Exception:
+            # Could not read the full tensor table → it's truncated within the header.
+            meta["_data_complete"] = False
+            meta["_min_size_bytes"] = None
+            meta["_actual_size_bytes"] = file_size
     return meta
 
 
@@ -134,6 +169,14 @@ def main():
                   f"{meta.get('_has_chat_template')}). DFlash-it drafter needs an INSTRUCT target.",
                   file=sys.stderr)
             return 1
+        if meta.get("_data_complete") is False:
+            mn = meta.get("_min_size_bytes")
+            act = meta.get("_actual_size_bytes")
+            print(f"REJECT {path}: TRUNCATED — header valid but tensor data incomplete "
+                  f"(file {act} bytes < min {mn} bytes implied by tensor offsets). "
+                  f"Partial/corrupt write; would load garbage or crash mid-bench.",
+                  file=sys.stderr)
+            return 1
         print(f"OK {path}: instruct gemma4 (name={meta.get('general.name')!r}, "
               f"file_type={meta.get('general.file_type')})")
         return 0
@@ -152,6 +195,13 @@ def main():
                 print(f"  {k:30s} = {str(meta[k])[:90]}")
         print(f"  {'has_chat_template':30s} = {meta.get('_has_chat_template')}")
         print(f"  {'is_instruct':30s} = {is_instruct(meta)}")
+        print(f"  {'n_tensors':30s} = {meta.get('_n_tensors')}")
+        complete = meta.get('_data_complete')
+        if complete is False:
+            print(f"  {'data_complete':30s} = False  (TRUNCATED: "
+                  f"{meta.get('_actual_size_bytes')} < {meta.get('_min_size_bytes')} bytes)")
+        else:
+            print(f"  {'data_complete':30s} = {complete}")
     return rc
 
 
