@@ -1470,23 +1470,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
 
-        // DFlash: Fill position tensor for decoder
-        if (model.arch == LLM_ARCH_DFLASH && gtype == LLM_GRAPH_TYPE_DECODER && !cross.v_embd.empty()) {
-            const int64_t n_ctx = cross.n_enc;
-            const int64_t n_noise = ubatch.n_tokens;
-            const int64_t n_total = n_ctx + n_noise;
-
-            ggml_tensor * pos_full = ggml_graph_get_tensor(gf, "inp_pos_full");
-            if (pos_full) {
-                static thread_local std::vector<int32_t> pos_data;
-                pos_data.resize((size_t)n_total);
-                for (int64_t i = 0; i < n_total; ++i) {
-                    pos_data[(size_t)i] = (int32_t)i;
-                }
-                ggml_backend_tensor_set(pos_full, pos_data.data(), 0, (size_t)n_total * sizeof(int32_t));
-            }
-        }
-
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
