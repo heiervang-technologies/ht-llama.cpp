@@ -1785,7 +1785,7 @@ You can specify default preferences for the web UI using `--webui-config <JSON c
 ./llama-server -m model.gguf --webui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
 ```
 
-You may find available preferences in [settings-config.ts](webui/src/lib/constants/settings-config.ts).
+You may find available preferences in [heierchat settings-config.ts](https://github.com/heiervang-technologies/heierchat/blob/main/webui/src/lib/constants/settings-config.ts).
 
 ### Legacy completion web UI
 
