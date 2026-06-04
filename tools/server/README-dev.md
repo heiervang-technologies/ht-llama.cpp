@@ -200,65 +200,8 @@ That requires `JSON.stringify` when formatted to message content:
 
 ## Web UI
 
-The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
+The web UI and desktop shell are maintained in a separate repository: [heiervang-technologies/heierchat](https://github.com/heiervang-technologies/heierchat).
 
-The SvelteKit-based Web UI is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
+This project embeds a pre-built snapshot of that frontend in `tools/server/public/` so that users get a batteries-included experience out of the box, but all development on the UI happens in the upstream `heierchat` repository.
 
-### Features
-
--   **Chat interface** with streaming responses
--   **Multi-model support** (ROUTER mode) - switch between models, auto-load on selection
--   **Modality validation** - ensures selected model supports conversation's attachments (images, audio)
--   **Conversation management** - branching, regeneration, editing with history preservation
--   **Attachment support** - images, audio, PDFs (with vision/text fallback)
--   **Configurable parameters** - temperature, top_p, etc. synced with server defaults
--   **Dark/light theme**
-
-### Tech Stack
-
--   **SvelteKit** - frontend framework with Svelte 5 runes for reactive state
--   **TailwindCSS** + **shadcn-svelte** - styling and UI components
--   **Vite** - build tooling
--   **IndexedDB** (Dexie) - local storage for conversations
--   **LocalStorage** - user settings persistence
-
-### Architecture
-
-The WebUI follows a layered architecture:
-
-```
-Routes → Components → Hooks → Stores → Services → Storage/API
-```
-
--   **Stores** - reactive state management (`chatStore`, `conversationsStore`, `modelsStore`, `serverStore`, `settingsStore`)
--   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
--   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
-
-For detailed architecture diagrams, see [`tools/server/webui/docs/`](webui/docs/):
-
--   `high-level-architecture.mmd` - full architecture with all modules
--   `high-level-architecture-simplified.mmd` - simplified overview
--   `data-flow-simplified-model-mode.mmd` - data flow for single-model mode
--   `data-flow-simplified-router-mode.mmd` - data flow for multi-model mode
--   `flows/*.mmd` - detailed per-domain flows (chat, conversations, models, etc.)
-
-### Development
-
-```sh
-# make sure you have Node.js installed
-cd tools/server/webui
-npm i
-
-# run dev server (with hot reload)
-npm run dev
-
-# run tests
-npm run test
-
-# build production bundle
-npm run build
-```
-
-After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
-
-**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
+If you want to contribute to the Web UI, please submit your pull requests there!
