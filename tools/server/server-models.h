@@ -150,6 +150,12 @@ public:
     void unload(const std::string & name);
     void unload_all();
 
+    // block until the model is loaded or failed
+    void wait_until_ready(const std::string & name);
+
+    // block until the model is unloaded
+    void wait_until_unloaded(const std::string & name);
+
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
 

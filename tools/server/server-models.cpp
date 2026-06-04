@@ -851,6 +851,26 @@ void server_models::update_status(const std::string & name, server_model_status 
     cv.notify_all();
 }
 
+void server_models::wait_until_ready(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this, &name]() {
+        auto it = mapping.find(name);
+        if (it == mapping.end()) return true;
+        auto status = it->second.meta.status;
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_UNLOADED;
+    });
+}
+
+void server_models::wait_until_unloaded(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this, &name]() {
+        auto it = mapping.find(name);
+        if (it == mapping.end()) return true;
+        auto status = it->second.meta.status;
+        return status == SERVER_MODEL_STATUS_UNLOADED;
+    });
+}
+
 void server_models::wait_until_loading_finished(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     cv.wait(lk, [this, &name]() {
@@ -1092,7 +1112,24 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already running", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(meta->name);
+        try {
+            models.load(meta->name);
+        } catch (const model_unavailable_error & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_UNAVAILABLE));
+            return res;
+        } catch (const std::exception & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
+            return res;
+        }
+        
+        models.wait_until_ready(meta->name);
+        
+        auto post_meta = models.get_meta(meta->name);
+        if (post_meta.has_value() && post_meta->is_failed()) {
+            res_err(res, format_error_response("model failed to load", ERROR_TYPE_SERVER));
+            return res;
+        }
+
         res_ok(res, {{"success", true}});
         return res;
     };
@@ -1164,6 +1201,7 @@ void server_models_routes::init_routes() {
             return res;
         }
         models.unload(model->name);
+        models.wait_until_unloaded(model->name);
         res_ok(res, {{"success", true}});
         return res;
     };
