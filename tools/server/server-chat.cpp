@@ -257,9 +257,12 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         for (json resp_tool : response_body.at("tools")) {
             json chatcmpl_tool;
 
-            if (json_value(resp_tool, "type", std::string()) != "function") {
-                // Skip non-function tools (e.g. code_interpreter, container)
-                // instead of rejecting the whole request.
+            const std::string type = json_value(resp_tool, "type", std::string());
+            if (type != "function") {
+                // Skip non-function tools (e.g. code_interpreter, container) instead of
+                // rejecting the whole request. Non-function Responses tools have no Chat
+                // Completions equivalent.
+                SRV_WRN("unsupported Responses tool type '%s' skipped\n", type.c_str());
                 continue;
             }
             resp_tool.erase("type");
@@ -272,7 +275,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             chatcmpl_tools.push_back(chatcmpl_tool);
         }
         chatcmpl_body.erase("tools");
-        chatcmpl_body["tools"] = chatcmpl_tools;
+        if (!chatcmpl_tools.empty()) {
+            chatcmpl_body["tools"] = chatcmpl_tools;
+        }
     }
 
     if (response_body.contains("max_output_tokens")) {
