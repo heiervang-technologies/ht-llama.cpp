@@ -2049,7 +2049,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for K\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.cache_type_k)
         ),
@@ -2062,7 +2063,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for V\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.cache_type_v)
         ),
@@ -3525,7 +3527,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for K for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_k)
         ),
@@ -3538,7 +3541,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for V for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_v)
         ),
