@@ -156,6 +156,11 @@ public:
     // return discovered LoRA adapters from models directory
     std::vector<common_lora_adapter_info> get_discovered_adapters();
 
+    // resolve the "any" sentinel: pick a model that is currently resident in memory.
+    // prefers LOADED over SLEEPING, and within each tier picks the most-recently-used.
+    // returns the canonical model name, or empty string if nothing is resident.
+    std::string pick_any_resident();
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);

@@ -607,6 +607,30 @@ bool server_models::has_model(const std::string & name) {
     return false;
 }
 
+std::string server_models::pick_any_resident() {
+    std::lock_guard<std::mutex> lk(mutex);
+    const std::string * best_loaded   = nullptr;
+    const std::string * best_sleeping = nullptr;
+    int64_t best_loaded_used   = -1;
+    int64_t best_sleeping_used = -1;
+    for (const auto & [name, inst] : mapping) {
+        if (inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
+            if (inst.meta.last_used >= best_loaded_used) {
+                best_loaded_used = inst.meta.last_used;
+                best_loaded      = &name;
+            }
+        } else if (inst.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+            if (inst.meta.last_used >= best_sleeping_used) {
+                best_sleeping_used = inst.meta.last_used;
+                best_sleeping      = &name;
+            }
+        }
+    }
+    if (best_loaded)   return *best_loaded;
+    if (best_sleeping) return *best_sleeping;
+    return {};
+}
+
 std::optional<server_model_meta> server_models::get_meta(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
     auto it = mapping.find(name);
@@ -1242,6 +1266,15 @@ static bool router_validate_model(std::string & name, server_models & models, bo
         res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
+    if (name == "any") {
+        // route to whichever model is currently resident in VRAM/RAM
+        std::string picked = models.pick_any_resident();
+        if (picked.empty()) {
+            res_err(res, format_error_response("no model is currently resident in memory", ERROR_TYPE_INVALID_REQUEST));
+            return false;
+        }
+        name = picked;
+    }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
         res_err(res, format_error_response(string_format("model '%s' not found", name.c_str()), ERROR_TYPE_INVALID_REQUEST));
@@ -1416,6 +1449,9 @@ void server_models_routes::init_routes() {
                 {"status",        status},
                 {"architecture",  architecture},
                 {"need_download", meta.need_download},
+                // last-used wall-clock (epoch ms via ggml_time_ms). 0 means never used since router started.
+                // Lets clients sort by MRU when picking among resident models (e.g. heierchat's pickLoadedModel).
+                {"last_used_ms",  meta.last_used},
                 // TODO: add other fields, may require reading GGUF metadata
             };
 
