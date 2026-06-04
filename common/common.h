@@ -600,8 +600,9 @@ struct common_params {
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
-    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_min_step = 256;   // minimum spacing between context checkpoints
+    int32_t n_ctx_checkpoints        = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_min_step      = 256;   // minimum spacing between context checkpoints
+    int32_t ctx_checkpoints_max_mib  = 4096;  // max host-RAM budget per slot for context checkpoints (MiB); 0 = no byte cap (count-only)
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
