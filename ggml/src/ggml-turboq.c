@@ -365,7 +365,7 @@ static float * turboq_get_scratch3(int64_t n) {
 #define TURBOQ_KV_DIM 128
 
 static inline float turboq_block_scale_up(void) {
-    return sqrtf((float) QK_K);
+    return sqrtf((float) TBQ_BLK_SIZE);
 }
 
 static inline float turboq_block_scale_down(void) {
@@ -448,19 +448,19 @@ static void unpack_3bit(uint8_t * indices, const uint8_t * src, int64_t n) {
 // ---------------------------------------------------------------------------
 
 void quantize_row_tbq3_0_ref(const float * GGML_RESTRICT x, block_tbq3_0 * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_K == 0);
-    const int64_t nb = k / QK_K;
-    float * unit = turboq_get_scratch(QK_K);
-    float * rotated = turboq_get_scratch2(QK_K);
+    assert(k % TBQ_BLK_SIZE == 0);
+    const int64_t nb = k / TBQ_BLK_SIZE;
+    float * unit = turboq_get_scratch(TBQ_BLK_SIZE);
+    float * rotated = turboq_get_scratch2(TBQ_BLK_SIZE);
     const uint64_t seed = turboq_seed_from_row(0);
     const float scale_up = turboq_block_scale_up();
-    uint8_t indices[QK_K];
+    uint8_t indices[TBQ_BLK_SIZE];
 
     for (int64_t b = 0; b < nb; b++) {
-        const float * xb = x + b * QK_K;
+        const float * xb = x + b * TBQ_BLK_SIZE;
 
         float norm_sq = 0.0f;
-        for (int64_t j = 0; j < QK_K; ++j) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
             norm_sq += xb[j] * xb[j];
         }
 
@@ -469,51 +469,51 @@ void quantize_row_tbq3_0_ref(const float * GGML_RESTRICT x, block_tbq3_0 * GGML_
             norm = 1e-10f;
         }
 
-        for (int64_t j = 0; j < QK_K; ++j) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
             unit[j] = xb[j] / norm;
         }
 
         turboq_rotate_block_forward(rotated, unit, seed);
 
-        for (int64_t j = 0; j < QK_K; j++) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; j++) {
             float val = rotated[j] * scale_up;
             indices[j] = quantize_scalar_3bit(val);
         }
-        pack_3bit(y[b].qs, indices, QK_K);
+        pack_3bit(y[b].qs, indices, TBQ_BLK_SIZE);
         y[b].d = GGML_FP32_TO_FP16(norm);
     }
 }
 
 void dequantize_row_tbq3_0(const block_tbq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_K == 0);
-    const int64_t nb = k / QK_K;
-    float * rotated = turboq_get_scratch(QK_K);
-    float * unit_approx = turboq_get_scratch2(QK_K);
+    assert(k % TBQ_BLK_SIZE == 0);
+    const int64_t nb = k / TBQ_BLK_SIZE;
+    float * rotated = turboq_get_scratch(TBQ_BLK_SIZE);
+    float * unit_approx = turboq_get_scratch2(TBQ_BLK_SIZE);
     const uint64_t seed = turboq_seed_from_row(0);
     const float scale_down = turboq_block_scale_down();
-    uint8_t indices[QK_K];
+    uint8_t indices[TBQ_BLK_SIZE];
 
     for (int64_t b = 0; b < nb; b++) {
         const float norm = GGML_FP16_TO_FP32(x[b].d);
 
-        unpack_3bit(indices, x[b].qs, QK_K);
-        for (int64_t j = 0; j < QK_K; j++) {
+        unpack_3bit(indices, x[b].qs, TBQ_BLK_SIZE);
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; j++) {
             rotated[j] = turboq_codebook_3bit[indices[j]] * scale_down;
         }
 
         turboq_rotate_block_inverse(unit_approx, rotated, seed);
 
-        for (int64_t j = 0; j < QK_K; ++j) {
-            y[b * QK_K + j] = unit_approx[j] * norm;
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
+            y[b * TBQ_BLK_SIZE + j] = unit_approx[j] * norm;
         }
     }
 }
 
 size_t quantize_tbq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     (void)imatrix;
-    assert(n_per_row % QK_K == 0);
+    assert(n_per_row % TBQ_BLK_SIZE == 0);
 
-    const int64_t nb_per_row = n_per_row / QK_K;
+    const int64_t nb_per_row = n_per_row / TBQ_BLK_SIZE;
     const size_t row_size = nb_per_row * sizeof(block_tbq3_0);
 
     for (int64_t row = 0; row < nrows; row++) {
@@ -529,18 +529,18 @@ size_t quantize_tbq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst
 // ---------------------------------------------------------------------------
 
 void quantize_row_tbq4_0_ref(const float * GGML_RESTRICT x, block_tbq4_0 * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_K == 0);
-    const int64_t nb = k / QK_K;
-    float * unit = turboq_get_scratch(QK_K);
-    float * rotated = turboq_get_scratch2(QK_K);
+    assert(k % TBQ_BLK_SIZE == 0);
+    const int64_t nb = k / TBQ_BLK_SIZE;
+    float * unit = turboq_get_scratch(TBQ_BLK_SIZE);
+    float * rotated = turboq_get_scratch2(TBQ_BLK_SIZE);
     const uint64_t seed = turboq_seed_from_row(0);
     const float scale_up = turboq_block_scale_up();
 
     for (int64_t b = 0; b < nb; b++) {
-        const float * xb = x + b * QK_K;
+        const float * xb = x + b * TBQ_BLK_SIZE;
 
         float norm_sq = 0.0f;
-        for (int64_t j = 0; j < QK_K; ++j) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
             norm_sq += xb[j] * xb[j];
         }
 
@@ -549,14 +549,14 @@ void quantize_row_tbq4_0_ref(const float * GGML_RESTRICT x, block_tbq4_0 * GGML_
             norm = 1e-10f;
         }
 
-        for (int64_t j = 0; j < QK_K; ++j) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
             unit[j] = xb[j] / norm;
         }
 
         turboq_rotate_block_forward(rotated, unit, seed);
 
         memset(y[b].qs, 0, sizeof(y[b].qs));
-        for (int64_t j = 0; j < QK_K; j++) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; j++) {
             float val = rotated[j] * scale_up;
             uint8_t idx = quantize_scalar_4bit(val);
             if (j % 2 == 0) {
@@ -570,17 +570,17 @@ void quantize_row_tbq4_0_ref(const float * GGML_RESTRICT x, block_tbq4_0 * GGML_
 }
 
 void dequantize_row_tbq4_0(const block_tbq4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    assert(k % QK_K == 0);
-    const int64_t nb = k / QK_K;
-    float * rotated = turboq_get_scratch(QK_K);
-    float * unit_approx = turboq_get_scratch2(QK_K);
+    assert(k % TBQ_BLK_SIZE == 0);
+    const int64_t nb = k / TBQ_BLK_SIZE;
+    float * rotated = turboq_get_scratch(TBQ_BLK_SIZE);
+    float * unit_approx = turboq_get_scratch2(TBQ_BLK_SIZE);
     const uint64_t seed = turboq_seed_from_row(0);
     const float scale_down = turboq_block_scale_down();
 
     for (int64_t b = 0; b < nb; b++) {
         const float norm = GGML_FP16_TO_FP32(x[b].d);
 
-        for (int64_t j = 0; j < QK_K; j++) {
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; j++) {
             uint8_t idx;
             if (j % 2 == 0) {
                 idx = x[b].qs[j / 2] & 0x0F;
@@ -592,17 +592,17 @@ void dequantize_row_tbq4_0(const block_tbq4_0 * GGML_RESTRICT x, float * GGML_RE
 
         turboq_rotate_block_inverse(unit_approx, rotated, seed);
 
-        for (int64_t j = 0; j < QK_K; ++j) {
-            y[b * QK_K + j] = unit_approx[j] * norm;
+        for (int64_t j = 0; j < TBQ_BLK_SIZE; ++j) {
+            y[b * TBQ_BLK_SIZE + j] = unit_approx[j] * norm;
         }
     }
 }
 
 size_t quantize_tbq4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix) {
     (void)imatrix;
-    assert(n_per_row % QK_K == 0);
+    assert(n_per_row % TBQ_BLK_SIZE == 0);
 
-    const int64_t nb_per_row = n_per_row / QK_K;
+    const int64_t nb_per_row = n_per_row / TBQ_BLK_SIZE;
     const size_t row_size = nb_per_row * sizeof(block_tbq4_0);
 
     for (int64_t row = 0; row < nrows; row++) {
