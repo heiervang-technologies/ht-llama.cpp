@@ -93,6 +93,7 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+std::string gen_rerankid();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
@@ -294,6 +295,7 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
+    bool remap_developer_role = false;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;

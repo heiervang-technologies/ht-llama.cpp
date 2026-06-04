@@ -102,6 +102,22 @@ def _load_model_and_wait(
     _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
 
 
+def test_router_chat_unknown_model_returns_400():
+    """Posting to /chat/completions with a model name absent from /v1/models
+    must return 400 invalid_request_error, not 500. See #41."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "model": "non-existent/model",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert res.status_code == 400, f"expected 400 (invalid_request), got {res.status_code}: {res.body}"
+    err = res.body.get("error", {}) if isinstance(res.body, dict) else {}
+    assert err.get("type") == "invalid_request_error", f"unexpected error type: {err}"
+    assert "not found" in (err.get("message") or "").lower()
+
+
 def test_router_unload_model():
     global server
     server.start()

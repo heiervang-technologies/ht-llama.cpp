@@ -1240,6 +1240,7 @@ private:
                 /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
                 /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
                 /* enable_thinking       */ enable_thinking,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
