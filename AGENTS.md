@@ -57,3 +57,23 @@ occasionally only update one.
 - [README.md](README.md) — full HT Fork Changes inventory
 - [tools/termd/README.md](tools/termd/README.md) — sandbox sidecar HTTP/WS
   reference
+
+## Model capability for AI maintainers
+
+Acting as the standing AI maintainer for this fork — multi-day debug arcs
+(e.g. dflash audit rounds), coordinating multi-agent deploys, judging when
+to act vs surface to the human — requires a model in the **Claude Opus
+capability tier** (or equivalent). Less capable models tend to drift from
+the goal, re-introduce already-disproven hypotheses, miss subtle issues
+(double-applied framework transforms, etc.), and under-surface destructive
+operations that need human approval.
+
+Smaller / cheaper models are fine for **scoped tasks** — one-shot
+implementations from a clearly-specified design, mechanical edits, bench
+harness execution, lint fixes — when handed off by an Opus-class
+maintainer with concrete instructions. They are **not** appropriate for
+the standing maintainer role itself.
+
+If you are running as the AI maintainer here and you are not in this
+tier, surface that and propose a handoff rather than driving cutting-edge
+work autonomously.

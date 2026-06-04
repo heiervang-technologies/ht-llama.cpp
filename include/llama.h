@@ -381,6 +381,10 @@ extern "C" {
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
+        // reference to the target model for DFlash/EAGLE3 speculative decoding
+        // used to share embeddings and extraction configuration
+        const struct llama_model * target_model;
+
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
@@ -564,6 +568,11 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+
+    // DFlash draft model metadata
+    LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
@@ -901,6 +910,27 @@ extern "C" {
                           size_t   size,
                     llama_seq_id   dest_seq_id,
            llama_state_seq_flags   flags);
+
+    // DFlash
+    LLAMA_API void llama_set_dflash(
+            struct llama_context * ctx,
+            const struct llama_model * model);
+
+    LLAMA_API const float * llama_get_dflash_target_features(struct llama_context * ctx);
+
+    // Clears the accumulated DFlash target-features buffer on ctx. Call this
+    // when starting a new draft "session" (e.g. in common_speculative_begin)
+    // so the buffer doesn't retain features from the previous request.
+    LLAMA_API void llama_clear_dflash_target_features(struct llama_context * ctx);
+
+    LLAMA_API void llama_set_dflash_accumulated_target_ctx(
+            struct llama_context * ctx,
+                   const float * data,
+                       int32_t   n_embd,
+                       int32_t   n_tokens);
+
+    LLAMA_API void llama_set_dflash_need_reserve(
+            struct llama_context * ctx);
 
     //
     // Decoding

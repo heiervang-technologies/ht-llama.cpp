@@ -288,6 +288,7 @@ std::vector<server_tokens> tokenize_input_prompts(
 // global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
+    bool remap_developer_role = false; // see common_params::remap_developer_role
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
@@ -295,7 +296,6 @@ struct server_chat_params {
     bool allow_image;
     bool allow_audio;
     bool enable_thinking = true;
-    bool remap_developer_role = false;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;

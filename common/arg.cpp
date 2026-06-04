@@ -3657,6 +3657,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+
+    add_opt(common_arg(
+        {"--dflash"},
+        "use DFlash speculative decoding with the draft model",
+        [](common_params & params) {
+            params.speculative.dflash = true;
+            if (std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DFLASH) == params.speculative.types.end()) {
+                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DFLASH);
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DFLASH"));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),
