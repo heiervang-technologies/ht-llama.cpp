@@ -6,11 +6,19 @@
 # pair runs N times so variance is visible (DFlash bench has ±2-3pp
 # run-to-run variance even at temp=0 / fixed seed).
 #
-# VRAM requirement: ~22 GB free (target Q4_K_M ~18 GB + drafter ~1-3 GB +
-# compute). Coordinate centurion-llm scale-down before running.
+# VRAM requirement (target + ~1-3 GB drafter + compute):
+#   - Q4_K_M target ~18 GB → ~22 GB total (fits on a single 24 GB card)
+#   - Q8_0   target ~33 GB → ~38 GB total (titan A100 80 GB only)
+#   - BF16   target ~62 GB → ~67 GB total (titan A100 80 GB only)
+# Coordinate centurion-llm scale-down before running on shared hardware.
 #
 # Usage:
-#   scripts/bench-dflash.sh [--quants Q4,Q6,Q8,BF16] [--runs 3] [--ctx 4096]
+#   scripts/bench-dflash.sh [--target PATH] [--quants Q4,Q6,Q8,BF16] [--runs 3] [--ctx 4096]
+#
+# Default target is gemma-4-31B-it-Q8_0.gguf — the higher-quality reference
+# preferred for DFlash quality measurement (Markus 2026-06-04). For VRAM-
+# constrained local runs, override with --target gemma-4-31B-it-Q4_K_M.gguf
+# (or set DFLASH_BENCH_TARGET in the env).
 #
 # Output goes to /tmp/dflash-bench-<timestamp>.md with a markdown summary
 # table at the bottom.
@@ -25,8 +33,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/build-cuda/bin/llama-speculative-simple"
-TARGET="$ROOT/models/gemma-4-31B-it-Q4_K_M.gguf"
-DRAFTER_DIR="$ROOT/models/dflash-gemma4-31b-gguf"
+TARGET="${DFLASH_BENCH_TARGET:-$ROOT/models/gemma-4-31B-it-Q8_0.gguf}"
+DRAFTER_DIR="${DFLASH_BENCH_DRAFTER_DIR:-$ROOT/models/dflash-gemma4-31b-gguf}"
 TS=$(date +%Y%m%d-%H%M%S)
 OUT="/tmp/dflash-bench-$TS.md"
 
@@ -36,6 +44,7 @@ CTX=4096
 
 while (( $# )); do
     case "$1" in
+        --target) TARGET="$2"; shift 2 ;;
         --quants) QUANTS="$2"; shift 2 ;;
         --runs)   RUNS="$2";   shift 2 ;;
         --ctx)    CTX="$2";    shift 2 ;;
