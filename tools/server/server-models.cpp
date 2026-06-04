@@ -920,7 +920,15 @@ void server_models::load(const std::string & name) {
                 // but that cleanup can stall on log_thread.join() if the stdout pipe isn't
                 // EOFing (e.g. another process inherited the write end). Setting status here
                 // breaks the "500 forever" loop even when the management thread is stuck.
-                this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, child_proc->return_status);
+                //
+                // subprocess_join() is the portable way to read the exit code —
+                // subprocess_s::return_status exists only on POSIX (the Windows variant uses
+                // hProcess + GetExitCodeProcess via subprocess_join). subprocess_alive()
+                // already reaped the zombie on POSIX, so subprocess_join() returns
+                // immediately with the cached status.
+                int child_exit = 0;
+                subprocess_join(child_proc.get(), &child_exit);
+                this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, child_exit);
                 // Force the stdout pipe read end closed so log_thread's fgets() returns and
                 // the outer thread can proceed past log_thread.join().
                 if (child_proc->stdout_file) {
