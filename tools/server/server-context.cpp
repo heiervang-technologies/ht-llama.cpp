@@ -2076,6 +2076,14 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+        // n_ctx_checkpoints <= 0 disables checkpoints entirely. The arg parser
+        // accepts 0 (and any negative value wraps via the size_t cast below to
+        // a huge cap, which is also a no-op), so we short-circuit here rather
+        // than letting create_checkpoint's eviction loop touch an empty list.
+        if (params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
+
         // Per-slot footprint accounting (issue #67): the count-only cap let a single slot
         // accumulate ~20 GB of checkpoints under heierchat's long contexts, driving titan
         // SystemOOM. The byte cap is FIFO-evicted alongside the count cap; whichever bites

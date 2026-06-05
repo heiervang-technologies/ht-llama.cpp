@@ -94,6 +94,25 @@ def test_negative_byte_cap_rejected():
         server.start()
 
 
+def test_ctx_checkpoints_zero_disables_creation():
+    # --ctx-checkpoints 0 must not crash create_checkpoint (UB on
+    # .front()/.erase(begin()) of an empty list under the previous code).
+    # Expected behavior is "no checkpoints are ever created" — slot still works.
+    global server
+    server.n_ctx_checkpoints = 0
+    server.start()
+    log = LogReader(server.log_path)
+
+    for messages in (CHAT_TURN_1, CHAT_TURN_2, CHAT_TURN_3):
+        res = _post_chat(messages)
+        assert res.status_code == 200, res.body
+
+    drained = log.drain()
+    assert "created context checkpoint" not in drained, (
+        "no checkpoints should be created when --ctx-checkpoints=0"
+    )
+
+
 def test_byte_cap_eviction_reason_bytes():
     # Force the byte cap to bite first (count cap large, byte cap tiny) and verify
     # the eviction reason is reported as `bytes` when create_checkpoint fires.
