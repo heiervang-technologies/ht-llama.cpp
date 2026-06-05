@@ -759,7 +759,14 @@ void server_models::unload_lru() {
         {
             std::unique_lock<std::mutex> lk(mutex);
             cv.wait(lk, [this, &lru_model_name]() {
-                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+                // operator[] on std::map silently default-inserts on miss; with a
+                // default-init server_model_meta (status = UNLOADED) the predicate
+                // would spuriously return true AND pollute mapping. Use find().
+                // Missing model → treat as done (was unloaded by another thread or
+                // removed by a concurrent reload).
+                auto it = mapping.find(lru_model_name);
+                if (it == mapping.end()) return true;
+                return it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
         }
     }
@@ -776,7 +783,16 @@ void server_models::load(const std::string & name) {
     // against the freshest preset and a consistent mapping state
     cv.wait(lk, [this]() { return !is_reloading; });
 
-    auto meta = mapping[name].meta;
+    // Use find() instead of operator[]: a concurrent reload between has_model()
+    // (above, lock-released) and this point can erase the entry. operator[]
+    // would silently default-insert (status = UNLOADED) and we'd spawn a child
+    // with empty preset args. Treat missing as "model was removed", bail out.
+    auto map_it = mapping.find(name);
+    if (map_it == mapping.end()) {
+        SRV_INF("model %s was removed by a concurrent reload, aborting load\n", name.c_str());
+        return;
+    }
+    auto meta = map_it->second.meta;
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model %s is not ready\n", name.c_str());
         return;
