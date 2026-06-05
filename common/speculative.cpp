@@ -932,7 +932,13 @@ struct common_speculative_impl_dflash : public common_speculative_impl {
 
                 const llama_token id = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
 
-                if (i == 1) {
+                // Top-5 logits diagnostic — gated behind LLAMA_DFLASH_DEBUG (cached
+                // at line 883). The selection loop is O(n_vocab * log 5) per draft
+                // call; one call per generated-token-attempt and several per output
+                // token at typical accept rates. On gemma-class vocabs (~256k) it
+                // would burn ~1ms per draft on production where the LOG_INF would
+                // be suppressed by verbosity anyway.
+                if (i == 1 && dflash_debug) {
                     std::vector<int> top;
                     top.reserve(5);
                     for (int j = 0; j < n_vocab; ++j) {
