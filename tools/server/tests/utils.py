@@ -86,6 +86,7 @@ class ServerProcess:
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
+    api_prefix: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
     models_preset: str | None = None
@@ -221,6 +222,8 @@ class ServerProcess:
             server_args.append("--context-shift")
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
+        if self.api_prefix:
+            server_args.extend(["--api-prefix", self.api_prefix])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
@@ -284,10 +287,11 @@ class ServerProcess:
         print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
 
         # wait for server to start
+        health_path = (self.api_prefix or "") + "/health"
         start_time = time.time()
         while time.time() - start_time < timeout_seconds:
             try:
-                response = self.make_request("GET", "/health", headers={
+                response = self.make_request("GET", health_path, headers={
                     "Authorization": f"Bearer {self.api_key}" if self.api_key else None
                 })
                 if response.status_code == 200:

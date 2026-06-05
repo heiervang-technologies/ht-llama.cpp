@@ -173,7 +173,7 @@ bool server_http_context::init(const common_params & params) {
     // Middlewares
     //
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_validate_api_key = [api_keys = params.api_keys, api_prefix = path_prefix](const httplib::Request & req, httplib::Response & res) {
         static const std::unordered_set<std::string> public_endpoints = {
             "/health",
             "/v1/health",
@@ -190,8 +190,16 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or static file, skip validation
-        if (public_endpoints.find(req.path) != public_endpoints.end()) {
+        // If path is public or static file, skip validation. When --api-prefix
+        // is set, handlers are registered at prefix+path (see post/get below)
+        // so req.path arrives as e.g. "/llama/health" — strip the prefix
+        // before checking the allowlist so /llama/health is still public.
+        std::string check_path = req.path;
+        if (!api_prefix.empty() && check_path.size() >= api_prefix.size() &&
+            check_path.compare(0, api_prefix.size(), api_prefix) == 0) {
+            check_path.erase(0, api_prefix.size());
+        }
+        if (public_endpoints.find(check_path) != public_endpoints.end()) {
             return true;
         }
 
