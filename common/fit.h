@@ -18,11 +18,14 @@ enum common_params_fit_status {
 //   - this function is NOT thread safe because it modifies the global llama logger state
 //   - only parameters that have the same value as in llama_default_model_params are modified
 //     with the exception of the context size which is modified if and only if equal to 0
-//   - if `out_bytes_per_device` is non-null, it is resized to the device-count and populated
-//     with the projected per-device byte demand for the resolved plan. Index 0 is the CPU
-//     device, indices 1..N are GPU/accel devices in the same order as `tensor_split`. The
-//     router uses this to admit candidates against per-device free-after-reserved memory
-//     instead of total-pool memory (see ht-llama.cpp issue #66). Populated on SUCCESS only.
+//   - if `out_bytes_per_device` is non-null, it is resized to the number of GPU/accel
+//     devices and populated with the projected per-device byte demand for the resolved
+//     plan. plan[i] is the i-th GPU/accel device in the same order as `tensor_split`;
+//     CPU/host memory is NOT included (the router only needs per-GPU demand for admit).
+//     For CPU-only builds (no GPU devices), the plan is empty — treat as trivially
+//     admittable. Populated on SUCCESS only — undefined on FAILURE/ERROR.
+//     The router uses this to admit candidates against per-device free-after-reserved
+//     memory instead of total-pool memory (see ht-llama.cpp issue #66).
 enum common_params_fit_status common_fit_params(
                                const char   * path_model,
                 struct llama_model_params   * mparams,
