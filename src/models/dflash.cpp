@@ -238,13 +238,13 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         // to receive the BOOL/INT array.  Filled with 0 by default so unset slots are dense.
         std::array<int, 16> pattern{};
         if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern, false)) {
-            const uint32_t n = std::min<uint32_t>(pattern.size(), hparams.n_layer);
+            const uint32_t n = std::min<uint32_t>(pattern.size(), hparams.n_layer());
             for (uint32_t il = 0; il < n; ++il) {
                 hparams.is_swa_impl[il] = pattern[il] != 0 ? 1u : 0u;
             }
         } else {
             // No per-layer pattern: assume all layers are SWA.
-            for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+            for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
                 hparams.is_swa_impl[il] = 1u;
             }
         }
@@ -272,7 +272,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader & ml) {
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,  "weight"), {n_embd}, 0);
 
     // Layers for draft generation
-    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         auto & layer = layers[il];
         
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", il), {n_embd}, 0);
