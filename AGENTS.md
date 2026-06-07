@@ -13,8 +13,11 @@ authorship. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy.
 - **No upstream contributions**: this fork is strictly downstream. Don't draft
   commits with upstream framing or open PRs against `ggml-org/llama.cpp`.
 - **HT-specific surfaces**:
-  - `tools/server/webui/` — SvelteKit 5 frontend (rebranded UI, AI workspace,
-    sandbox terminals, artifact gallery, /images, doc mode, AI patch editor)
+  - `tools/server/public/` — pre-built [heierchat](https://github.com/heiervang-technologies/heierchat)
+    web UI snapshot (rebranded UI, AI workspace, sandbox terminals, artifact
+    gallery, /images, doc mode, AI patch editor) served by `llama-server`.
+    Source lives in the heierchat repo; contribute UI changes there. This
+    fork ingests a fresh bundle when heierchat ships one.
   - `tools/server/webui-tauri/` — Tauri 2 desktop shell (Linux + Android APK)
   - `tools/termd/` — Rust sandbox sidecar (gVisor + Docker + iptables LAN-drop)
   - `ggml/src/ggml-turboq*` and `ggml/src/ggml-cuda/turboq.{cu,cuh}` —
@@ -28,16 +31,10 @@ authorship. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy.
 
 | Surface | Command |
 |---|---|
-| webui type / svelte check | `cd tools/server/webui && npm run check` |
-| webui bundle | `cd tools/server/webui && npm run build` (writes `tools/server/public/bundle.js` + `bundle.css`) |
+| webui (heierchat) | contribute in the [heierchat](https://github.com/heiervang-technologies/heierchat) repo; this fork only embeds the pre-built snapshot at `tools/server/public/` |
 | Tauri shell | `cd tools/server/webui-tauri/src-tauri && cargo check && cargo clippy` |
 | termd | `cd tools/termd && cargo check && cargo clippy` |
 | C++ / ggml / server | follow upstream's [build.md](docs/build.md) |
-
-When you change webui source, **rebuild the bundle and stage it**: the
-deployed `tools/server/public/bundle.js` is what the HTTP server actually
-serves. Verify both `bundle.js` and `bundle.css` show in `git diff` — rebuilds
-occasionally only update one.
 
 ## Conventions
 
