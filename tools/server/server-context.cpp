@@ -976,10 +976,9 @@ private:
                 llama_set_dflash(ctx_tgt, model_dft.get());
             }
 
-            if (spec_mtp) {
-                // MTP draft must know its target before the first decode
-                llama_set_mtp_source(ctx_dft.get(), ctx_tgt);
-            }
+            // note: MTP target wiring uses cparams.ctx_other set before
+            //       llama_init_from_model above — no explicit call needed here.
+            (void) spec_mtp;
 
             ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
 
