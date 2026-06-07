@@ -888,8 +888,19 @@ private:
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
-                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
-                            has_draft ? "draft model" : "MTP context", e.what());
+                    // Some arches (e.g. Gemma4Assistant) self-identify as "normal during
+                    // memory fitting" because their init requires ctx_other which can't
+                    // exist before the target is loaded. Downgrade those to DBG to avoid
+                    // a misleading "failed" warning on every load. See upstream TODO at
+                    // src/llama-context.cpp around the GEMMA4_ASSISTANT ctx_other check.
+                    const std::string msg = e.what();
+                    if (msg.find("normal during memory fitting") != std::string::npos) {
+                        SRV_DBG("[spec] skipping memory measurement of %s (benign): %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    } else {
+                        SRV_WRN("[spec] failed to measure %s memory: %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    }
                 }
             }
         }
