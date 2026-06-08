@@ -19,6 +19,14 @@
 #   DFLASH_PARITY_DRAFTER    default: models/dflash-gemma4-31b-gguf/gemma4-31b-it-dflash-Q6_K.gguf
 #   DFLASH_PARITY_PROMPTS    default: scripts/dflash-parity-prompts.json
 #   DFLASH_PARITY_BIN        default: build/bin/llama-speculative-simple
+#   DFLASH_PARITY_NGL        target -ngl,  default 99 (lower for CPU-offload of large targets)
+#   DFLASH_PARITY_NGLD       drafter -ngld, default 99
+#   DFLASH_PARITY_TIMEOUT    per-prompt timeout in seconds, default 240 (raise for CPU-offload)
+#   DFLASH_PARITY_THREADS    --threads cap; default unset (llama.cpp picks). On centurion (etcd
+#                            HA control-plane member), cap to leave >=2 cores free for etcd/apiserver
+#                            (e.g. 6 on the 8-core 7800X3D) so long CPU-offload runs don't wobble
+#                            control-plane health.
+#   DFLASH_PARITY_NICE       0-19; default 0 (no renice). Set to 19 on centurion long runs.
 #
 # Output (stdout + --out):
 #   {
@@ -45,6 +53,13 @@ BIN="${DFLASH_PARITY_BIN:-$ROOT/build/bin/llama-speculative-simple}"
 TARGET="${DFLASH_PARITY_TARGET:-$ROOT/models/gemma-4-31B-it-IQ4_XS.gguf}"
 DRAFTER="${DFLASH_PARITY_DRAFTER:-$ROOT/models/dflash-gemma4-31b-gguf/gemma4-31b-it-dflash-Q6_K.gguf}"
 PROMPTS="${DFLASH_PARITY_PROMPTS:-$ROOT/scripts/dflash-parity-prompts.json}"
+NGL="${DFLASH_PARITY_NGL:-99}"
+NGLD="${DFLASH_PARITY_NGLD:-99}"
+PROMPT_TIMEOUT="${DFLASH_PARITY_TIMEOUT:-240}"
+THREADS_ARG=()
+[[ -n "${DFLASH_PARITY_THREADS:-}" ]] && THREADS_ARG=(--threads "$DFLASH_PARITY_THREADS")
+NICE_PREFIX=()
+[[ -n "${DFLASH_PARITY_NICE:-}" && "$DFLASH_PARITY_NICE" -gt 0 ]] && NICE_PREFIX=(nice -n "$DFLASH_PARITY_NICE")
 OUT="/tmp/dflash-parity-$(date +%Y%m%d-%H%M%S).json"
 
 while (( $# )); do
@@ -92,12 +107,13 @@ for i in $(seq 0 $((N_PROMPTS - 1))); do
     n_predict=$(tokens_for_class "$class")
     err="$ERRDIR/$id.err"
 
-    echo "[bench] $id ($class) n_predict=$n_predict" >&2
-    timeout 240 "$BIN" \
+    echo "[bench] $id ($class) n_predict=$n_predict ngl=$NGL ngld=$NGLD${DFLASH_PARITY_THREADS:+ threads=$DFLASH_PARITY_THREADS}${DFLASH_PARITY_NICE:+ nice=$DFLASH_PARITY_NICE}" >&2
+    timeout "$PROMPT_TIMEOUT" "${NICE_PREFIX[@]}" "$BIN" \
         -m "$TARGET" -md "$DRAFTER" \
         --dflash --spec-draft-n-max "$N_MAX" \
         -p "$text" -n "$n_predict" \
-        -c 8192 -ngl 99 -ngld 99 -fa on \
+        -c 8192 -ngl "$NGL" -ngld "$NGLD" -fa on \
+        "${THREADS_ARG[@]}" \
         --temp 0 --seed 1 \
         --cache-type-k q8_0 --cache-type-v q8_0 \
         > /dev/null 2> "$err" || true
