@@ -1,0 +1,98 @@
+{
+  "bench_name": "gemma4-12b-qat-vision-mtp-pascal",
+  "purpose": "Issue #100 bullet 6 — gemma4-12B QAT with all modalities (vision) AND MTP draft engaged. Two assertions on separate surfaces to avoid Gemma4 chat-template empty-content quirk: (A) coexistence proof via /v1/chat — engine-level composition of mmproj + spec-draft-mtp; (B) grounding proof via llama-mtmd-cli — content references known image features.",
+  "date_iso": "2026-06-09",
+  "host": "crystal",
+  "gpu": "Quadro P5200 (sm_61, 16257 MiB)",
+  "build": {
+    "target_set": "llama-bench llama-app llama-server llama-cli",
+    "ggml_cuda_force_mmq": true,
+    "ggml_cuda_f16": false,
+    "llama_build_server": true,
+    "tarball": "pascal-cuda-artifacts-v2-server.tar.zst",
+    "tarball_sha256": "2528d9520fce8ae0745f98fc0d45c112d8468467656db907210c41e9a5a10238"
+  },
+  "models": {
+    "base": {
+      "path": "/home/me/Models/llama.cpp/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "size_gib": 6.27
+    },
+    "draft_mtp": {
+      "path": "/home/me/Models/llama.cpp/gemma-4-12B-it-qat-assistant-MTP-Q8_0.gguf",
+      "size_gib": 0.43
+    },
+    "mmproj_vision": {
+      "path": "/home/me/Models/llama.cpp/gemma-4-12b-it-mmproj-BF16.gguf",
+      "size_gib": 0.16
+    }
+  },
+  "test_image": {
+    "path": "/tmp/test-vision.png",
+    "dims_wh": [512, 384],
+    "ground_truth_features": ["PASCAL (yellow text)", "P5200 (light-blue text)", "red rectangle at bottom"]
+  },
+  "preflight_coload": {
+    "purpose": "Confirm bin/llama serve accepts --mmproj + -md + --spec-type draft-mtp simultaneously at arg-parse + model-load.",
+    "verdict": "PASS",
+    "ready_seconds": 6,
+    "stderr_evidence": [
+      "load_model: [mtmd] estimated worst-case memory usage of mmproj is 354.46 MiB",
+      "load_model: loading draft model '...assistant-MTP-Q8_0.gguf'",
+      "load_model: loaded multimodal model '...mmproj-BF16.gguf'",
+      "common_speculative_impl_draft_mtp: adding speculative implementation 'draft-mtp'",
+      "common_speculative_impl_draft_mtp: gpu_layers=99, cache_k=f16, cache_v=f16, ctx_tgt=yes, ctx_dft=yes",
+      "srv load_model: speculative decoding context initialized"
+    ]
+  },
+  "assertion_a_coexistence": {
+    "purpose": "Single /v1/chat/completions request with image_url + --spec-type draft-mtp engaged → engine composes mmproj-encode + MTP-draft at the engine level.",
+    "surface": "/v1/chat/completions",
+    "method": "POST with multimodal content [text + image_url base64-data-url]",
+    "request": {
+      "prompt_text": "What text appears in this image, and what color is the rectangle at the bottom?",
+      "temperature": 0.0,
+      "top_k": 1,
+      "max_tokens": 96,
+      "spec_type": "draft-mtp",
+      "spec_draft_n_max": 16,
+      "spec_draft_p_min": 0.9
+    },
+    "pass_criteria": "HTTP 200 with .choices[0].message present AND .usage.completion_tokens > 0 AND server-stderr contains 'draft acceptance = X' with X > 0",
+    "result": {
+      "verdict": "PASS",
+      "http_message_present": true,
+      "completion_tokens": 96,
+      "content_length": 0,
+      "content_length_note": "Empty content is the documented Gemma4-it chat-template artifact (see bench-gemma4-12b-qat-mtp-pascal.json regime_2 + feedback-spec-type-footgun memory) — does NOT indicate vision/MTP failure. Engagement is read off completion_tokens + stderr.",
+      "finish_reason": "length",
+      "stderr_draft_acceptance": 0.66102,
+      "stderr_evidence": [
+        "common_speculative_impl_draft_mtp: adding speculative implementation 'draft-mtp'",
+        "slot print_timing: id 3 | task 0 | draft acceptance = 0.66102 (78 accepted / 118 generated)"
+      ]
+    }
+  },
+  "assertion_b_grounding": {
+    "purpose": "Decoupled vision-grounding probe on content-reliable surface (mtmd-cli) — verifies the vision encoder actually consumed the image, since chat-template quirk makes /v1/chat content unreliable for grounding.",
+    "surface": "llama-mtmd-cli",
+    "method": "single-shot --image + -p, --temp 0, --jinja required",
+    "binary": "/opt/ht-llama-cuda/bin/llama-mtmd-cli",
+    "args_critical": "--jinja (without it, mtmd-cli aborts with: 'terminate called after throwing an instance of std::runtime_error / what(): this custom template is not supported, try using --jinja'). See [[reference-mtmd-cli-jinja-required]].",
+    "pass_criteria": "Output content references at least one of three ground-truth features (PASCAL / P5200 / red rectangle).",
+    "result": {
+      "verdict": "PASS",
+      "matched_features": ["PASCAL", "P5200 (as 'PS200' — model misread last digit but localized to text-region)", "red (described as 'reddish-orange or coral' and 'vibrant slightly muted red')"],
+      "matched_count_of_3": 3,
+      "output_sample_first_900_chars": "<|channel>thought\n1.  **Analyze the user's request:** The user has provided an image and asked a specific question: 'What color is the rectangle at the bottom?'\n\n2.  **Examine the image:**\n    *   The background is a very dark blue/black color.\n    *   There's some text in the top left: 'PASCAL' in a yellowish/gold color.\n    *   There's some text in the middle left: 'PS200' in a light gray/white color.\n    *   At the bottom, there is a large, horizontal rectangle.\n\n3.  **Identify the rectangle:** The rectangle is clearly visible at the bottom of the image.\n\n4.  **Determine the color of the rectangle:**\n    *   Look at the rectangle. It's a reddish-orange or coral color.\n    *   Let's be more precise. It's a vibrant, slightly muted red. 'Red' is a good general description. 'Coral' or 'Salmon' might also fit, but 'red' is the primary color.",
+      "max_tokens": 250,
+      "temp": 0
+    }
+  },
+  "verdict": "PASS",
+  "issue_100_bullets_resolved": ["6 — gemma4 12b qat mtp all modalities"],
+  "related": [
+    "bench-gemma4-12b-qat-mtp-pascal.json (text-only MTP bench, same model)",
+    "feedback-spec-type-footgun (--spec-type required for MTP engagement)",
+    "build-pascal-p5200.md (v2 build with LLAMA_BUILD_SERVER=ON)"
+  ]
+}
