@@ -74,6 +74,8 @@ cmake -B build-cuda -GNinja \
   -DGGML_CUDA_F16=OFF \
   -DCMAKE_CUDA_COMPILER=/opt/cuda-pascal-runfile/bin/nvcc \
   -DCMAKE_CUDA_HOST_COMPILER=/opt/gcc-14/usr/bin/g++ \
+  -DLLAMA_BUILD_SERVER=ON \
+  -DLLAMA_BUILD_TESTS=OFF \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build-cuda -j 8 --target llama-bench llama-app
 ```
@@ -82,7 +84,10 @@ Rationale:
 - `CMAKE_CUDA_ARCHITECTURES=61` — exactly the P5200 cap; faster compile.
 - `GGML_CUDA_FORCE_MMQ=ON` — routes quantized matmul through `__dp4a` (the fast INT8 path on Pascal). Verify at startup: `ggml_cuda_init: GGML_CUDA_FORCE_MMQ: yes`.
 - `GGML_CUDA_F16=OFF` — Pascal FP16 ALU is 1/64 of FP32; FP32 accumulators win.
+- `LLAMA_BUILD_SERVER=ON` — required for the `llama-app` unified router (`bin/llama`) to link. The `llama-app` target depends on `libllama-server-impl.so` + `libllama-cli-impl.so`; without server-on, the link fails with `cannot find -lllama-server-impl`. Also required for Gemma4 MTP / spec-decode (`ctx_other` wiring for the `Gemma4Assistant` draft class lives only in `tools/server/server-context.cpp` — the standalone `llama-speculative-simple` binary segfaults with `Gemma4Assistant requires ctx_other to be set`).
+- `LLAMA_BUILD_TESTS=OFF` — Pascal builds don't need the test suite; speeds up CI/image builds.
 - Flash-attention `-fa on` works on Pascal via the no-tensor-core FA kernel with FP32 accumulation (issue #7055 fixed in #7188; reinforced by #7681 / #15769 / #22541).
+- Spec-decode footgun: `--spec-type` defaults to `none`. Passing `-md <draft.gguf>` alone is silently ignored. Must pass `--spec-type draft-mtp` explicitly to engage MTP. `/props default_generation_settings.params["speculative.types"]` is the per-REQUEST sampler default, NOT the server engine state — the canonical engagement read is the server stderr (`draft acceptance = X.XXXXX (acc/gen)` + `statistics draft-mtp: ...`).
 
 ### Vulkan (baseline / portable fallback)
 ```bash
