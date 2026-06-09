@@ -51,7 +51,16 @@ The fleet is ~11 **identical sm_61 GP104** units, so one build is portable to al
 > ```
 > After `ldconfig`: `ldd /opt/ht-llama-cuda/bin/llama-bench | grep "not found"` is empty, and `--help` prints `ggml_cuda_init: ... Quadro P5200, compute capability 6.1` — **no `LD_LIBRARY_PATH` anywhere.**
 
-> **Verified reference tarball (cached fast-path):** `crystal:/home/me/pascal-cuda-artifacts.tar.zst` — **512 MB**, 110 members, `sha256 0efed65095d3da67713aa4344fcdb1c9e6f8faf397d5eaf1f24c9e8cd00fa339`, members rooted at `/` (`opt/ht-llama-cuda/` + `opt/cuda-pascal-runfile/`) → `tar -C / -x`. **Scope = bench + standalone CLI** (`llama-bench`, `llama-cli`, `llama-perplexity`, `llama-quantize`, `llama-imatrix`, `llama-tts`, `llama-mtmd-cli`, …). **Not included:** `llama-server` / unified `bin/llama` router (built `LLAMA_BUILD_SERVER=OFF`) — serving needs a v2 re-configure. Host-provided (correctly absent): `libstdc++.so.6`, `libgomp.so.1`, `libcuda.so.1` (from `gcc-libs` + `nvidia-580xx`).
+> **Verified reference tarballs (cached fast-path, `crystal:/home/me/`):** members rooted at `/` (`opt/ht-llama-cuda/` + `opt/cuda-pascal-runfile/`) → `tar -C / -x`. Host-provided (correctly absent): `libstdc++.so.6`, `libgomp.so.1`, `libcuda.so.1` (from `gcc-libs` + `nvidia-580xx`).
+>
+> | tarball | sha256 | size | members | scope |
+> |---|---|---|---|---|
+> | `pascal-cuda-artifacts.tar.zst` (v1) | `0efed65…0fa339` | 512 MB | 110 | bench + standalone CLI (`llama-bench`, `llama-cli`, `llama-perplexity`, `llama-quantize`, `llama-imatrix`, `llama-tts`, `llama-mtmd-cli`, …) — **no server** |
+> | `pascal-cuda-artifacts-v2-server.tar.zst` (v2) | `2528d95…a10238` | 515.5 MB | 121 | v1 **+ `llama-server` + unified `bin/llama` router + `libllama-{cli,server}-impl.so`** — Gemma4 MTP capable |
+>
+> v2 is built `LLAMA_BUILD_SERVER=ON`. **v1 (`0efed65`, untouched) stays valid for image bakes that don't serve; v2 (`2528d952`) is the serving-capable successor — additive, not a recall.** Validate any re-cut by extracting the tar to a clean root and `ldd`-checking `bin/llama-server` (the tar, not live `/opt`, is what the ISO consumes).
+>
+> **Serving footgun (`bin/llama serve` / `llama-server`):** `--spec-type` defaults to `none` — passing `-md <draft>` alone is **silently ignored** (`/props` shows `speculative.types: none` even with `-md` set). Pass `--spec-type draft-mtp` explicitly to engage Gemma4 MTP. Canonical engagement read = **server stderr** (`draft acceptance = X.XXXXX (N/M)` + `statistics draft-mtp: …`), **not** `/props.default_generation_settings.params["speculative.types"]` (that's the per-request sampler default, not engine state).
 
 **Tarball contents + measured sizes (crystal):**
 | Path | Size | In runtime overlay? |
@@ -61,7 +70,7 @@ The fleet is ~11 **identical sm_61 GP104** units, so one build is portable to al
 | `/opt/cuda-pascal-runfile/` full toolkit | 9.5 GB | no (build-capable ISO only) |
 | `/opt/gcc-14/` | 353 MB | **no — build-only**; rebuild-fallback tarball only |
 
-The runtime `.so` set (~17 files, ship the whole `.so → .so.0 → .so.0.0.2` symlink chain via `cp -a`): `libggml-cuda.so` **(39 MB — the sm_61 kernels)**, `libllama-common.so` (6.1M), `libllama.so` (3.9M), `libggml-cpu.so` (1.1M), `libggml-base.so` (957K), `libggml.so` (55K), `libllama-bench-impl.so` (458K) + the thin shim binaries. **Build-capable ISO** (keeps recipe rebuild on-device) needs instead: `cuda_nvcc + cuda_cccl + cuda_cudart + cuda_nvrtc + libcublas` (~3-4 GB) + `/opt/gcc-14` (353 MB). Server was built `OFF`; flip `LLAMA_BUILD_SERVER=ON` for `llama-server`.
+The runtime `.so` set (~17 files, ship the whole `.so → .so.0 → .so.0.0.2` symlink chain via `cp -a`): `libggml-cuda.so` **(39 MB — the sm_61 kernels)**, `libllama-common.so` (6.1M), `libllama.so` (3.9M), `libggml-cpu.so` (1.1M), `libggml-base.so` (957K), `libggml.so` (55K), `libllama-bench-impl.so` (458K) + the thin shim binaries. **Build-capable ISO** (keeps recipe rebuild on-device) needs instead: `cuda_nvcc + cuda_cccl + cuda_cudart + cuda_nvrtc + libcublas` (~3-4 GB) + `/opt/gcc-14` (353 MB). **v2** adds `llama-server` + unified `bin/llama` router + `libllama-{cli,server}-impl.so` (single `.so` each — no `.0/.0.0.X` chain, shim binaries link them direct; `libllama-server-impl.so` ≈ 12 MB is the bulk of the +11-member delta), built `LLAMA_BUILD_SERVER=ON`.
 
 **7 · HF token / models at image-build? — No token; out of scope for the ISO.**
 Both bench models are **public** (no gating): `TheBloke/Llama-2-7B-GGUF` (Q4_0, 3.83 GB) and `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF` (Q4_K_M, 4.92 GB). **Don't bake multi-GB GGUFs into the image** — pull them at **first-boot** with a plain `curl` of the `resolve/main` URL (curl avoids the `hf` xet-416 silent-truncation gotcha; byte-verify the size). Land them in a configurable models dir (`$GGUFS`/`$MODELS`, default `~/Models`) — never hard-code. Only wire an `HF_TOKEN` (from `usb/secrets/`) if you later add *gated* models.
@@ -149,5 +158,17 @@ LD_LIBRARY_PATH=/opt/cuda-pascal-runfile/lib64:/opt/cuda-pascal-runfile/targets/
 | ratio | **1.90×** | 1.07× |
 
 P5200 lands on the **GTX 1080 reference row** (pp 789 / tg 46) — same GP104 die; the GDDR5-vs-GDDR5X gap is only ~2-3%, not the ~25% the primer feared. Llama-3.1-8B Q4_K_M: CUDA **2.4×** pp, tied on tg. **dp4a path confirmed by exclusion** (no cuBLAS-fallback line + `FORCE_MMQ` + CC 6.1). JSON artifacts: `scripts/bench-pascal-p5200-*.json` @ `4d04cbc`.
+
+### Gemma4 MTP (v2 serving) — Gemma4-12B-QAT Q4_K_XL main + Q8_0 assistant-MTP draft, P5200 CUDA, greedy, ctx 4096
+
+Speculative decode via the `Gemma4Assistant` draft. Three **clearly-labeled** regimes — quote the *representative greedy* number, not the ceiling:
+
+| regime | baseline t/s | MTP t/s | speedup | draft accept | what it is |
+|---|---:|---:|---:|---:|---|
+| degenerate ceiling (`"0"×128` output) | 25.26 | 103.72 | 4.11× | 1.00 (118/118) | upper bound — trivially predictable sequence; **not** a deployment number |
+| **representative greedy** (real instruction, 256 tok) | 25.18 | **76.06** | **3.02×** | 0.76 (225/295) | **headline greedy figure** |
+| sampling (titan deployment ref) | — | — | 1.66× | — | not measured here; from the Gemma4 MTP merge (sampling config) |
+
+All regimes **lossless** — Run A (`--spec-type none`) vs Run B (`--spec-type draft-mtp`) emit bit-identical output (paired at `predicted_n` per run). MTP requires the **v2 server build** — the `Gemma4Assistant` draft wiring is server-only. The representative run's visible content was affected by a Gemma4 chat-template artifact (under separate investigation); both A/B paired at `predicted_n=256` and bit-identical, so the throughput ratio is sound. JSON: `scripts/bench-gemma4-12b-qat-mtp-pascal.json`.
 
 > **Two traps for the installer to guard:** (a) the default `nvidia-open-dkms` is wrong on Pascal → force `nvidia-580xx-dkms`; (b) never `pacman -S cuda` on these boxes (13.2 silently drops sm_61). Full recipe: `scripts/build-pascal-p5200.md` on `pascal/p5200-build`.

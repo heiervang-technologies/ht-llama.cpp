@@ -77,7 +77,7 @@ cmake -B build-cuda -GNinja \
   -DLLAMA_BUILD_SERVER=ON \
   -DLLAMA_BUILD_TESTS=OFF \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build build-cuda -j 8 --target llama-bench llama-app
+cmake --build build-cuda -j 8 --target llama-bench llama-app llama-server llama-cli
 ```
 
 Rationale:
@@ -193,19 +193,24 @@ cp -a /opt/cuda-pascal-runfile/targets/x86_64-linux/lib/libcublasLt.so*  /tmp/st
 sudo cp -a /opt/ht-llama-cuda /tmp/stage/opt/
 sudo chown -R "$(id -un):$(id -gn)" /tmp/stage
 
-# 5) Tarball
-cd /tmp/stage && tar --zstd -cf ~/pascal-cuda-artifacts.tar.zst opt/
-sha256sum ~/pascal-cuda-artifacts.tar.zst
-tar --zstd -tf ~/pascal-cuda-artifacts.tar.zst | head    # confirm members start with opt/
+# 5) Tarball — VERSION the filename; NEVER overwrite a tarball that is a live pull source.
+#    v1 (bench+CLI, sha 0efed65...) and v2 (server-capable, sha 2528d952...) coexist on disk.
+TARBALL=~/pascal-cuda-artifacts-v2-server.tar.zst   # bench-only build → ~/pascal-cuda-artifacts.tar.zst
+cd /tmp/stage && tar --zstd -cf "$TARBALL" opt/
+sha256sum "$TARBALL"
+tar --zstd -tf "$TARBALL" | head    # confirm members start with opt/
 ```
 
 Pruning notes:
 - Static archives (`*.a`) and CUDA stubs are explicitly excluded from the rsync — `.so*` glob only.
-- The full `/opt/cuda-pascal-runfile/` is 9.5 GB; the pruned runtime libset (libcudart + libcublas + libcublasLt) is ~816 MB unpacked. Together with the ~45 MB `/opt/ht-llama-cuda/` install prefix, the resulting zstd-compressed tarball is **512 MB**, 110 members. Reference hash from the first crystal build:
-  ```
-  sha256: 0efed65095d3da67713aa4344fcdb1c9e6f8faf397d5eaf1f24c9e8cd00fa339
-  ```
-  (zstd is non-deterministic across machines/versions; reproduce by re-running §7 and re-sha'ing locally.)
+- The full `/opt/cuda-pascal-runfile/` is 9.5 GB; the pruned runtime libset (libcudart + libcublas + libcublasLt) is ~816 MB unpacked. Together with the `/opt/ht-llama-cuda/` install prefix, the resulting zstd-compressed tarballs:
+
+  | tarball | sha256 | size | members | scope |
+  |---|---|---|---|---|
+  | `pascal-cuda-artifacts.tar.zst` (v1) | `0efed65095d3da67713aa4344fcdb1c9e6f8faf397d5eaf1f24c9e8cd00fa339` | 512 MB | 110 | bench + standalone CLI (no server) |
+  | `pascal-cuda-artifacts-v2-server.tar.zst` (v2) | `2528d9520fce8ae0745f98fc0d45c112d8468467656db907210c41e9a5a10238` | 515.5 MB | 121 | + `llama-server` + unified `bin/llama` router (Gemma4 MTP capable) |
+
+  (zstd is non-deterministic across machines/versions; reproduce by re-running §7 and re-sha'ing locally. **Never overwrite a tarball that may still be a live pull source** — version the filename instead.)
 - libstdc++.so.6, libgomp.so.1, libcuda.so.1 are NOT in the tarball — they come from the host OS (`gcc-libs`, `nvidia-580xx-utils`). The runtime requires those packages installed on the target.
 
 ### Runtime setup on target (consumed by the ISO)
@@ -228,9 +233,17 @@ ggml_cuda_init: found 1 CUDA devices (Total VRAM: 16257 MiB):
   Device 0: Quadro P5200, compute capability 6.1, VMM: yes, VRAM: 16257 MiB
 ```
 
-### Heads-up: unified `bin/llama` (heierchat router) not in this tarball
+### v2 vs v1: the unified `bin/llama` router + `llama-server`
 
-The configure used here does not build `llama-cli-impl` / `llama-server-impl`, so the unified `bin/llama` router cannot link and is skipped during install. The shipped binaries cover bench / quantize / perplexity / imatrix / tts / mtmd-cli / completion / embedding / finetune / etc. — sufficient for standalone-CLI and benchmarking use. A v2 tarball with the router would need a re-configure that enables both impls.
+With `-DLLAMA_BUILD_SERVER=ON` (above), the configure builds `llama-cli-impl` + `llama-server-impl`, so `cmake --install` ships the unified `bin/llama` router, `llama-server`, and `llama-cli` on top of the v1 set. v2 member-delta vs v1 (**+11 net**):
+
+- `bin/{llama, llama-cli, llama-server}` (thin shims) + `lib/libllama-{cli,server}-impl.so` — **single `.so` each, no `.0/.0.0.X` version chain** (the shims link them direct); `libllama-server-impl.so` ≈ 12 MB is the bulk of the delta.
+- dev artifacts from `cmake --install`: `include/{llama.h, llama-cpp.h}`, `lib/cmake/llama/*`, `lib/pkgconfig/llama.pc` — harmless runtime bloat, droppable for a leaner overlay.
+- removed vs v1: the empty `opt/cuda-pascal-runfile/lib64` dir entry (redundant with `targets/x86_64-linux/lib`, prune-safe — the new server binaries `ldd`-clean from an extracted v2 tar with the CUDA libs under `targets/.../lib`).
+
+**Build targets:** `bin/llama-server` and `bin/llama-cli` are *separate* executable targets, **not** in `llama-app`'s dependency closure — `--target llama-app` builds the impl `.so` but not those two binaries. Reproducing v2 needs `--target llama-bench llama-app llama-server llama-cli` (or an all-targets build).
+
+v1 (bench+CLI, `0efed65…`) stays valid for image bakes that don't need serving; v2 (`2528d952…`) is the serving-capable successor. **Validate any re-cut by extracting the tar to a clean root and `ldd`-checking `bin/llama-server` — the tar, not the live `/opt`, is what the ISO consumes.**
 
 ## Sources
 - Primer (this repo, untracked): `quadro-p5200-llamacpp-primer.md`
