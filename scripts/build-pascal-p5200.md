@@ -196,7 +196,11 @@ tar --zstd -tf ~/pascal-cuda-artifacts.tar.zst | head    # confirm members start
 
 Pruning notes:
 - Static archives (`*.a`) and CUDA stubs are explicitly excluded from the rsync — `.so*` glob only.
-- The full `/opt/cuda-pascal-runfile/` is 9.5 GB; the pruned runtime libset (libcudart + libcublas + libcublasLt) is ~810 MB before zstd, ~470 MB after.
+- The full `/opt/cuda-pascal-runfile/` is 9.5 GB; the pruned runtime libset (libcudart + libcublas + libcublasLt) is ~816 MB unpacked. Together with the ~45 MB `/opt/ht-llama-cuda/` install prefix, the resulting zstd-compressed tarball is **512 MB**, 110 members. Reference hash from the first crystal build:
+  ```
+  sha256: 0efed65095d3da67713aa4344fcdb1c9e6f8faf397d5eaf1f24c9e8cd00fa339
+  ```
+  (zstd is non-deterministic across machines/versions; reproduce by re-running §7 and re-sha'ing locally.)
 - libstdc++.so.6, libgomp.so.1, libcuda.so.1 are NOT in the tarball — they come from the host OS (`gcc-libs`, `nvidia-580xx-utils`). The runtime requires those packages installed on the target.
 
 ### Runtime setup on target (consumed by the ISO)
