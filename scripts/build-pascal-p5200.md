@@ -110,15 +110,6 @@ scripts/bench-pascal-p5200.sh both   # or `cuda` / `vulkan`
 - `tg` flat across batch sizes — bandwidth-bound, as primer predicts.
 - `pp` peaks at 512, dips at 2048 — Vulkan Pascal has no FA, so attention quadratic shows.
 
-## Results — CUDA (build f6feddb, Llama-3.1-8B-Instruct Q4_K_M)
-TODO — fill in once build-cuda completes.
-
-## Sources
-- Primer (this repo, untracked): `quadro-p5200-llamacpp-primer.md`
-- Issue #7055 / PR #7188, #7681, #15769, #22541 (Pascal FA fix + tile-FA hardening)
-- NVIDIA Pascal Tuning Guide (FP16 1/64, DP4A)
-- archlinux-archive: https://archive.archlinux.org/packages/g/gcc/
-
 ## Results — CUDA (build 5159fee, /opt/cuda-pascal-runfile nvcc 12.9.86, /opt/gcc-14)
 
 Init line confirms the path:
@@ -161,3 +152,79 @@ P5200 vs the primer's GTX 1080 row (pp512=789, tg128=46): **basically the same d
 - `scripts/bench-pascal-p5200-cuda-l31-8b.5159fee.json` — CUDA L3.1-8B Q4_K_M
 - `scripts/bench-pascal-p5200-cuda-l2-7b.5159fee.json` — CUDA L2-7B Q4_0
 - `scripts/bench-pascal-p5200-vulkan-l2-7b.5159fee.json` — Vulkan L2-7B Q4_0
+
+## Packaging — producing a relocatable runtime tarball
+
+Used to produce `pascal-cuda-artifacts.tar.zst` for the Omarchy ISO autoinstall (hai-os-dev consumes via `tar -C / -xf ...`). The end product is rpath-clean and resolves via `/etc/ld.so.conf.d/cuda-pascal.conf` (no `LD_LIBRARY_PATH` required at runtime).
+
+```bash
+# 1) cmake install — strips the build-dir RUNPATH from all installed targets
+sudo cmake --install build-cuda --prefix /opt/ht-llama-cuda
+# (verify: readelf -d /opt/ht-llama-cuda/bin/llama-bench should show no RPATH/RUNPATH)
+
+# 2) cmake does NOT install libllama.so or libllama-common.so (they are intermediates,
+#    not declared as install targets). Copy them in, then strip rpath with patchelf.
+sudo cp -a build-cuda/bin/libllama.so.0.0.* /opt/ht-llama-cuda/lib/
+sudo cp -a build-cuda/bin/libllama-common.so.0.0.* /opt/ht-llama-cuda/lib/
+# Delete any stale older-version files left over from prior builds:
+#   sudo rm /opt/ht-llama-cuda/lib/libllama{,-common}.so.0.0.<old>
+sudo pacman -S --noconfirm patchelf   # required for the rpath strip below
+sudo patchelf --remove-rpath /opt/ht-llama-cuda/lib/libllama.so.0.0.*
+sudo patchelf --remove-rpath /opt/ht-llama-cuda/lib/libllama-common.so.0.0.*
+
+# 3) Recreate the symlink chain (.so → .so.0 → .so.0.0.<X>)
+cd /opt/ht-llama-cuda/lib
+LV=$(basename libllama.so.0.0.*)
+sudo ln -sfn "$LV" libllama.so.0 && sudo ln -sfn libllama.so.0 libllama.so
+CV=$(basename libllama-common.so.0.0.*)
+sudo ln -sfn "$CV" libllama-common.so.0 && sudo ln -sfn libllama-common.so.0 libllama-common.so
+
+# 4) Stage with relative-from-/ layout. Members will be `opt/...`, never `/opt/...`
+#    or `home/me/...` — so `tar -C / -xf` on the target expands back to /opt/.
+rm -rf /tmp/stage && mkdir -p /tmp/stage/opt/cuda-pascal-runfile/targets/x86_64-linux/lib
+cp -a /opt/cuda-pascal-runfile/targets/x86_64-linux/lib/libcudart.so*    /tmp/stage/opt/cuda-pascal-runfile/targets/x86_64-linux/lib/
+cp -a /opt/cuda-pascal-runfile/targets/x86_64-linux/lib/libcublas.so*    /tmp/stage/opt/cuda-pascal-runfile/targets/x86_64-linux/lib/
+cp -a /opt/cuda-pascal-runfile/targets/x86_64-linux/lib/libcublasLt.so*  /tmp/stage/opt/cuda-pascal-runfile/targets/x86_64-linux/lib/
+sudo cp -a /opt/ht-llama-cuda /tmp/stage/opt/
+sudo chown -R "$(id -un):$(id -gn)" /tmp/stage
+
+# 5) Tarball
+cd /tmp/stage && tar --zstd -cf ~/pascal-cuda-artifacts.tar.zst opt/
+sha256sum ~/pascal-cuda-artifacts.tar.zst
+tar --zstd -tf ~/pascal-cuda-artifacts.tar.zst | head    # confirm members start with opt/
+```
+
+Pruning notes:
+- Static archives (`*.a`) and CUDA stubs are explicitly excluded from the rsync — `.so*` glob only.
+- The full `/opt/cuda-pascal-runfile/` is 9.5 GB; the pruned runtime libset (libcudart + libcublas + libcublasLt) is ~810 MB before zstd, ~470 MB after.
+- libstdc++.so.6, libgomp.so.1, libcuda.so.1 are NOT in the tarball — they come from the host OS (`gcc-libs`, `nvidia-580xx-utils`). The runtime requires those packages installed on the target.
+
+### Runtime setup on target (consumed by the ISO)
+
+```bash
+tar -C / -xf pascal-cuda-artifacts.tar.zst
+cat > /etc/ld.so.conf.d/cuda-pascal.conf <<'EOF'
+/opt/cuda-pascal-runfile/targets/x86_64-linux/lib
+/opt/ht-llama-cuda/lib
+EOF
+ldconfig
+# Sanity:
+ldd /opt/ht-llama-cuda/bin/llama-bench | grep "not found"   # must be empty
+/opt/ht-llama-cuda/bin/llama-bench --help                   # should print CUDA init + usage
+```
+
+Expected init line on a P5200 host:
+```
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 16257 MiB):
+  Device 0: Quadro P5200, compute capability 6.1, VMM: yes, VRAM: 16257 MiB
+```
+
+### Heads-up: unified `bin/llama` (heierchat router) not in this tarball
+
+The configure used here does not build `llama-cli-impl` / `llama-server-impl`, so the unified `bin/llama` router cannot link and is skipped during install. The shipped binaries cover bench / quantize / perplexity / imatrix / tts / mtmd-cli / completion / embedding / finetune / etc. — sufficient for standalone-CLI and benchmarking use. A v2 tarball with the router would need a re-configure that enables both impls.
+
+## Sources
+- Primer (this repo, untracked): `quadro-p5200-llamacpp-primer.md`
+- Issue #7055 / PR #7188, #7681, #15769, #22541 (Pascal FA fix + tile-FA hardening)
+- NVIDIA Pascal Tuning Guide (FP16 1/64, DP4A)
+- archlinux-archive: https://archive.archlinux.org/packages/g/gcc/
