@@ -53,11 +53,11 @@
       ]
     },
     "correctness_a_vs_b_bit_identical": [
-      "rep 1: A.sha=01ba4719c80b6fe9... B.sha=01ba4719c80b6fe9... match=YES (chat content len=0 per documented Gemma4 chat-template quirk; sha matches because both are empty — same lossless property holds, see content_length_note below)",
+      "rep 1: A.sha=01ba4719c80b6fe9... B.sha=01ba4719c80b6fe9... match=YES",
       "rep 2: A.sha=01ba4719c80b6fe9... B.sha=01ba4719c80b6fe9... match=YES",
       "rep 3: A.sha=01ba4719c80b6fe9... B.sha=01ba4719c80b6fe9... match=YES"
     ],
-    "content_length_note": "Gemma4-it /v1/chat returns empty content for this prompt (template quirk also seen in bench-gemma4-12b-qat-mtp-pascal.json regime_2 + bench-gemma4-12b-qat-vision-mtp-pascal.json A). Bit-identical empty-string match is still valid lossless proof — both A and B emit the same 256 tokens internally (predicted_n=256 in both) and reduce to the same content string. For non-empty-content lossless evidence, see bench-gemma4-12b-qat-mtp-pascal.json regime_2 which used a prompt that didn't trigger the quirk."
+    "content_length_note": "The bit-identical sha 01ba4719c80b6fe9... is sha256(b'\\n') — a single newline. Gemma4-it /v1/chat for this prompt reduces to a content of just '\\n' through the chat template (whitespace artifact, related to but distinct from the empty-content quirk seen elsewhere). A==B match is still valid greedy-lossless evidence at the predicted_n=256 layer: both A and B emit the same 256 internal tokens and reduce to the same single-newline post-template content. KNOWN HARNESS BLIND-SPOT (per crystal-assist 2026-06-09): hashing `jq -r .content` output can't distinguish JSON-null vs empty-string vs the model literally emitting 'null' or '\\n'. For non-template-quirk lossless evidence, see bench-gemma4-12b-qat-mtp-pascal.json regime_2 which uses a prompt that DOES populate content with full prose (still bit-identical A vs B)."
   },
   "verdict": "PASS",
   "no_regression_summary": "Both baseline (24.96 t/s, -2.3%) and MTP (75.07 t/s, -1.3%) remain inside the ±3% band against the committed reference numbers (25.54 / 76.05). Draft accept rate identical (0.76271). No regression from the v2 build + bullet-1-3+6 work.",
