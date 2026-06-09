@@ -77,7 +77,7 @@
     "surface": "llama-mtmd-cli",
     "method": "single-shot --image + -p, --temp 0, --jinja required",
     "binary": "/opt/ht-llama-cuda/bin/llama-mtmd-cli",
-    "args_critical": "--jinja (without it, mtmd-cli aborts with: 'terminate called after throwing an instance of std::runtime_error / what(): this custom template is not supported, try using --jinja'). See [[reference-mtmd-cli-jinja-required]].",
+    "args_critical": "--jinja (without it, mtmd-cli aborts with: 'terminate called after throwing an instance of std::runtime_error / what(): this custom template is not supported, try using --jinja'). See [[reference_mtmd_cli_jinja_required]].",
     "pass_criteria": "Output content references at least one of three ground-truth features (PASCAL / P5200 / red rectangle).",
     "result": {
       "verdict": "PASS",
@@ -92,7 +92,8 @@
   "issue_100_bullets_resolved": ["6 — gemma4 12b qat mtp all modalities"],
   "related": [
     "bench-gemma4-12b-qat-mtp-pascal.json (text-only MTP bench, same model)",
-    "feedback-spec-type-footgun (--spec-type required for MTP engagement)",
+    "feedback_spec_type_footgun (--spec-type required for MTP engagement)",
+    "reference_mtmd_cli_jinja_required (--jinja flag required for Gemma4 vision)",
     "build-pascal-p5200.md (v2 build with LLAMA_BUILD_SERVER=ON)"
   ]
 }
