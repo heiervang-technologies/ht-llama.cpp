@@ -200,8 +200,6 @@ That requires `JSON.stringify` when formatted to message content:
 
 ## Web UI
 
-The web UI and desktop shell are maintained in a separate repository: [heiervang-technologies/heierchat](https://github.com/heiervang-technologies/heierchat).
+The embedded `llama-server` web UI is the upstream llama.cpp default, fetched as a prebuilt bundle from the `llama-ui` HF bucket at build time (`LLAMA_USE_PREBUILT_UI=ON`, default).
 
-This project embeds a pre-built snapshot of that frontend in `tools/server/public/` so that users get a batteries-included experience out of the box, but all development on the UI happens in the upstream `heierchat` repository.
-
-If you want to contribute to the Web UI, please submit your pull requests there!
+The product-facing UI (heierchat) lives in [heiervang-technologies/heierchat](https://github.com/heiervang-technologies/heierchat) and talks to `llama-server` over its OpenAI-compatible API.
