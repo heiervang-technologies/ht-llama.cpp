@@ -1,10 +1,12 @@
 # Provision UI assets and generate ui.cpp/ui.h.
 #
 # Asset provisioning priority:
-#   1. Pre-built heierchat snapshot in <repo>/tools/server/public/ (default for ht)
+#   1. Pre-built bundle in <repo>/tools/server/public/ (manual override only —
+#      not present on ht; honored if dropped in for local experimentation)
 #   2. Pre-built assets in SRC_DIST_DIR (tools/ui/dist — legacy / manual override)
-#   3. If BUILD_UI=ON: npm build (no-op on ht — UI source is in heierchat)
+#   3. If BUILD_UI=ON: npm build (no-op on ht — UI source lives in standalone heierchat repo)
 #   4. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
+#      (default for ht — pulls upstream llama.cpp prebuilt UI from llama-ui bucket)
 
 cmake_minimum_required(VERSION 3.16)
 
@@ -43,9 +45,9 @@ function(assets_present out_var)
 endfunction()
 
 function(copy_public_dist out_var)
-    # Priority 1 on ht: snapshot of the heierchat-built UI committed at
-    # tools/server/public/. To refresh, build heierchat and copy its dist/
-    # over tools/server/public/.
+    # Priority 1: manual-override pre-built bundle at tools/server/public/.
+    # Not present on ht by default — the upstream llama.cpp UI is fetched
+    # from HF in priority 4. Drop assets here only for local experimentation.
     set(${out_var} FALSE PARENT_SCOPE)
 
     foreach(asset ${ASSETS})
@@ -55,7 +57,7 @@ function(copy_public_dist out_var)
     endforeach()
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
-    message(STATUS "UI: using committed heierchat snapshot from ${PUBLIC_DIST_DIR}")
+    message(STATUS "UI: using committed pre-built bundle from ${PUBLIC_DIST_DIR}")
     foreach(asset ${ASSETS})
         execute_process(
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -311,7 +313,7 @@ function(emit_files)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Priority 1: heierchat snapshot committed at tools/server/public/
+# 1. Priority 1: pre-built bundle at tools/server/public/ (manual override)
 # ---------------------------------------------------------------------------
 copy_public_dist(PUBLIC_OK)
 if(PUBLIC_OK)

@@ -36,11 +36,11 @@ repo — they live at
 Feature list (voice / images / docs / sandbox terminals / artifacts /
 Nextcloud sync / chat polish / desktop shell) is documented there.
 
-A pre-built snapshot of the heierchat bundle is committed at
-`tools/server/public/` and wired into `llama-server` via `llama-ui` so
-the default embedded server experience still works out of the box. To
-update the snapshot, build heierchat and copy its `dist/` over
-`tools/server/public/`.
+The embedded `llama-server` web UI is the upstream default — fetched as
+a prebuilt bundle from the `llama-ui` HF bucket at build time via
+`LLAMA_USE_PREBUILT_UI=ON` (default) and embedded into the binary via
+the `llama-ui` static library. heierchat is the product-facing UI and
+talks to `llama-server` over its OpenAI-compatible API.
 
 `tools/termd/` (sandboxed terminal daemon) stays in this repo — it's a
 server-side service, not part of the UI.
