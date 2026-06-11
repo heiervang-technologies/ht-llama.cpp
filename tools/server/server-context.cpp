@@ -1779,26 +1779,20 @@ private:
             }
         } else {
             // TODO: optimize this with min-p optimization
-            std::vector<llama_token_data> cur = get_token_probabilities(ctx_tgt, idx);
-            const size_t max_probs = cur.size();
-            const size_t n_probs = std::min(max_probs, n_probs_request);
+            const server_token_probs cur = get_token_probabilities(ctx_tgt, idx, result.tok, n_probs_request);
 
             // set probability for sampled token
-            for (size_t i = 0; i < max_probs; i++) {
-                // set probability for sampled token
-                if (cur[i].id == result.tok) {
-                    result.prob = cur[i].p;
-                    break;
-                }
+            if (cur.sampled_found) {
+                result.prob = cur.sampled_p;
             }
 
             // set probability for top n_probs tokens
-            result.probs.reserve(n_probs);
-            for (size_t i = 0; i < n_probs; i++) {
+            result.probs.reserve(cur.top.size());
+            for (const auto & td : cur.top) {
                 result.probs.push_back({
-                    cur[i].id,
-                    common_token_to_piece(ctx_tgt, cur[i].id, special),
-                    cur[i].p
+                    td.id,
+                    common_token_to_piece(ctx_tgt, td.id, special),
+                    td.p
                 });
             }
         }

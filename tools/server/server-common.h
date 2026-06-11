@@ -332,7 +332,16 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx);
+struct server_token_probs {
+    std::vector<llama_token_data> top; // top n_top tokens sorted by logit descending, p filled in
+
+    float sampled_p     = 0.0f; // probability of the token passed as `sampled`
+    bool  sampled_found = false;
+};
+
+// compute the probabilities of the top n_top tokens and of the sampled token
+// avoids sorting the entire vocabulary - the softmax normalization only needs the max and the sum
+server_token_probs get_token_probabilities(llama_context * ctx, int idx, llama_token sampled, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 
