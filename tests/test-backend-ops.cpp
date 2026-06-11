@@ -9071,6 +9071,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // D == 512 with matched quantized KV types (Gemma 4 global attention layers, vec kernel coverage):
+    for (ggml_type type_KV : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        for (int kv : { 512, 1024, }) {
+            for (int nb : { 1, 2, 3, 32, }) {
+                test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {4, 1}, kv, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, type_KV, type_KV));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {4, 1}, 512, 1, true, true, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));

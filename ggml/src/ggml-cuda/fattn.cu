@@ -350,6 +350,11 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
 #endif // GGML_CUDA_FA_ALL_QUANTS
 
+    // D == 512 (Gemma 4 global attention layers) has vec instances only for matched quantized KV types,
+    // see ggml_cuda_get_best_fattn_kernel for the dispatch conditions.
+    FATTN_VEC_CASE(512, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
+    FATTN_VEC_CASE(512, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
+
     GGML_ABORT("fatal error");
 }
 
@@ -478,7 +483,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // For D == 512 (Gemma 4 global attention layers) vec instances exist only for matched quantized KV types:
+    // the tile/MMA kernels need K/V dequantized to F16 on every call, so the vec kernel saves that staging pass.
+    // The vec kernel only compiles logit_softcap variants for D == 128/256 (see fattn-vec.cuh).
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+    const bool vec_has_head_size = Q->ne[0] <= 256 ?
+        Q->ne[0] % 64 == 0 && Q->ne[0] != 192 :
+        Q->ne[0] == 512 && K->type == V->type && (K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0) && logit_softcap == 0.0f;
+    const bool can_use_vector_kernel = vec_has_head_size && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
