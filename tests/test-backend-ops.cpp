@@ -9385,6 +9385,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
             }
         }
     }
+
+    // Gemma 4 global attention layers: D == 512 decode with quantized KV cache
+    for (int kv : { 4096, 8192, 16384, }) {
+        for (ggml_type type_KV : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+            test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {4, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
     for (ggml_type type : turboq_types) {
         test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {1, 1}, 512, 1, true, false, 0, 0, GGML_PREC_F32, type));
     }
