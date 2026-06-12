@@ -1003,6 +1003,15 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         msg.content = content;
     }
 
+    // Propagate truncation to the OAI Responses status (issue #19): when the
+    // generation hit max_output_tokens / ctx limit, mark output items and the
+    // top-level response as "incomplete" with the reason. Otherwise agentic
+    // clients can't distinguish a finished response from a truncated one and
+    // end up retrying with the malformed/partial output in conversation
+    // history.
+    const bool is_incomplete = (stop == STOP_TYPE_LIMIT);
+    const char * item_status = is_incomplete ? "incomplete" : "completed";
+
     std::vector<json> output;
 
     if (msg.reasoning_content != "") {
@@ -1015,7 +1024,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
                 {"type", "reasoning_text"},
             }})},
             {"encrypted_content", ""},
-            {"status",            "completed"},
+            {"status",            item_status},
         });
     }
 
@@ -1029,7 +1038,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             }})},
             {"id",     "msg_" + random_string()},
             {"role",   msg.role},
-            {"status", "completed"},
+            {"status", item_status},
             {"type",   "message"},
         });
     }
@@ -1037,7 +1046,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         output.push_back(json {
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    item_status},
             {"arguments", tool_call.arguments},
             {"call_id",   "fc_" + tool_call.id},
             {"name",      tool_call.name},
@@ -1052,7 +1061,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         {"model",        oaicompat_model},
         {"object",       "response"},
         {"output",       output},
-        {"status",       "completed"},
+        {"status",       is_incomplete ? "incomplete" : "completed"},
         {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
@@ -1061,12 +1070,22 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         }},
     };
 
+    if (is_incomplete) {
+        res["incomplete_details"] = json {{"reason", "max_output_tokens"}};
+    }
+
     return res;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
+
+    // See to_json_oaicompat_resp() for the issue-#19 background. Same mapping
+    // here so streaming clients see the truncation in the final
+    // response.completed event payload and on the per-item statuses.
+    const bool is_incomplete = (stop == STOP_TYPE_LIMIT);
+    const char * item_status = is_incomplete ? "incomplete" : "completed";
 
     if (oaicompat_msg.reasoning_content != "") {
         const json output_item = json {
@@ -1117,7 +1136,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         });
         const json output_item = {
             {"type",    "message"},
-            {"status",  "completed"},
+            {"status",  item_status},
             {"id",      oai_resp_message_id},
             {"content", json::array({content_part})},
             {"role",    "assistant"}
@@ -1136,7 +1155,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
         const json output_item = {
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    item_status},
             {"arguments", tool_call.arguments},
             {"call_id",   "fc_" + tool_call.id},
             {"name",      tool_call.name}
@@ -1152,24 +1171,29 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     }
 
     std::time_t t = std::time(0);
+    json response_payload = json {
+        {"id",         oai_resp_id},
+        {"object",     "response"},
+        {"created_at", t},
+        {"status",     is_incomplete ? "incomplete" : "completed"},
+        {"model",      oaicompat_model},
+        {"output",     output},
+        {"usage",      json {
+            {"input_tokens",  n_prompt_tokens},
+            {"output_tokens", n_decoded},
+            {"total_tokens",  n_decoded + n_prompt_tokens},
+            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+        }}
+    };
+    if (is_incomplete) {
+        response_payload["incomplete_details"] = json {{"reason", "max_output_tokens"}};
+    }
+
     server_sent_events.push_back(json {
-        {"event", "response.completed"},
+        {"event", is_incomplete ? "response.incomplete" : "response.completed"},
         {"data", json {
-            {"type", "response.completed"},
-            {"response", json {
-                {"id",         oai_resp_id},
-                {"object",     "response"},
-                {"created_at", t},
-                {"status",     "completed"},
-                {"model",      oaicompat_model},
-                {"output",     output},
-                {"usage",      json {
-                    {"input_tokens",  n_prompt_tokens},
-                    {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens},
-                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
-                }}
-            }},
+            {"type",     is_incomplete ? "response.incomplete" : "response.completed"},
+            {"response", response_payload},
         }}
     });
 
