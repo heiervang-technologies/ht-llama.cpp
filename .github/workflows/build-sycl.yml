@@ -1,26 +1,15 @@
 name: CI (sycl)
 
+# Note: the SYCL jobs in this file are disabled upstream (see PR
+# ggml-org/llama.cpp#23705) — all matrix entries below are commented out to save
+# Actions resources. With the upstream auto-triggers, every push to master (e.g.
+# our fork-sync) creates a zero-job "failure" run, polluting the Actions
+# dashboard. Auto-triggers stripped on ht; `workflow_dispatch` remains so the
+# job can be invoked manually if/when upstream re-enables SYCL CI. Re-add the
+# upstream trigger block when SYCL jobs land.
+
 on:
   workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-sycl.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-sycl.yml',
-      'ggml/src/ggml-sycl/**'
-    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
