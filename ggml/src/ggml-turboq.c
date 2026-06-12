@@ -372,10 +372,14 @@ static inline float turboq_block_scale_down(void) {
     return 1.0f / turboq_block_scale_up();
 }
 
+// Note: these operate on one TBQ block (TBQ_BLK_SIZE floats). The loop bound
+// must be TBQ_BLK_SIZE, not QK_K — all callers pass TBQ_BLK_SIZE-sized buffers,
+// and QK_K (256) used to overrun them by 128 floats per call (heap corruption,
+// caught by the Windows CRT heap checker and ASAN in test-quantize-fns/perf).
 static void turboq_rotate_block_forward(float * y, const float * x, uint64_t seed) {
     const float * Q = turboq_get_rotation_row(TURBOQ_KV_DIM, seed);
 
-    for (int64_t i = 0; i < QK_K; i += TURBOQ_KV_DIM) {
+    for (int64_t i = 0; i < TBQ_BLK_SIZE; i += TURBOQ_KV_DIM) {
         matvec_row(y + i, Q, x + i, TURBOQ_KV_DIM);
     }
 }
@@ -383,7 +387,7 @@ static void turboq_rotate_block_forward(float * y, const float * x, uint64_t see
 static void turboq_rotate_block_inverse(float * x, const float * y, uint64_t seed) {
     const float * Q = turboq_get_rotation(TURBOQ_KV_DIM, seed);
 
-    for (int64_t i = 0; i < QK_K; i += TURBOQ_KV_DIM) {
+    for (int64_t i = 0; i < TBQ_BLK_SIZE; i += TURBOQ_KV_DIM) {
         matvec_t(x + i, Q, y + i, TURBOQ_KV_DIM);
     }
 }
