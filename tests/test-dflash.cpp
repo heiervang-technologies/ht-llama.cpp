@@ -151,7 +151,7 @@ static void test_dflash_swa_defaults() {
     GGML_ASSERT(!hparams.is_swa_any());
 
     // Even with SWA layers marked, is_swa_any returns true only when at least one is set
-    hparams.n_layer = 5;
+    hparams.n_layer_all = 5;
     for (uint32_t il = 0; il < 5; ++il) {
         GGML_ASSERT(hparams.is_swa_impl[il] == 0);
     }
@@ -163,7 +163,7 @@ static void test_dflash_swa_defaults() {
 //
 static void test_dflash_swa_anbeeld_pattern() {
     llama_hparams hparams;
-    hparams.n_layer = 5;
+    hparams.n_layer_all = 5;
     hparams.n_swa = 2048;
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     hparams.is_swa_impl[0] = 1;
