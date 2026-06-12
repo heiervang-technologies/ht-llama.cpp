@@ -16,19 +16,36 @@ This is the [Heiervang Technologies](https://github.com/heiervang-technologies) 
 
 Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Every entry below carries a **Why** — the reason it exists downstream. That is the bar for staying in the fork: a change we can no longer justify gets dropped at the next upstream sync, not carried out of inertia.
+
 ### Backend & quantization
 
-| Change | Description | Tracked upstream |
-|--------|-------------|------------------|
-| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | No |
-| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | [#22003](https://github.com/ggml-org/llama.cpp/pull/22003) |
-| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | No |
-| Developer-role remap | `--remap-developer-role` flag merges `developer` messages into the system prompt for templates that reject duplicates | No |
-| LCO-Embedding-Omni GGUF | Conversion script support for the LCO-Embedding-Omni multi-modal embedding family, including audio tensors routed to the base class in the Qwen2.5 Omni mmproj path. | No |
-| MLA LoRA conversion | `convert_lora_to_gguf.py` understands MLA (`kv_b_proj`) so adapters trained on MLA-style attention convert without manual surgery. | No |
-| Scheduler split-input cap | `GGML_SCHED_MAX_SPLIT_INPUTS` raised 30 → 256 (CMake cache var) so wide multi-modal graphs no longer trip the scheduler's per-split input limit. | No |
-| DFlash speculative decoding | Block-diffusion drafter integration (`LLM_ARCH_DFLASH`, `--spec-type dflash`, `llama_set_dflash`, CUDA kernels for partial-accept feature extraction). Designed against the [z-lab DFlash](https://github.com/z-lab/dflash) reference for Gemma4 31B targets. | No |
-| Gemma4 MTP speculative | Vendored upstream PR [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) (`gemma4-assistant` arch + `--spec-type draft-mtp`) ahead of upstream merge so the gemma-4-12b-qat-mtp preset can ship on titan. Retires when #23398 merges upstream and flows through a normal master sync. | [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) |
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | In-house research direction for sub-4-bit KV at long context on consumer GPUs. **Experimental** — no fleet deployment uses it yet (`--cache-type-*` warns); kept on `ht` so the work stays rebased against live upstream instead of rotting on a side branch. | No |
+| DFlash speculative decoding | Block-diffusion drafter integration (`LLM_ARCH_DFLASH`, `--spec-type dflash`, `llama_set_dflash`, CUDA kernels for partial-accept feature extraction). Designed against the [z-lab DFlash](https://github.com/z-lab/dflash) reference for Gemma4 31B targets. | Active product bet: diffusion drafting to lift Gemma4 decode throughput on the 3090/P5200 fleet. Upstream has no diffusion-drafter framework to extend. | No |
+| Gemma4 MTP speculative | Vendored upstream PR [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) (`gemma4-assistant` arch + `--spec-type draft-mtp`) ahead of upstream merge so the gemma-4-12b-qat-mtp preset can ship on titan. Retires when #23398 merges upstream and flows through a normal master sync. | Ships a measured 1.66× sampled / 3.02× greedy decode speedup on titan months before upstream review completes. Explicitly temporary. | [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) |
+| D=512 FA vec kernels | CUDA flash-attention vec-kernel instances for head size 512 with matched quantized KV (`q4_0`/`q8_0`), dispatch-gated to `gqa_ratio <= 4`; deployment-shape (Gemma4 MQA-16) correctness + perf cases in `test-backend-ops`. | Low-GQA D=512 shapes skip the per-step F16 dequant staging (up to 2× per-op). The gate keeps Gemma4's MQA-16 global layers on the faster TILE/MMA path — measured on both sm_61 and sm_86. | No |
+| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | Router mode is the fleet's deployment shape (multi-model boxes); a hung worker must surface as an error, not a stuck request. | [#22003](https://github.com/ggml-org/llama.cpp/pull/22003) |
+| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | heierchat exposes tools to arbitrary local models; strict parsing turned every malformed call into a hard failure. | No |
+| Developer-role remap | `--remap-developer-role` flag merges `developer` messages into the system prompt for templates that reject duplicates | OpenAI-client compatibility: clients that emit `developer` roles hit template errors on Gemma-family chat templates. | No |
+| LCO-Embedding-Omni GGUF | Conversion script support for the LCO-Embedding-Omni multi-modal embedding family, including audio tensors routed to the base class in the Qwen2.5 Omni mmproj path. | Embedding family used by HT retrieval deployments; conversion support has no upstream owner. | No |
+| MLA LoRA conversion | `convert_lora_to_gguf.py` understands MLA (`kv_b_proj`) so adapters trained on MLA-style attention convert without manual surgery. | Needed for adapters trained against DeepSeek-style MLA checkpoints in-house. | No |
+| Scheduler split-input cap | `GGML_SCHED_MAX_SPLIT_INPUTS` raised 30 → 256 (CMake cache var) so wide multi-modal graphs no longer trip the scheduler's per-split input limit. | LCO-Embedding-Omni graphs exceed the upstream limit; without this the model aborts at load. | No |
+
+### Server
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| heierchat / router integration | Downstream router glue and server args (incl. LoRA adapter auto-discovery) for multi-model boxes serving [heierchat](https://github.com/heiervang-technologies/heierchat). | The product front-end drives model selection/swapping through the router; these args are its contract. | No |
+| Context-checkpoint byte cap | `--ctx-checkpoints-max-mib` (default 4096): per-slot FIFO byte cap on SWA context checkpoints. | Unbounded checkpoints OOM-killed titan pods under long-context load (fork issue #67). | No |
+| `--api-prefix` public endpoints | Public-endpoint allowlist (`/health`, `/props`, …) is checked after stripping the prefix, so prefixed deployments keep unauthenticated health checks. | Fleet servers sit behind path-prefix ingress on k8s; probes broke with a prefix set. | No |
+| Responses API truncation status | Responses API emits `status: incomplete` + `incomplete_details` (and the `response.incomplete` SSE event) when generation stops on a limit. | heierchat consumes the Responses API and must distinguish truncation from completion programmatically. | No |
+| Logprobs partial-sort | `get_token_probabilities` uses max+sum softmax normalization and `std::partial_sort` for top-k instead of a full-vocab `std::sort` per emitted token. | O(V log V) → O(V + k log k) per token; measurable at Gemma's 262k vocab with logprobs-consuming clients. | No |
+| Fit-params byte plan | `common_fit_params` exposes the per-device byte plan; `llama-fit-params --fit-print-plan` emits it as JSON (+ smoke tests). | The router must predict whether a model fits *before* spawning a worker (fork issue #66); the plan is the data it needs. | No |
+| Router hardening | Guarded `mapping[]` accesses (no silent default-insert), orphaned-result cleanup on batch task removal, portable subprocess exit-code reads. | Long-lived router processes accumulated state corruption/leaks from these paths. | No |
+| termd | `tools/termd/` — sandboxed terminal daemon for tool execution. | Server-side execution backend for heierchat's sandboxed terminals; not a UI component, so it lives here. | No |
+| Log-noise fixes | Benign Gemma4-Assistant memory-probe warning downgraded to debug. | Deploy logs were dominated by a warning that fires by design once per load. | No |
 
 ### WebUI + desktop shell
 
@@ -47,11 +64,22 @@ talks to `llama-server` over its OpenAI-compatible API.
 `tools/termd/` (sandboxed terminal daemon) stays in this repo — it's a
 server-side service, not part of the UI.
 
+### Scripts & validation
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| DFlash bench & parity suite | `scripts/dflash/` — deployment-parity prompt suite, bench harness (Q8_0 default, `--target` flag, CPU-offload env knobs), Round-12 scaffolds. | The DFlash acceptance-rate program needs reproducible, deployment-shaped measurements across centurion/titan; ad-hoc benches kept diverging. | No |
+| Pascal P5200 build recipe | `scripts/` — CUDA 12.9 runfile + gcc-14 cross-build recipe and primer for sm_61 boxes. | CUDA 13 dropped Pascal; without a documented recipe the crystal/amethyst P5200 boxes silently fall back to Vulkan (≈half the prompt speed). | No |
+| Downstream test coverage | `test-dflash` unit tests; TBQ cases in `test-quantize-fns`/`-perf`; deployment-shape FA cases in `test-backend-ops`. | Downstream features get the same regression bar as upstream code — these tests have already caught real breakage (hparams-getter refactor, TBQ block-size migration, FA dispatch regressions). | No |
+
 ### Build / CI
 
-| Change | Description | Tracked upstream |
-|--------|-------------|------------------|
-| Release CI on `ht` | GitHub Actions release workflow runs on the `ht` branch, not just on tags. | No |
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| Release CI on `ht` | GitHub Actions release workflow runs on the `ht` branch, not just on tags. | Fleet deploys (titan et al.) pull binaries from `ht` pushes; waiting for tags would serialize deploys behind releases. | No |
+| Workflow trigger strips | SYCL and CANN workflows: auto-triggers removed (zero-job upstream workflows), `workflow_dispatch` kept; schema-valid placeholder job in the SYCL file. | Upstream disabled these jobs but kept the triggers — every fork push produced a spurious "failure" run. | [#23705](https://github.com/ggml-org/llama.cpp/pull/23705) |
+| Runner re-targeting | `build-cmake-pkg` and flake8 lint moved from upstream's self-hosted runner labels to `ubuntu-latest`. | Upstream's labels target ggml-org's private runner fleet; on this fork those jobs queued forever and CI could never conclude. | No |
+| Fork meta | Branding, CONTRIBUTING, this inventory, branch-strategy docs. | A fork that accepts agent contributions needs its policy and delta written down — this section is that contract. | No |
 
 ### Branch Strategy
 
