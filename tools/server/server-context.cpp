@@ -2096,12 +2096,44 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
-        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+        // n_ctx_checkpoints <= 0 disables checkpoints entirely. The arg parser
+        // accepts 0 (and any negative value wraps via the size_t cast below to
+        // a huge cap, which is also a no-op), so we short-circuit here rather
+        // than letting create_checkpoint's eviction loop touch an empty list.
+        if (params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+        // Per-slot footprint accounting (issue #67): the count-only cap let a single slot
+        // accumulate ~20 GB of checkpoints under heierchat's long contexts, driving titan
+        // SystemOOM. The byte cap is FIFO-evicted alongside the count cap; whichever bites
+        // first is the active limit.
+        auto total_bytes = [&]() {
+            size_t b = 0;
+            for (const auto & ckpt : slot.prompt.checkpoints) {
+                b += ckpt.size();
+            }
+            return b;
+        };
+
+        const size_t byte_cap =
+            (params_base.ctx_checkpoints_max_mib > 0)
+                ? (size_t) params_base.ctx_checkpoints_max_mib * 1024 * 1024
+                : 0; // 0 → byte cap disabled, count-only behavior
+
+        auto over_count = [&]() {
+            return slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints;
+        };
+        auto over_bytes = [&]() {
+            return byte_cap > 0 && !slot.prompt.checkpoints.empty() && total_bytes() >= byte_cap;
+        };
+
+        while (over_count() || over_bytes()) {
+            const auto & front = slot.prompt.checkpoints.front();
+            const char * reason = (over_bytes() && !over_count()) ? "bytes" : "count";
+
+            SLT_WRN(slot, "erasing old context checkpoint (reason=%s, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    reason, front.pos_min, front.pos_max, front.n_tokens, (float) front.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
@@ -2114,9 +2146,11 @@ private:
         cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
         SLT_INF(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, slot total = %.3f MiB / %d MiB cap)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024,
+                (float) total_bytes() / 1024 / 1024,
+                params_base.ctx_checkpoints_max_mib);
     }
 
     void process_single_task(server_task && task) {

@@ -106,6 +106,9 @@ class ServerProcess:
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
+    n_ctx_checkpoints: int | None = None
+    checkpoint_min_step: int | None = None
+    ctx_checkpoints_max_mib: int | None = None
     log_path: str | None = None
     webui_mcp_proxy: bool = False
     backend_sampling: bool = False
@@ -251,6 +254,12 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
+        if self.n_ctx_checkpoints is not None:
+            server_args.extend(["--ctx-checkpoints", self.n_ctx_checkpoints])
+        if self.checkpoint_min_step is not None:
+            server_args.extend(["--checkpoint-min-step", self.checkpoint_min_step])
+        if self.ctx_checkpoints_max_mib is not None:
+            server_args.extend(["--ctx-checkpoints-max-mib", self.ctx_checkpoints_max_mib])
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
         if self.backend_sampling:
