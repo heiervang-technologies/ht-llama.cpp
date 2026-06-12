@@ -104,7 +104,7 @@ def cmd_reference(args):
     diffusion forward to produce per-position draft logits."""
     torch = _need("torch")
     _need("transformers")
-    np = _need("numpy")
+    _need("numpy")
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     # Data-driven constants from the actual drafter config (never hardcoded).
