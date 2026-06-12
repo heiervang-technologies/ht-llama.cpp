@@ -113,9 +113,9 @@ Here is an example trace of an API request for text completion:
 - `server_context` launches the task by moving it into an available slot (see `launch_slot_with_task()`).
 - `update_slot()` processes the task as described in the "Batching" section above.
 - Results may be sent using `send_partial_response` or `send_final_response`, which creates a new `server_task_result` and pushes it to the response queue.
-- At the same time, `server_res_generator` listens to the response queue and retrieves this response.
-- As the response is stateless, `server_res_generator` calls `response->update()` to update the response with the current state.
-- `server_res_generator` then calls `response->to_json()` and passes the response to the HTTP layer.
+- At the same time, `server_res_generator` listens to the response queue (via its `server_response_reader`) and retrieves each result.
+- As each `server_task_result` is itself stateless, `server_response_reader::next()` calls `result->update(states[idx])` to refresh the result with the cumulative generation state owned by the HTTP layer.
+- The HTTP layer then calls `result->to_json()` and sends the JSON to the client.
 
 ### Testing
 
