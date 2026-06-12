@@ -2471,6 +2471,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_ESTIMATE"));
     add_opt(common_arg(
+        { "--fit-print-plan" },
+        "print the resolved per-device byte plan from common_fit_params as JSON on stdout, "
+        "then exit. Designed for the router's admit-side dry-run (see #66); see also out_bytes_per_device "
+        "in common/fit.h. Mutually exclusive with --fit-print; if both are set, --fit-print-plan wins.",
+        [](common_params & params) {
+            params.fit_params_print_plan = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_PRINT_PLAN"));
+    add_opt(common_arg(
         { "-fitt", "--fit-target" }, "MiB0,MiB1,MiB2,...",
         string_format("target margin per device for --fit, comma-separated list of values, "
             "single value is broadcast across all devices, default: %zu", params.fit_params_target[0]/(1024*1024)),
