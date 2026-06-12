@@ -27,6 +27,8 @@ Unlike upstream, we accept contributions from AI agents and assistants. We judge
 | LCO-Embedding-Omni GGUF | Conversion script support for the LCO-Embedding-Omni multi-modal embedding family, including audio tensors routed to the base class in the Qwen2.5 Omni mmproj path. | No |
 | MLA LoRA conversion | `convert_lora_to_gguf.py` understands MLA (`kv_b_proj`) so adapters trained on MLA-style attention convert without manual surgery. | No |
 | Scheduler split-input cap | `GGML_SCHED_MAX_SPLIT_INPUTS` raised 30 → 256 (CMake cache var) so wide multi-modal graphs no longer trip the scheduler's per-split input limit. | No |
+| DFlash speculative decoding | Block-diffusion drafter integration (`LLM_ARCH_DFLASH`, `--spec-type dflash`, `llama_set_dflash`, CUDA kernels for partial-accept feature extraction). Designed against the [z-lab DFlash](https://github.com/z-lab/dflash) reference for Gemma4 31B targets. | No |
+| Gemma4 MTP speculative | Vendored upstream PR [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) (`gemma4-assistant` arch + `--spec-type draft-mtp`) ahead of upstream merge so the gemma-4-12b-qat-mtp preset can ship on titan. Retires when #23398 merges upstream and flows through a normal master sync. | [#23398](https://github.com/ggml-org/llama.cpp/pull/23398) |
 
 ### WebUI + desktop shell
 
