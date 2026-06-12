@@ -24,6 +24,17 @@ env:
 
 jobs:
 
+  # ht: placeholder so the workflow file stays schema-valid while every real
+  # SYCL job below is commented out. An empty `jobs:` map is an INVALID
+  # workflow, and GitHub surfaces invalid workflow files as a zero-job
+  # "failure" run on every push — even with the auto-triggers stripped (#74).
+  # Never executes (`if: false`); delete it when upstream re-enables SYCL CI.
+  sycl-disabled-upstream:
+    runs-on: ubuntu-latest
+    if: ${{ false }}
+    steps:
+      - run: 'true'
+
 # TODO: this build is disabled to save Github Actions resources (https://github.com/ggml-org/llama.cpp/pull/23705)
 #       in order to enable it again, we have to provision dedicated runners  to run it
 #  ubuntu-24-sycl:
