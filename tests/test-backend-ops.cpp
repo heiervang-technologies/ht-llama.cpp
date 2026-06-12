@@ -9080,6 +9080,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {4, 1}, 512, 1, true, true, 0.0f, 0.0f, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    // deployment shape: Gemma 4 global layers are MQA (n_head_kv == 1, gqa_ratio == 16)
+    for (ggml_type type_KV : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        for (int nb : { 1, 2, 32, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {16, 1}, 1024, nb, true, false, 0.0f, 0.0f, GGML_PREC_F32, type_KV, type_KV));
+        }
+    }
 
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
@@ -9390,6 +9396,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (int kv : { 4096, 8192, 16384, }) {
         for (ggml_type type_KV : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {4, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+            // deployment shape: MQA, n_head_kv == 1, gqa_ratio == 16 (gemma-4-12B/26B global layers)
+            test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {16, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
         }
     }
     for (ggml_type type : turboq_types) {
