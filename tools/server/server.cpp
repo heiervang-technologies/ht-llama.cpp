@@ -48,6 +48,12 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
+        } catch (const model_unavailable_error & e) {
+            // model exists in /v1/models but isn't loadable right now —
+            // transient capability gap, 503 Service Unavailable. See
+            // heiervang-technologies/ht-llama.cpp#41.
+            error = ERROR_TYPE_UNAVAILABLE;
+            message = e.what();
         } catch (const std::exception & e) {
             // treat other exceptions as server error (500)
             error = ERROR_TYPE_SERVER;
@@ -422,6 +428,20 @@ int llama_server(int argc, char ** argv) {
     sigint_action.sa_flags = 0;
     sigaction(SIGINT, &sigint_action, NULL);
     sigaction(SIGTERM, &sigint_action, NULL);
+
+    // Ignore SIGPIPE so broken-pipe writes (e.g. client disconnecting mid-stream
+    // during a chat completion) surface as EPIPE returns instead of silently
+    // killing the process. cpp-httplib calls send() with flags=0 (no MSG_NOSIGNAL),
+    // so without this any streaming client cancel during a long-running response
+    // can drop the whole llama-server child. Observed mission m-20260527-103737
+    // on titan dflash preset: 449 MiB checkpoints in flight, client cancel,
+    // child died silently — no segfault, no log line — leaving the router with
+    // a zombie/defunct backend port. SIG_IGN is the standard network-server fix.
+    struct sigaction sigpipe_action;
+    sigpipe_action.sa_handler = SIG_IGN;
+    sigemptyset(&sigpipe_action.sa_mask);
+    sigpipe_action.sa_flags = 0;
+    sigaction(SIGPIPE, &sigpipe_action, NULL);
 #elif defined (_WIN32)
     auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
         return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;

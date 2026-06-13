@@ -176,7 +176,8 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level,
+        std::vector<int64_t> * out_bytes_per_device) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -268,6 +269,9 @@ static void common_params_fit_impl(
             if (projected_free_per_device[0] >= margins[0]) {
                 LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of free device memory, no changes needed\n",
                     __func__, projected_free_per_device[0]/MiB, margins[0]/MiB);
+                if (out_bytes_per_device) {
+                    out_bytes_per_device->assign({(int64_t) dmds_full[0].mb.total()});
+                }
                 return;
             }
         } else {
@@ -280,6 +284,13 @@ static void common_params_fit_impl(
             }
             if (!changes_needed) {
                 LOG_TRC("%s: targets for free memory can be met on all devices, no changes needed\n", __func__);
+                if (out_bytes_per_device) {
+                    out_bytes_per_device->clear();
+                    out_bytes_per_device->reserve(nd);
+                    for (size_t id = 0; id < nd; id++) {
+                        out_bytes_per_device->push_back((int64_t) dmds_full[id].mb.total());
+                    }
+                }
                 return;
             }
         }
@@ -639,6 +650,9 @@ static void common_params_fit_impl(
     }
     if (hp_nex == 0 || global_surplus_cpu_moe <= 0) {
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+        if (out_bytes_per_device) {
+            *out_bytes_per_device = mem;
+        }
         return;
     }
 
@@ -784,6 +798,9 @@ static void common_params_fit_impl(
     }
 
     set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
+    if (out_bytes_per_device) {
+        *out_bytes_per_device = mem;
+    }
 }
 
 enum common_params_fit_status common_fit_params(
@@ -794,11 +811,12 @@ enum common_params_fit_status common_fit_params(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins,
         uint32_t n_ctx_min,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        std::vector<int64_t> * out_bytes_per_device) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level, out_bytes_per_device);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());

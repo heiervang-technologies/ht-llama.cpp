@@ -179,3 +179,32 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+# Regression for the --api-prefix + public-endpoint allowlist bug: when
+# --api-prefix is set, handlers register at prefix+path so req.path arrives
+# as e.g. "/llama/health". The middleware used to compare req.path against
+# the un-prefixed allowlist and 401 it. Fix strips the prefix first.
+def test_api_prefix_keeps_public_endpoints_public():
+    server = ServerPreset.tinyllama2()
+    server.api_key = TEST_API_KEY
+    server.api_prefix = "/llama"
+    server.start()
+    for endpoint in ("/health", "/v1/models", "/", "/bundle.js"):
+        res = server.make_request("GET", "/llama" + endpoint)
+        assert res.status_code == 200, (
+            f"prefixed public endpoint {'/llama' + endpoint} should not require an api key, got {res.status_code}"
+        )
+
+
+def test_api_prefix_still_requires_key_for_private_routes():
+    # Same setup, but a private endpoint MUST still 401 without a key.
+    server = ServerPreset.tinyllama2()
+    server.api_key = TEST_API_KEY
+    server.api_prefix = "/llama"
+    server.start()
+    res = server.make_request("POST", "/llama/completions", data={
+        "prompt": "hello",
+    })
+    assert res.status_code == 401
+    assert res.body["error"]["type"] == "authentication_error"
