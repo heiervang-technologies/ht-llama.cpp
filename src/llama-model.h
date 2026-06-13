@@ -532,7 +532,6 @@ struct llama_model {
     std::vector<std::string> classifier_labels;
 
     struct ggml_tensor * tok_embd   = nullptr;
-    struct ggml_tensor * fc = nullptr;
     struct ggml_tensor * dflash_hidden_norm = nullptr;
     struct ggml_tensor * target_tok_embd = nullptr;
     struct ggml_tensor * target_output = nullptr;
@@ -572,6 +571,13 @@ struct llama_model {
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
+
+    // eagle3
+    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
+
+    // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
+    std::vector<int32_t> target_layer_ids;
 
     std::vector<llama_layer> layers;
 
