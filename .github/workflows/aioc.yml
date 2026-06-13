@@ -1,0 +1,109 @@
+# aioc compat probe for ht-llama.cpp's llama-server.
+#
+# Builds llama-server from the PR, boots it in **router mode** with two
+# tiny test models side-loaded via a preset INI, and probes the OpenAI
+# surface via heiervang-technologies/am-i-openai-compatible.
+#
+# Models in the matrix:
+#   1. ggml-org/test-model-stories260K (~1 MB) — chat/completions, embeddings.
+#      Generates gibberish but answers every endpoint shape correctly,
+#      which is exactly what aioc's Phase B signature checks need.
+#   2. jimi0209/bge-reranker-base-Q5_K_M-GGUF (~228 MB) — the rerank kind.
+#      aioc's _classify_kind tags models by name substring, so the "rerank"
+#      in the repo id is what flips /v1/reranking Phase B from SKIP to PASS.
+#
+# Both models are pre-loaded at startup (`load-on-startup = 1`) so the
+# probe doesn't trip the autoload cold-path on its first request.
+
+name: aioc compat
+on:
+  pull_request:
+    paths:
+      - 'tools/server/**'
+      - '.github/workflows/aioc.yml'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build llama-server
+        run: |
+          cmake -B build -DLLAMA_CURL=ON
+          cmake --build build --target llama-server -j 4
+
+      - name: Write router preset INI
+        run: |
+          cat >/tmp/aioc-presets.ini <<'INI'
+          version = 1
+
+          [*]
+          ctx-size = 1024
+
+          [ggml-org/test-model-stories260K]
+          hf-repo = ggml-org/test-model-stories260K
+          embeddings = true
+          load-on-startup = 1
+
+          [jimi0209/bge-reranker-base-Q5_K_M-GGUF]
+          hf-repo = jimi0209/bge-reranker-base-Q5_K_M-GGUF
+          reranking = true
+          load-on-startup = 1
+          INI
+
+      - name: Start llama-server (router mode)
+        run: |
+          ./build/bin/llama-server \
+            --models-preset /tmp/aioc-presets.ini \
+            --port 8080 \
+            >server.log 2>&1 &
+          # Wait up to 3 minutes for both models to load (the reranker is
+          # ~230 MB so first-time download dominates this budget).
+          for i in {1..180}; do
+            if curl -fs http://127.0.0.1:8080/health >/dev/null; then
+              models=$(curl -fs http://127.0.0.1:8080/v1/models | python3 -c "import json,sys;print(len(json.load(sys.stdin).get('data',[])))" 2>/dev/null || echo 0)
+              if [ "$models" -ge 2 ]; then
+                echo "router ready with $models models after ${i}s"
+                exit 0
+              fi
+            fi
+            sleep 1
+          done
+          echo "server failed to come up with both models; last 80 lines of log:"
+          tail -n 80 server.log
+          exit 1
+
+      - uses: heiervang-technologies/am-i-openai-compatible@v0.2.0-pre2
+        with:
+          base-url: http://127.0.0.1:8080
+          name: ht-llama.cpp-${{ github.sha }}
+          # HT-compat profile: probes the OpenAI catalog plus the HT
+          # extension endpoints (/v1/reranking, /v1/segmentations,
+          # /v1/audio/segmentations, /v1/chat/completions[omni],
+          # /v1/images/decompositions). 404 on HT rows is FAIL under
+          # `ht` profile.
+          profile: ht
+          # Discovery mode while ht-llama.cpp ships 1/5 HT endpoints —
+          # `none` keeps the build green regardless of FAIL/WARN row
+          # counts; the missing rows are still visible in the step
+          # summary. Flip to FAIL (default) once the remaining HT
+          # endpoints land and we want to gate regressions.
+          fail-on: none
+          report-path: aioc-report-ht.json
+          # Pin the Python package to the same git ref so the action and
+          # the catalog/probe code move together until 0.2.0 lands on PyPI.
+          # After that, drop this line to take the latest published catalog.
+          aioc-version: "git+https://github.com/heiervang-technologies/am-i-openai-compatible.git@v0.2.0-pre2"
+
+      - name: Stop llama-server
+        if: always()
+        run: pkill -f llama-server || true
+
+      - name: Upload aioc report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aioc-report-ht
+          path: aioc-report-ht.json
+          if-no-files-found: ignore

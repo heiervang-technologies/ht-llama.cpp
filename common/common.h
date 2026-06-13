@@ -162,6 +162,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -371,6 +372,8 @@ struct common_params_speculative {
 
     common_params_speculative_ngram_cache ngram_cache;
 
+    bool dflash = false; // use DFlash speculative decoding
+
     bool has_dft() const {
         return !draft.mparams.empty();
     }
@@ -464,9 +467,10 @@ struct common_params {
     int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
     int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};   // how split tensors should be distributed across GPUs
-    bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
-    bool    fit_params_print   = false; // print the estimated required memory to run the model
-    int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
+    bool    fit_params           = true;  // whether to fit unset model/context parameters to free device memory
+    bool    fit_params_print     = false; // print the estimated required memory to run the model
+    bool    fit_params_print_plan = false; // print resolved per-device byte plan as JSON (router admit-side input; see #66)
+    int32_t fit_params_min_ctx   = 4096;  // minimum context size to set when trying to reduce memory use
 
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
@@ -612,8 +616,9 @@ struct common_params {
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
-    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
+    int32_t n_ctx_checkpoints        = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_min_step      = 256;   // minimum spacing between context checkpoints
+    int32_t ctx_checkpoints_max_mib  = 4096;  // max host-RAM budget per slot for context checkpoints (MiB); 0 = no byte cap (count-only)
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -621,6 +626,7 @@ struct common_params {
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
+    bool remap_developer_role = false; // remap "developer" role to "system" for templates that reject unknown roles
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
