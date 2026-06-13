@@ -1,10 +1,12 @@
 # Provision UI assets and generate ui.cpp/ui.h.
 #
 # Asset provisioning priority:
-#   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
-#   2. If BUILD_UI=ON: npm build
-#   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
-#      of dist.tar.gz (verified against dist.tar.gz.sha256)
+#   1. Pre-built bundle in <repo>/tools/server/public/ (manual override only —
+#      not present on ht; honored if dropped in for local experimentation)
+#   2. Pre-built assets in SRC_DIST_DIR (tools/ui/dist — legacy / manual override)
+#   3. If BUILD_UI=ON: npm build (no-op on ht — UI source lives in standalone heierchat repo)
+#   4. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
+#      (default for ht — pulls upstream llama.cpp prebuilt UI from llama-ui bucket)
 
 cmake_minimum_required(VERSION 3.18)
 
@@ -18,11 +20,66 @@ set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
 
-set(DIST_DIR     "${UI_BINARY_DIR}/dist")
-set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
+set(DIST_DIR        "${UI_BINARY_DIR}/dist")
+set(PUBLIC_DIST_DIR "${LLAMA_SOURCE_DIR}/tools/server/public")
+set(SRC_DIST_DIR    "${UI_SOURCE_DIR}/dist")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
+
+function(assets_present out_var)
+    set(present TRUE)
+    foreach(asset ${ASSETS})
+        if(NOT EXISTS "${DIST_DIR}/${asset}")
+            set(present FALSE)
+            break()
+        endif()
+    endforeach()
+    set(${out_var} ${present} PARENT_SCOPE)
+endfunction()
+
+function(copy_public_dist out_var)
+    # Priority 1: manual-override pre-built bundle at tools/server/public/.
+    # Not present on ht by default — the upstream llama.cpp UI is fetched
+    # from HF in priority 4. Drop assets here only for local experimentation.
+    set(${out_var} FALSE PARENT_SCOPE)
+
+    foreach(asset ${ASSETS})
+        if(NOT EXISTS "${PUBLIC_DIST_DIR}/${asset}")
+            return()
+        endif()
+    endforeach()
+
+    file(MAKE_DIRECTORY "${DIST_DIR}")
+    message(STATUS "UI: using committed pre-built bundle from ${PUBLIC_DIST_DIR}")
+    foreach(asset ${ASSETS})
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PUBLIC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
+        )
+    endforeach()
+    set(${out_var} TRUE PARENT_SCOPE)
+endfunction()
+
+function(copy_src_dist out_var)
+    set(${out_var} FALSE PARENT_SCOPE)
+
+    foreach(asset ${ASSETS})
+        if(NOT EXISTS "${SRC_DIST_DIR}/${asset}")
+            return()
+        endif()
+    endforeach()
+
+    file(MAKE_DIRECTORY "${DIST_DIR}")
+    message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
+    foreach(asset ${ASSETS})
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${SRC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
+        )
+    endforeach()
+    set(${out_var} TRUE PARENT_SCOPE)
+endfunction()
 
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
@@ -268,7 +325,16 @@ function(emit_files dist_dir)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Priority 1: pre-built assets supplied in tools/ui/dist
+# 1. Priority 1: pre-built bundle at tools/server/public/ (manual override)
+# ---------------------------------------------------------------------------
+copy_public_dist(PUBLIC_OK)
+if(PUBLIC_OK)
+    emit_files()
+    return()
+endif()
+
+# ---------------------------------------------------------------------------
+# 2. Priority 2: pre-built assets supplied in tools/ui/dist (legacy / override)
 # ---------------------------------------------------------------------------
 if(EXISTS "${SRC_DIST_DIR}/index.html")
     message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
@@ -277,7 +343,7 @@ if(EXISTS "${SRC_DIST_DIR}/index.html")
 endif()
 
 # ---------------------------------------------------------------------------
-# 2. Priority 2: npm build (if BUILD_UI=ON)
+# 3. Priority 3: npm build (if BUILD_UI=ON)
 # ---------------------------------------------------------------------------
 set(provisioned FALSE)
 
@@ -291,7 +357,7 @@ if(BUILD_UI)
 endif()
 
 # ---------------------------------------------------------------------------
-# 3. Priority 3: HF Bucket download (if npm did not produce assets and HF_ENABLED=ON)
+# 4. Priority 4: HF Bucket download (if npm did not produce assets and HF_ENABLED=ON)
 # ---------------------------------------------------------------------------
 if(NOT provisioned AND HF_ENABLED)
     resolve_version(VERSION)
