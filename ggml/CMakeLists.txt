@@ -186,6 +186,10 @@ set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
 
 # ggml core
 set(GGML_SCHED_MAX_COPIES  "4" CACHE STRING "ggml: max input copies for pipeline parallelism")
+# ht-llama.cpp: upstream defaults to 30 but Gemma-4-E4B / MatFormer MoE models
+# trip the assertion during scheduler split. 256 is comfortable headroom for
+# every current checkpoint and costs ~2 KB per split at runtime.
+set(GGML_SCHED_MAX_SPLIT_INPUTS "256" CACHE STRING "ggml: max per-split inputs in the compute scheduler")
 option(GGML_CPU                             "ggml: enable CPU backend"                        ON)
 option(GGML_SCHED_NO_REALLOC                "ggml: disallow reallocations in ggml-alloc (for debugging)" OFF)
 
