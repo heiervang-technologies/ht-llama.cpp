@@ -137,6 +137,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
+    { LLM_ARCH_DFLASH,           "dflash"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -302,6 +303,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_DENSE_2_FEAT_OUT,       "%s.dense_2_feat_out" },
     { LLM_KV_DENSE_3_FEAT_IN,        "%s.dense_3_feat_in"  },
     { LLM_KV_DENSE_3_FEAT_OUT,       "%s.dense_3_feat_out" },
+    { LLM_KV_DFLASH_TARGET_LAYER_IDS,     "%s.dflash.target_layer_ids"     },
+    { LLM_KV_DFLASH_BLOCK_SIZE,           "%s.dflash.block_size"           },
+    { LLM_KV_DFLASH_MASK_TOKEN_ID,        "%s.dflash.mask_token_id"        },
+    { LLM_KV_DFLASH_N_TARGET_FEATURES,    "%s.dflash.n_target_features"    },
 
     { LLM_KV_TOKENIZER_MODEL,                    "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                      "tokenizer.ggml.pre"                      },
@@ -462,6 +467,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_NEXTN_PROJ_PRE,                         "nextn.pre_projection" },
     { LLM_TENSOR_NEXTN_PROJ_POST,                        "nextn.post_projection" },
     { LLM_TENSOR_NEXTN_EH_PROJ,                          "blk.%d.nextn.eh_proj" },
+    { LLM_TENSOR_DFLASH_FC,                              "dflash_fc" },
+    { LLM_TENSOR_DFLASH_HIDDEN_NORM,                     "dflash_hidden_norm" },
     { LLM_TENSOR_NEXTN_EMBED_TOKENS,                     "blk.%d.nextn.embed_tokens" },
     { LLM_TENSOR_NEXTN_ENORM,                            "blk.%d.nextn.enorm" },
     { LLM_TENSOR_NEXTN_HNORM,                            "blk.%d.nextn.hnorm" },
@@ -591,6 +598,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CLS_NORM,                   {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_DENSE_2_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
     {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
+    {LLM_TENSOR_DFLASH_FC,                  {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_DFLASH_HIDDEN_NORM,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_OUTPUT_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
@@ -800,9 +809,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
+LLM_KV::LLM_KV(llm_arch arch, const std::string & arch_name_override, const char * suffix) : arch(arch), suffix(suffix), arch_name_override(arch_name_override) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    const char * arch_name = arch_name_override.empty() ? LLM_ARCH_NAMES.at(arch) : arch_name_override.c_str();
+    std::string name = ::format(LLM_KV_NAMES.at(kv), arch_name);
 
     if (suffix != nullptr) {
         name += ".";
@@ -847,8 +858,13 @@ const char * llm_arch_name(llm_arch arch) {
 }
 
 llm_arch llm_arch_from_string(const std::string & name) {
+    std::string base_name = name;
+    if (base_name.size() > 6 && base_name.substr(base_name.size() - 6) == "-draft") {
+        base_name = base_name.substr(0, base_name.size() - 6);
+    }
+
     for (const auto & kv : LLM_ARCH_NAMES) { // NOLINT
-        if (kv.second == name) {
+        if (kv.second == base_name) {
             return kv.first;
         }
     }

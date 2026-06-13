@@ -411,6 +411,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
+    if (arch == LLM_ARCH_DFLASH) {
+        return false; // ht-only: speculative drafter — needs target_layer_ids array, synth test doesn't set it.
+    }
 
     // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU
