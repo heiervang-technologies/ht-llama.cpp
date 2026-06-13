@@ -309,6 +309,8 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_TBQ3_0,
+    GGML_TYPE_TBQ4_0,
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {
@@ -1625,6 +1627,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--ctx-checkpoints-max-mib"}, "N",
+        string_format("max host-RAM budget per slot for context checkpoints in MiB (default: %d, 0 = no byte cap, count-only). Eviction is FIFO: oldest checkpoint is dropped first to honour either the count cap (--ctx-checkpoints) or this byte cap, whichever bites.", params.ctx_checkpoints_max_mib),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("ctx-checkpoints-max-mib must be non-negative");
+            }
+            params.ctx_checkpoints_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CTX_CHECKPOINTS_MAX_MIB").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
@@ -2336,7 +2348,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for K\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.cache_type_k)
         ),
@@ -2349,7 +2362,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for V\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.cache_type_v)
         ),
@@ -2753,6 +2767,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_ESTIMATE"));
+    add_opt(common_arg(
+        { "--fit-print-plan" },
+        "print the resolved per-device byte plan from common_fit_params as JSON on stdout, "
+        "then exit. Designed for the router's admit-side dry-run (see #66); see also out_bytes_per_device "
+        "in common/fit.h. Mutually exclusive with --fit-print; if both are set, --fit-print-plan wins.",
+        [](common_params & params) {
+            params.fit_params_print_plan = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_PRINT_PLAN"));
     add_opt(common_arg(
         { "-fitt", "--fit-target" }, "MiB0,MiB1,MiB2,...",
         string_format("target margin per device for --fit, comma-separated list of values, "
@@ -3527,6 +3550,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
+        {"--remap-developer-role"},
+        "remap the OpenAI \"developer\" role to \"system\" before applying chat templates "
+        "(needed for models whose templates reject unknown roles, e.g. Qwen3.5)",
+        [](common_params & params) {
+            params.remap_developer_role = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REMAP_DEVELOPER_ROLE"));
+    add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
@@ -3921,7 +3952,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for K for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_k)
         ),
@@ -3934,7 +3966,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "KV cache data type for V for the draft model\n"
             "allowed values: %s\n"
-            "(default: %s)",
+            "(default: %s)\n"
+            "note: tbq3_0 / tbq4_0 are experimental — measured ~65-73x worse perplexity vs q8_0 on Qwen3.5-0.8B (issue #70)",
             get_all_kv_cache_types().c_str(),
             ggml_type_name(params.speculative.draft.cache_type_v)
         ),
@@ -4054,6 +4087,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.types.insert(params.speculative.types.end(), types.begin(), types.end());
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+
+    add_opt(common_arg(
+        {"--dflash"},
+        "use DFlash speculative decoding with the draft model",
+        [](common_params & params) {
+            params.speculative.dflash = true;
+            if (std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DFLASH) == params.speculative.types.end()) {
+                params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DFLASH);
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DFLASH"));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),

@@ -2,25 +2,11 @@ name: CI (cann)
 
 on:
   workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-cann.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-cann.yml',
-      'ggml/src/ggml-cann/**'
-    ]
+  # Auto-triggers disabled: every job in this workflow was commented out
+  # by upstream PR #23705 to save Github Actions resources. Leaving the
+  # auto-triggers active creates zero-job "failure" runs on PRs that
+  # touch ggml/src/ggml-cann/**. See PR #74 for the same fix on
+  # build-sycl.yml. Re-enable in lockstep with the upstream re-enable.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

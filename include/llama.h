@@ -155,13 +155,11 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TBQ3_0       = 41, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_TBQ4_0       = 42, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
-
-    // Get the model file type (quantization) as a string, e.g. "Q8_0" or "Q4_K - Medium"
-    LLAMA_API const char * llama_ftype_name(enum llama_ftype ftype);
 
     enum llama_rope_scaling_type {
         LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED = -1,
@@ -201,17 +199,6 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
-
-    enum llama_load_mode {
-        LLAMA_LOAD_MODE_NONE       = 0, // no special loading mode
-        LLAMA_LOAD_MODE_MMAP       = 1, // memory map the model
-        LLAMA_LOAD_MODE_MLOCK      = 2, // force system to keep model in RAM rather than swapping or compressing
-        LLAMA_LOAD_MODE_MMAP_MLOCK = 3, // mmap + force system to keep model in RAM rather than swapping or compressing
-        LLAMA_LOAD_MODE_DIRECT_IO  = 4, // use direct I/O if available
-    };
-
-    LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
-    LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
 
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
@@ -312,7 +299,6 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
-        enum llama_load_mode  load_mode;  // how to load the model
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
@@ -333,6 +319,9 @@ extern "C" {
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
+        bool use_mmap;        // use mmap if possible
+        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
+        bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
@@ -392,6 +381,10 @@ extern "C" {
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
+        // reference to the target model for DFlash/EAGLE3 speculative decoding
+        // used to share embeddings and extraction configuration
+        const struct llama_model * target_model;
+
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
@@ -581,6 +574,11 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
+    // DFlash draft model metadata
+    LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
+
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
@@ -618,9 +616,6 @@ extern "C" {
 
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
-
-    // Get the model file type (quantization), e.g. LLAMA_FTYPE_MOSTLY_Q8_0
-    LLAMA_API enum llama_ftype llama_model_ftype(const struct llama_model * model);
 
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
@@ -920,6 +915,27 @@ extern "C" {
                           size_t   size,
                     llama_seq_id   dest_seq_id,
            llama_state_seq_flags   flags);
+
+    // DFlash
+    LLAMA_API void llama_set_dflash(
+            struct llama_context * ctx,
+            const struct llama_model * model);
+
+    LLAMA_API const float * llama_get_dflash_target_features(struct llama_context * ctx);
+
+    // Clears the accumulated DFlash target-features buffer on ctx. Call this
+    // when starting a new draft "session" (e.g. in common_speculative_begin)
+    // so the buffer doesn't retain features from the previous request.
+    LLAMA_API void llama_clear_dflash_target_features(struct llama_context * ctx);
+
+    LLAMA_API void llama_set_dflash_accumulated_target_ctx(
+            struct llama_context * ctx,
+                   const float * data,
+                       int32_t   n_embd,
+                       int32_t   n_tokens);
+
+    LLAMA_API void llama_set_dflash_need_reserve(
+            struct llama_context * ctx);
 
     //
     // Decoding

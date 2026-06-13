@@ -6,7 +6,6 @@
 
 #include "ggml-opt.h"
 #include "ggml.h"
-#include "llama.h"
 
 #include <set>
 #include <sstream>
@@ -15,7 +14,6 @@
 #include <vector>
 #include <map>
 #include <algorithm>
-#include <fstream>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -26,13 +24,6 @@
 #else
 #define DIRECTORY_SEPARATOR '/'
 #endif // _WIN32
-
-#define COM_DBG(fmt, ...) LOG_DBG("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define COM_TRC(fmt, ...) LOG_TRC("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define COM_INF(fmt, ...) LOG_INF("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define COM_WRN(fmt, ...) LOG_WRN("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define COM_ERR(fmt, ...) LOG_ERR("cmn  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define COM_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
 
 #define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
 #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
@@ -106,7 +97,6 @@ enum llama_example {
     LLAMA_EXAMPLE_RESULTS,
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
-    LLAMA_EXAMPLE_TOKENIZE,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -172,7 +162,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
-    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DFLASH,        // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -284,12 +274,12 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
-    int32_t                   reasoning_budget_tokens   = -1;  // -1 = disabled, >= 0 = token budget
-    std::vector<llama_token>  reasoning_budget_start;          // start tag token sequence
-    std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
-    std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
-    std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
-    bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
+    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
+    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
+    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
+    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
+    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
+    bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
 
@@ -382,13 +372,15 @@ struct common_params_speculative {
 
     common_params_speculative_ngram_cache ngram_cache;
 
+    bool dflash = false; // use DFlash speculative decoding
+
     bool has_dft() const {
         return !draft.mparams.empty();
     }
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -475,15 +467,15 @@ struct common_params {
     int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
     int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors
     float   tensor_split[128]  = {0};   // how split tensors should be distributed across GPUs
-    bool    fit_params         = true;  // whether to fit unset model/context parameters to free device memory
-    bool    fit_params_print   = false; // print the estimated required memory to run the model
-    int32_t fit_params_min_ctx = 4096;  // minimum context size to set when trying to reduce memory use
+    bool    fit_params           = true;  // whether to fit unset model/context parameters to free device memory
+    bool    fit_params_print     = false; // print the estimated required memory to run the model
+    bool    fit_params_print_plan = false; // print resolved per-device byte plan as JSON (router admit-side input; see #66)
+    int32_t fit_params_min_ctx   = 4096;  // minimum context size to set when trying to reduce memory use
 
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
-    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_MMAP; // how to load the model
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -574,6 +566,9 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
+    bool use_mmap          = true;  // enable mmap to use filesystem cache
+    bool use_direct_io     = false; // read from disk without buffering
+    bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
@@ -621,8 +616,9 @@ struct common_params {
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
     bool    cache_idle_slots    = true;  // save and clear idle slots upon starting a new task
-    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
-    int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
+    int32_t n_ctx_checkpoints        = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_min_step      = 256;   // minimum spacing between context checkpoints
+    int32_t ctx_checkpoints_max_mib  = 4096;  // max host-RAM budget per slot for context checkpoints (MiB); 0 = no byte cap (count-only)
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";
@@ -630,14 +626,7 @@ struct common_params {
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
-
-    // server CORS params
-    std::string cors_origins = "*";
-    std::string cors_methods = "GET, POST, DELETE, OPTIONS";
-    std::string cors_headers = "*";
-    bool cors_credentials = true;
-    bool cors_origins_explicit = false; // for --agent option
-
+    bool remap_developer_role = false; // remap "developer" role to "system" for templates that reject unknown roles
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -652,9 +641,6 @@ struct common_params {
 
     std::map<std::string, std::string> default_template_kwargs;
 
-    // CLI params
-    std::string server_base; // if set, connect to this server instead of starting a new one
-
     // UI configs
     bool ui = true;
     bool ui_mcp_proxy = false;
@@ -667,10 +653,6 @@ struct common_params {
 
     // enable built-in tools
     std::vector<std::string> server_tools;
-
-    // MCP server configs (Cursor-compatible JSON)
-    std::string mcp_servers_config;   // path to JSON file with MCP server definitions
-    std::string mcp_servers_json;     // inline JSON with MCP server definitions
 
     // router server configs
     std::string models_dir    = "";     // directory containing models for the router server
@@ -727,12 +709,6 @@ struct common_params {
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;
-
-    // tokenize params
-    bool tokenize_ids        = false; // if true, only print the token IDs
-    bool tokenize_stdin      = false; // if true, read the prompt from stdin
-    bool tokenize_no_bos     = false; // if true, do not add the BOS token
-    bool tokenize_show_count = false; // if true, print the total token count
 
     // common params
     std::string out_file; // output filename for all example programs
@@ -1098,9 +1074,6 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 struct common_prompt_checkpoint {
     int64_t n_tokens;
-
-    // (optional) id of the task that created the checkpoint
-    int id_task = -1;
 
     llama_pos pos_min;
     llama_pos pos_max;

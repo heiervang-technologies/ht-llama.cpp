@@ -1,13 +1,51 @@
+# HT Fork Management
+
+This is a [Heiervang Technologies](https://github.com/heiervang-technologies) fork. For full details on fork workflow, sync procedures, and contribution process, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+## Branch Conventions
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Clean fast-forward mirror of upstream — never commit directly |
+| `ht` | HT-specific changes — **default branch**, all PRs target this |
+| `feat/*` | Feature branches created from `ht`, squash-merged back via PR |
+
+## Sync Workflow
+
+```bash
+# Update master from upstream
+git checkout master
+git fetch upstream
+git merge --ff-only upstream/master
+git push origin master
+
+# Rebase ht onto updated master
+git checkout ht
+git rebase master
+git push --force-with-lease origin ht
+```
+
+## Commit Standards
+
+- Use [conventional commits](https://www.conventionalcommits.org/) (e.g., `feat:`, `fix:`, `chore:`)
+- Maintain clean, linear history — one commit per logical change
+- Squash fix-up commits before merging
+
+For all questions and inquiries about this fork, use [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions).
+
+---
+
 # Contributors
 
-The project differentiates between 3 levels of contributors:
+This fork differentiates between 3 levels of contributors:
 
 - Contributors: people who have contributed before (no special privileges)
 - Collaborators (Triage): people with significant contributions, who may be responsible for some parts of the code, and are expected to maintain and review contributions for the code they own
 - Maintainers: responsible for reviewing and merging PRs, after approval from the code owners
 
-# AI Usage Policy
+# Agentic Contributions
 
+<<<<<<< HEAD
 > [!IMPORTANT]
 >
 > AI-generated code is allowed. You are 100% responsible for every line, however it was produced.
@@ -25,6 +63,9 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
+=======
+We welcome contributions from AI agents and assistants. Unlike upstream, we recognize that modern development workflows increasingly involve AI tools, and we embrace that reality. Whether you're a human developer or working with an AI assistant, we're happy to review your pull request. Standard code quality expectations apply—contributions should be well-tested, documented, and maintainable—but we evaluate the code, not how it was written.
+>>>>>>> 5b7a1e0a3 (chore(ht): fork infrastructure — build, CI, branding, drop embedded webui source)
 
 # Pull requests (for contributors & collaborators)
 

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - ht
     paths: [
       '.github/workflows/python-lint.yml',
       '**/*.py'
@@ -21,7 +22,9 @@ concurrency:
 
 jobs:
   flake8-lint:
-    runs-on: [self-hosted, fast]
+    # ht: upstream's [self-hosted, fast] runner doesn't exist in this org —
+    # every run since 2026-05-24 queued forever. GitHub-hosted is fine for lint.
+    runs-on: ubuntu-latest
     name: Lint
     steps:
       - name: Check out source repository
