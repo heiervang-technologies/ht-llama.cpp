@@ -5,7 +5,10 @@ on:
 
 jobs:
   linux:
-    runs-on: [self-hosted, Linux, CPU]
+    # ht: upstream targets ggml-org's runner fleet ([self-hosted, Linux, CPU]);
+    # no runner with those labels exists in this org, so the job queued forever
+    # and CI (cpu) never concluded. Plain cmake build — GitHub-hosted is fine.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:

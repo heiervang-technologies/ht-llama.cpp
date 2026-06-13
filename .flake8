@@ -1,6 +1,12 @@
 [flake8]
 max-line-length = 125
 ignore = E203,E211,E221,E225,E231,E241,E251,E261,E266,E501,E701,E704,W503
+# ht: downstream diagnostic CLIs write their reports to stdout by design —
+# upstream's NP100 (no print(), use logging) targets library code.
+per-file-ignores =
+    scripts/gguf-meta.py:NP100
+    scripts/compare-dflash-weights.py:NP100
+    scripts/dflash-logit-parity.py:NP100
 exclude =
     # Do not traverse examples and tools
     examples,
