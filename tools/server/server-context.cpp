@@ -977,8 +977,19 @@ private:
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
-                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
-                            has_draft ? "draft model" : "MTP context", e.what());
+                    // Some arches (e.g. Gemma4Assistant) self-identify as "normal during
+                    // memory fitting" because their init requires ctx_other which can't
+                    // exist before the target is loaded. Downgrade those to DBG to avoid
+                    // a misleading "failed" warning on every load. See upstream TODO at
+                    // src/llama-context.cpp around the GEMMA4_ASSISTANT ctx_other check.
+                    const std::string msg = e.what();
+                    if (msg.find("normal during memory fitting") != std::string::npos) {
+                        SRV_DBG("[spec] skipping memory measurement of %s (benign): %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    } else {
+                        SRV_WRN("[spec] failed to measure %s memory: %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    }
                 }
             }
         }
@@ -1002,6 +1013,18 @@ private:
         if (params_base.speculative.has_dft()) {
             // TODO speculative: move to common/speculative.cpp?
             const auto & params_spec = params_base.speculative.draft;
+
+            // DFlash extracts target hidden states into a single ctx_tgt-scoped buffer
+            // (dflash.target_features). Under continuous batching with n_parallel > 1,
+            // multiple slots co-decode in one batched llama_decode() call and their
+            // features interleave in that buffer, so per-slot draft() reads garbage.
+            // Until target_features is keyed per seq_id, refuse to start.
+            if (params_base.speculative.dflash && params_base.n_parallel > 1) {
+                SRV_ERR("DFlash speculative decoding requires --parallel 1 (got --parallel %d); "
+                        "multi-slot continuous batching is not yet supported by the dflash feature buffer\n",
+                        params_base.n_parallel);
+                return false;
+            }
 
             SRV_INF("loading draft model '%s'\n", params_spec.mparams.path.c_str());
 
@@ -1038,12 +1061,27 @@ private:
                 cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             }
 
+            if (params_base.speculative.dflash) {
+                cparams.target_model = model_tgt;
+            }
+
             // note: for small models maybe we can set this to the maximum possible draft from all speculative types
             //       the extra memory for small models is likely negligible?
             cparams.n_rs_seq  = 0;
             cparams.ctx_other = ctx_tgt;
 
             ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+
+            if (params_base.speculative.dflash) {
+                llama_set_dflash(ctx_tgt, model_dft.get());
+            }
+
+            // note: MTP target wiring uses cparams.ctx_other set before
+            //       llama_init_from_model above — no explicit call needed here.
+            (void) spec_mtp;
+
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft.get());
+
 
             params_base.speculative.draft.ctx_tgt = ctx_tgt;
             params_base.speculative.draft.ctx_dft = ctx_dft.get();
@@ -1333,6 +1371,7 @@ private:
 
             chat_params = {
                 /* use_jinja             */ params_base.use_jinja,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* prefill_assistant     */ params_base.prefill_assistant,
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
@@ -1453,6 +1492,30 @@ private:
 
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
+
+            // DFlash + prompt cache reuse causes drafter NaN logits.
+            //
+            // Background: prompt cache restores the target's KV state for cached prefix tokens
+            // via llama_state_seq_set_data_ext, but DOES NOT re-extract dflash target features
+            // for those positions. After restore, only NEW tokens get decoded → only NEW token
+            // features end up in ctx_tgt's dflash.target_features buffer.
+            //
+            // Then dflash impl's draft() reads `n_new = n - dflash_n_past` features from that
+            // buffer, where `n_new` counts ALL prompt tokens (cached + new). The read overflows
+            // the buffer past its actual size (just the NEW token count) → out-of-bounds read
+            // → garbage features fed to drafter → NaN logits → 0% accept rate.
+            //
+            // Until the dflash impl learns to skip cached positions (or the cache restore path
+            // re-extracts features for them), the safest fix is to disable prompt cache reuse
+            // when this slot's task is configured for DFlash speculation. Performance impact:
+            // first request pays full prompt-eval cost; subsequent dflash requests already
+            // benefit from spec acceptance and don't strictly need prefix caching.
+            //
+            // Mission m-20260527-103737. Confirmed via cache_prompt=false workaround → 6.74%
+            // accept on the same request that hits 0% NaN with default cache_prompt=true.
+            if (params_base.speculative.dflash) {
+                update_cache = false;
+            }
 
             if (update_cache) {
                 SRV_INF("%s", "updating prompt cache\n");
@@ -1804,26 +1867,20 @@ private:
             }
         } else {
             // TODO: optimize this with min-p optimization
-            std::vector<llama_token_data> cur = get_token_probabilities(ctx_tgt, idx);
-            const size_t max_probs = cur.size();
-            const size_t n_probs = std::min(max_probs, n_probs_request);
+            const server_token_probs cur = get_token_probabilities(ctx_tgt, idx, result.tok, n_probs_request);
 
             // set probability for sampled token
-            for (size_t i = 0; i < max_probs; i++) {
-                // set probability for sampled token
-                if (cur[i].id == result.tok) {
-                    result.prob = cur[i].p;
-                    break;
-                }
+            if (cur.sampled_found) {
+                result.prob = cur.sampled_p;
             }
 
             // set probability for top n_probs tokens
-            result.probs.reserve(n_probs);
-            for (size_t i = 0; i < n_probs; i++) {
+            result.probs.reserve(cur.top.size());
+            for (const auto & td : cur.top) {
                 result.probs.push_back({
-                    cur[i].id,
-                    common_token_to_piece(ctx_tgt, cur[i].id, special),
-                    cur[i].p
+                    td.id,
+                    common_token_to_piece(ctx_tgt, td.id, special),
+                    td.p
                 });
             }
         }
@@ -2127,12 +2184,44 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
-        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+        // n_ctx_checkpoints <= 0 disables checkpoints entirely. The arg parser
+        // accepts 0 (and any negative value wraps via the size_t cast below to
+        // a huge cap, which is also a no-op), so we short-circuit here rather
+        // than letting create_checkpoint's eviction loop touch an empty list.
+        if (params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+        // Per-slot footprint accounting (issue #67): the count-only cap let a single slot
+        // accumulate ~20 GB of checkpoints under heierchat's long contexts, driving titan
+        // SystemOOM. The byte cap is FIFO-evicted alongside the count cap; whichever bites
+        // first is the active limit.
+        auto total_bytes = [&]() {
+            size_t b = 0;
+            for (const auto & ckpt : slot.prompt.checkpoints) {
+                b += ckpt.size();
+            }
+            return b;
+        };
+
+        const size_t byte_cap =
+            (params_base.ctx_checkpoints_max_mib > 0)
+                ? (size_t) params_base.ctx_checkpoints_max_mib * 1024 * 1024
+                : 0; // 0 → byte cap disabled, count-only behavior
+
+        auto over_count = [&]() {
+            return slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints;
+        };
+        auto over_bytes = [&]() {
+            return byte_cap > 0 && !slot.prompt.checkpoints.empty() && total_bytes() >= byte_cap;
+        };
+
+        while (over_count() || over_bytes()) {
+            const auto & front = slot.prompt.checkpoints.front();
+            const char * reason = (over_bytes() && !over_count()) ? "bytes" : "count";
+
+            SLT_WRN(slot, "erasing old context checkpoint (reason=%s, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    reason, front.pos_min, front.pos_max, front.n_tokens, (float) front.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
@@ -2148,9 +2237,11 @@ private:
         cur.update_dft(ctx_dft.get(), slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
         SLT_INF(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, slot total = %.3f MiB / %d MiB cap)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024,
+                (float) total_bytes() / 1024 / 1024,
+                params_base.ctx_checkpoints_max_mib);
     }
 
     void process_single_task(server_task && task) {
@@ -2810,7 +2901,17 @@ private:
                                 continue;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            // DFlash + per-slot prompt reuse causes drafter NaN logits. Same
+                            // bug class as the prompt_cache gate above: any path that lets the
+                            // target skip decoding cached prefix tokens means the dflash feature
+                            // buffer only has features for the NEW tokens, but the drafter still
+                            // reads n_new = n_total - dflash_n_past entries -> OOB read -> NaN.
+                            // The auto-gate at the prompt_cache load site only covers one of two
+                            // cache mechanisms. This per-slot prompt-token-reuse path (different
+                            // from the global server_prompt_cache) also has to be force-disabled
+                            // when DFlash is on. Mission m-20260527-103737.
+                            const bool dflash_active = params_base.speculative.dflash;
+                            if (slot.task->params.cache_prompt && !dflash_active) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -2966,6 +3067,25 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
+                                    // DFlash + checkpoint restore is the third cache mechanism in the
+                                    // same bug class as the prompt_cache + per-slot reuse gates above.
+                                    // load_tgt restores the target's KV state for cached positions,
+                                    // but does NOT re-extract dflash target features for them. The
+                                    // subsequent decode only fills features for [n_past..n_total),
+                                    // while the drafter reads n_new = n_total - dflash_n_past entries
+                                    // (with dflash_n_past=0 right after common_speculative_begin) →
+                                    // OOB read past end of buffer → NaN logits → 0% accept.
+                                    //
+                                    // Rarely reachable with --parallel >= 4 (requests spread across
+                                    // slots, fewer checkpoints per slot), but trivially fires under
+                                    // --parallel 1 + repeated-prompt traffic. Force a full re-prefill
+                                    // when dflash is active. Mission m-20260527-103737, verified on
+                                    // titan with default cache_prompt:true going from 0/873 -> 96/1179
+                                    // (8.14%) accept on the chat-completions smoke after this gate.
+                                    if (params_base.speculative.dflash) {
+                                        do_reset = true;
+                                    }
+
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt,       slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -3093,6 +3213,17 @@ private:
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
+                        }
+
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
+                            // TODO: in the future, figure out how to infuse target embeddings to the images
+                            //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
+                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;

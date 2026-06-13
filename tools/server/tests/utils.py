@@ -86,6 +86,7 @@ class ServerProcess:
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
+    api_prefix: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
     models_preset: str | None = None
@@ -106,6 +107,9 @@ class ServerProcess:
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
+    n_ctx_checkpoints: int | None = None
+    checkpoint_min_step: int | None = None
+    ctx_checkpoints_max_mib: int | None = None
     log_path: str | None = None
     webui_mcp_proxy: bool = False
     backend_sampling: bool = False
@@ -221,6 +225,8 @@ class ServerProcess:
             server_args.append("--context-shift")
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
+        if self.api_prefix:
+            server_args.extend(["--api-prefix", self.api_prefix])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
@@ -251,6 +257,12 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
+        if self.n_ctx_checkpoints is not None:
+            server_args.extend(["--ctx-checkpoints", self.n_ctx_checkpoints])
+        if self.checkpoint_min_step is not None:
+            server_args.extend(["--checkpoint-min-step", self.checkpoint_min_step])
+        if self.ctx_checkpoints_max_mib is not None:
+            server_args.extend(["--ctx-checkpoints-max-mib", self.ctx_checkpoints_max_mib])
         if self.webui_mcp_proxy:
             server_args.append("--webui-mcp-proxy")
         if self.backend_sampling:
@@ -284,10 +296,11 @@ class ServerProcess:
         print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
 
         # wait for server to start
+        health_path = (self.api_prefix or "") + "/health"
         start_time = time.time()
         while time.time() - start_time < timeout_seconds:
             try:
-                response = self.make_request("GET", "/health", headers={
+                response = self.make_request("GET", health_path, headers={
                     "Authorization": f"Bearer {self.api_key}" if self.api_key else None
                 })
                 if response.status_code == 200:

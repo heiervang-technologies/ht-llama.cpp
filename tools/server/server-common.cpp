@@ -84,6 +84,10 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+std::string gen_rerankid() {
+    return "rerank-" + random_string();
+}
+
 const char * get_media_marker() {
     static const std::string marker = []() {
         // allow user to pin a reproducible marker via env var
@@ -966,6 +970,10 @@ json oaicompat_chat_params_parse(
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
+        if (opt.remap_developer_role && role == "developer") {
+            msg["role"] = "system";
+            role = "system";
+        }
         if (role != "assistant" && !msg.contains("content")) {
             throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
@@ -1226,7 +1234,11 @@ json format_response_rerank(
         std::vector<std::string> & texts,
         int top_n) {
     int32_t n_tokens = 0;
-    bool return_text = is_tei_format && json_value(request, "return_text", false);
+    // TEI uses `return_text` on items; HT-compat / Cohere uses
+    // `return_documents` with the document text echoed at
+    // results[].document.text. Honor both shapes per-format.
+    bool return_text      = is_tei_format && json_value(request, "return_text", false);
+    bool return_documents = !is_tei_format && json_value(request, "return_documents", false);
     std::vector<json> elements; // Temporary vector to hold unsorted elements
     std::string score_label = is_tei_format ? "score" : "relevance_score";
     for (const auto & rank : ranks) {
@@ -1238,6 +1250,9 @@ json format_response_rerank(
         n_tokens += json_value(rank, "tokens_evaluated", 0);
         if (return_text) {
             elem["text"] = std::move(texts[index]);
+        }
+        if (return_documents) {
+            elem["document"] = json{{"text", texts[index]}};
         }
         elements.push_back(elem);
     }
@@ -1252,6 +1267,7 @@ json format_response_rerank(
     if (is_tei_format) return results;
 
     json res = json{
+        {"id", gen_rerankid()},
         {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json{
@@ -1269,13 +1285,18 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
+server_token_probs get_token_probabilities(llama_context * ctx, int idx, llama_token sampled, size_t n_top) {
+    server_token_probs res;
+
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
     const llama_token * sampled_ids = llama_get_sampled_candidates_ith(ctx, idx);
 
     const int n_logits = llama_get_sampled_logits_count_ith(ctx, idx);
+    if (n_logits <= 0) {
+        return res;
+    }
 
     cur.resize(n_logits);
     if (sampled_ids) {
@@ -1288,24 +1309,47 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits
-    std::sort(cur.begin(), cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
+    // softmax normalization constants over all logits in O(n) - no need to sort the entire vocabulary:
+    float max_l = cur[0].logit;
+    for (int i = 1; i < n_logits; i++) {
+        max_l = std::max(max_l, cur[i].logit);
+    }
+    float cum_sum = 0.0f;
+    for (int i = 0; i < n_logits; i++) {
+        cum_sum += expf(cur[i].logit - max_l);
+    }
+
+    // probability of the sampled token:
+    if (!sampled_ids) {
+        if (sampled >= 0 && sampled < n_logits) {
+            res.sampled_p     = expf(cur[sampled].logit - max_l) / cum_sum;
+            res.sampled_found = true;
+        }
+    } else {
+        for (int i = 0; i < n_logits; i++) {
+            if (cur[i].id == sampled) {
+                res.sampled_p     = expf(cur[i].logit - max_l) / cum_sum;
+                res.sampled_found = true;
+                break;
+            }
+        }
+    }
+
+    // only the top n_top tokens are needed - select and sort just those:
+    n_top = std::min(n_top, cur.size());
+    std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
         return a.logit > b.logit;
     });
+    cur.resize(n_top);
 
-    // apply softmax
-    float max_l = cur[0].logit;
-    float cum_sum = 0.0f;
+    // apply softmax to the top tokens
     for (size_t i = 0; i < cur.size(); ++i) {
-        float p = expf(cur[i].logit - max_l);
-        cur[i].p = p;
-        cum_sum += p;
-    }
-    for (size_t i = 0; i < cur.size(); ++i) {
-        cur[i].p /= cum_sum;
+        cur[i].p = expf(cur[i].logit - max_l) / cum_sum;
     }
 
-    return cur;
+    res.top = std::move(cur);
+
+    return res;
 }
 
 std::string safe_json_to_str(const json & data) {

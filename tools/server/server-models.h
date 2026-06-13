@@ -87,6 +87,15 @@ struct server_model_meta {
 
 struct subprocess_s;
 
+// Thrown when a model that is listed in /v1/models can't be loaded right now
+// (memory pressure, contention, eviction policy). Distinct from std::runtime_error
+// so the HTTP wrapper can map it to 503 Service Unavailable instead of 500 —
+// the request was well-formed and the model exists; the failure is transient.
+// See heiervang-technologies/ht-llama.cpp#41.
+struct model_unavailable_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct server_models {
 private:
     struct instance_t {
@@ -113,6 +122,9 @@ private:
     std::string bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
+
+    // discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> discovered_adapters;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
@@ -141,11 +153,25 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    // return discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> get_discovered_adapters();
+
+    // resolve the "any" sentinel: pick a model that is currently resident in memory.
+    // prefers LOADED over SLEEPING, and within each tier picks the most-recently-used.
+    // returns the canonical model name, or empty string if nothing is resident.
+    std::string pick_any_resident();
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
     void unload(const std::string & name);
     void unload_all();
+
+    // block until the model is loaded or failed
+    void wait_until_ready(const std::string & name);
+
+    // block until the model is unloaded
+    void wait_until_unloaded(const std::string & name);
 
     // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status, int exit_code);
