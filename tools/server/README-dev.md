@@ -114,9 +114,9 @@ Here is an example trace of an API request for text completion:
 - `server_context` launches the task by moving it into an available slot (see `launch_slot_with_task()`).
 - `update_slot()` processes the task as described in the "Batching" section above.
 - Results may be sent using `send_partial_response` or `send_final_response`, which creates a new `server_task_result` and pushes it to the response queue.
-- At the same time, `server_res_generator` listens to the response queue and retrieves this response.
-- As the response is stateless, `server_res_generator` calls `response->update()` to update the response with the current state.
-- `server_res_generator` then calls `response->to_json()` and passes the response to the HTTP layer.
+- At the same time, `server_res_generator` listens to the response queue (via its `server_response_reader`) and retrieves each result.
+- As each `server_task_result` is itself stateless, `server_response_reader::next()` calls `result->update(states[idx])` to refresh the result with the cumulative generation state owned by the HTTP layer.
+- The HTTP layer then calls `result->to_json()` and sends the JSON to the client.
 
 ### Resumable streaming (SSE replay buffer)
 
@@ -283,65 +283,6 @@ The flow for downloading a new model:
 
 ## Web UI
 
-The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
+The embedded `llama-server` web UI is the upstream llama.cpp default, fetched as a prebuilt bundle from the `llama-ui` HF bucket at build time (`LLAMA_USE_PREBUILT_UI=ON`, default).
 
-The SvelteKit-based Web UI is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
-
-### Features
-
--   **Chat interface** with streaming responses
--   **Multi-model support** (ROUTER mode) - switch between models, auto-load on selection
--   **Modality validation** - ensures selected model supports conversation's attachments (images, audio)
--   **Conversation management** - branching, regeneration, editing with history preservation
--   **Attachment support** - images, audio, PDFs (with vision/text fallback)
--   **Configurable parameters** - temperature, top_p, etc. synced with server defaults
--   **Dark/light theme**
-
-### Tech Stack
-
--   **SvelteKit** - frontend framework with Svelte 5 runes for reactive state
--   **TailwindCSS** + **shadcn-svelte** - styling and UI components
--   **Vite** - build tooling
--   **IndexedDB** (Dexie) - local storage for conversations
--   **LocalStorage** - user settings persistence
-
-### Architecture
-
-The UI follows a layered architecture:
-
-```
-Routes → Components → Hooks → Stores → Services → Storage/API
-```
-
--   **Stores** - reactive state management (`chatStore`, `conversationsStore`, `modelsStore`, `serverStore`, `settingsStore`)
--   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
--   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
-
-For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
-
--   `high-level-architecture.mmd` - full architecture with all modules
--   `high-level-architecture-simplified.mmd` - simplified overview
--   `data-flow-simplified-model-mode.mmd` - data flow for single-model mode
--   `data-flow-simplified-router-mode.mmd` - data flow for multi-model mode
--   `flows/*.mmd` - detailed per-domain flows (chat, conversations, models, etc.)
-
-### Development
-
-```sh
-# make sure you have Node.js installed
-cd tools/ui
-npm i
-
-# run dev server (with hot reload)
-npm run dev
-
-# run tests
-npm run test
-
-# build production bundle
-npm run build
-```
-
-After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
-
-**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
+The product-facing UI (heierchat) lives in [heiervang-technologies/heierchat](https://github.com/heiervang-technologies/heierchat) and talks to `llama-server` over its OpenAI-compatible API.
