@@ -142,6 +142,7 @@ enum llm_arch {
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
+    LLM_ARCH_DFLASH,
     LLM_ARCH_EAGLE3,
     LLM_ARCH_UNKNOWN,
 };
@@ -360,6 +361,12 @@ enum llm_kv {
     LLM_KV_DENSE_2_FEAT_OUT,
     LLM_KV_DENSE_3_FEAT_IN,
     LLM_KV_DENSE_3_FEAT_OUT,
+
+    // DFlash speculative decoding
+    LLM_KV_DFLASH_TARGET_LAYER_IDS,
+    LLM_KV_DFLASH_BLOCK_SIZE,
+    LLM_KV_DFLASH_MASK_TOKEN_ID,
+    LLM_KV_DFLASH_N_TARGET_FEATURES,
 };
 
 enum llm_tensor {
@@ -573,6 +580,8 @@ enum llm_tensor {
     LLM_TENSOR_NEXTN_HNORM,
     LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,
     LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,
+    LLM_TENSOR_DFLASH_FC,
+    LLM_TENSOR_DFLASH_HIDDEN_NORM,
     LLM_TENSOR_MASKED_EMBD_CENTROIDS,
     LLM_TENSOR_MASKED_EMBD_ORDERING,
     LLM_TENSOR_FC,
@@ -588,9 +597,11 @@ enum llm_tensor_layer {
 
 struct LLM_KV {
     LLM_KV(llm_arch arch, const char * suffix = nullptr);
+    LLM_KV(llm_arch arch, const std::string & arch_name_override, const char * suffix = nullptr);
 
     llm_arch arch;
     const char * suffix;
+    std::string arch_name_override;
 
     std::string operator()(llm_kv kv) const;
 };

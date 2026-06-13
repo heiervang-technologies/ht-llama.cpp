@@ -253,6 +253,13 @@ public:
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
+    // DFlash speculative decoding
+    void set_dflash(const llama_model * model);
+    const float * get_dflash_target_features() const;
+    void set_dflash_accumulated_target_ctx(const float * data, int32_t n_embd, int32_t n_tokens);
+    void clear_dflash_target_features();
+    void set_dflash_need_reserve();
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,
@@ -261,6 +268,8 @@ private:
                           llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
+
+    void extract_dflash_features(const llama_ubatch & ubatch);
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -281,6 +290,9 @@ private:
     llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
+    mutable llama_dflash dflash;
+
+    bool dflash_decoder_ctx = false;
 
     llama_memory_ptr memory;
 

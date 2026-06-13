@@ -19,6 +19,63 @@
 #include <sstream>
 #include <unordered_set>
 
+// TBQ rotation functions (from ggml/src/ggml-turboq.h)
+extern "C" {
+void turboq_rotate_forward(float * y, const float * x, int64_t d, uint64_t seed);
+uint64_t turboq_seed_from_row(int64_t row_idx);
+}
+
+// ---------------------------------------------------------------------------
+// TBQ rotated-domain attention support
+//
+// TBQ stores KV cache values in a rotated domain (Householder rotation).
+// Instead of inverse-rotating every cached vector during dequant (O(seq_len)),
+// we pre-rotate Q once and post-rotate the output once (O(1) per token).
+// This makes TBQ attention cost comparable to q8_0.
+// ---------------------------------------------------------------------------
+
+static std::vector<float> & get_tbq_rotation_matrix() {
+    static std::vector<float> s_rot;
+    if (s_rot.empty()) {
+        const int64_t d = 128;  // TURBOQ_KV_DIM
+        s_rot.resize(d * d);
+
+        float * in  = (float *)calloc(d, sizeof(float));
+        float * out = (float *)malloc(d * sizeof(float));
+        const uint64_t seed = turboq_seed_from_row(0);
+
+        for (int64_t col = 0; col < d; col++) {
+            memset(in, 0, d * sizeof(float));
+            in[col] = 1.0f;
+            turboq_rotate_forward(out, in, d, seed);
+            for (int64_t row = 0; row < d; row++) {
+                s_rot[row * d + col] = out[row];
+            }
+        }
+        free(in);
+        free(out);
+    }
+    return s_rot;
+}
+
+// Graph input for TBQ rotation matrix — fills the tensor before graph eval
+struct llm_graph_input_tbq_rot : public llm_graph_input_i {
+    ggml_tensor * tbq_rot = nullptr;
+
+    void set_input(const llama_ubatch * ubatch) override {
+        GGML_UNUSED(ubatch);
+        if (tbq_rot && tbq_rot->data) {
+            auto & rot = get_tbq_rotation_matrix();
+            memcpy(tbq_rot->data, rot.data(), ggml_nbytes(tbq_rot));
+        }
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        GGML_UNUSED(params);
+        return true;  // rotation matrix never changes
+    }
+};
+
 // dedup helpers
 
 static ggml_tensor * build_attn_inp_kq_mask(
@@ -82,13 +139,13 @@ static ggml_tensor * ggml_mul_mat_aux(
 }
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
-    if (ubatch->token) {
+    if (ubatch->token && tokens) {
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 
-    if (ubatch->embd) {
+    if (ubatch->embd && embd) {
         GGML_ASSERT(n_embd == embd->ne[0]);
 
         const int64_t n_tokens = ubatch->n_tokens;
@@ -380,8 +437,62 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
 
     if (cross_embd && !cross->v_embd.empty()) {
         assert(cross_embd->type == GGML_TYPE_F32);
+        GGML_ASSERT(cross_embd->ne[0] == cross->n_embd);
+        GGML_ASSERT(cross_embd->ne[1] == cross->n_enc);
 
         ggml_backend_tensor_set(cross_embd, cross->v_embd.data(), 0, ggml_nbytes(cross_embd));
+    }
+}
+
+void llm_graph_input_dflash::set_input(const llama_ubatch * ubatch) {
+    GGML_UNUSED(ubatch);
+
+    if (target_hidden && cross && !cross->v_embd.empty()) {
+        GGML_ASSERT(target_hidden->type == GGML_TYPE_F32);
+        ggml_backend_tensor_set(target_hidden, cross->v_embd.data(), 0, ggml_nbytes(target_hidden));
+    }
+
+    const int64_t n_real = cross ? cross->n_enc_real : ctx_len;
+
+    if (pos_ctx && pos_ctx->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(pos_ctx->buffer));
+        auto * data = (int32_t *) pos_ctx->data;
+        for (int64_t i = 0; i < ctx_len; ++i) {
+            data[i] = i < n_real ? (int32_t)i : 0;
+        }
+    }
+
+    const int64_t n_kv = ctx_len + n_block;
+
+    if (kq_mask && kq_mask->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
+        auto * data = (float *) kq_mask->data;
+        for (int64_t q = 0; q < n_block; ++q) {
+            for (int64_t k = 0; k < n_kv; ++k) {
+                data[q * n_kv + k] = (k >= n_real && k < ctx_len) ? -INFINITY : 0.0f;
+            }
+        }
+    }
+
+    // SWA mask variant: same bucket-padding mask PLUS sliding-window mask between noise
+    // (q at absolute pos n_real+q) and ctx (k at absolute pos k for k<n_real).  Noise→noise
+    // distances are small (<= n_block); ctx→ctx unused here (q is noise only).
+    if (kq_mask_swa && kq_mask_swa->buffer && n_swa > 0) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask_swa->buffer));
+        auto * data = (float *) kq_mask_swa->data;
+        for (int64_t q = 0; q < n_block; ++q) {
+            const int64_t q_pos = n_real + q;
+            for (int64_t k = 0; k < n_kv; ++k) {
+                // bucket padding always masked
+                if (k >= n_real && k < ctx_len) {
+                    data[q * n_kv + k] = -INFINITY;
+                    continue;
+                }
+                // determine k's absolute position: ctx region [0..n_real), noise region [ctx_len..ctx_len+n_block)
+                const int64_t k_pos = (k < ctx_len) ? k : (n_real + (k - ctx_len));
+                data[q * n_kv + k] = (q_pos - k_pos >= n_swa) ? -INFINITY : 0.0f;
+            }
+        }
     }
 }
 
@@ -1062,6 +1173,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    dflash           (params.dflash),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1899,9 +2011,12 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     res->t_inp_embd = cur;
 
     // For Granite architecture
-    // NOTE: For deepstack models, only apply scale to token inputs (ie text-only input).
-    //  Raw embeddings are assumed to be multimodal inputs that should not be scaled.
-    if (hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
+    // NOTE: Only apply scale to token inputs. Raw embeddings are assumed to be
+    //  multimodal inputs that should not be scaled.
+    // ht: we keep the strict `ubatch.token` guard rather than upstream's
+    //  `(ubatch.token || n_deepstack_layers == 0)` — for our non-deepstack Gemma4
+    //  vision deployment the latter would scale raw image embeddings (regression).
+    if (ubatch.token && hparams.f_embedding_scale != 0.0f) {
         if (!ggml_is_contiguous(cur)) {
             cur = ggml_cont(ctx0, cur);
         }
@@ -2074,19 +2189,80 @@ ggml_tensor * llm_graph_context::build_attn_mha(
                float   kq_scale,
                  int   il) const {
     const bool v_trans = v->nb[1] > v->nb[2];
+    const bool k_is_tbq = k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0;
+    const bool v_is_tbq = v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0;
+    const bool any_tbq  = k_is_tbq || v_is_tbq;
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    const enum ggml_type tbq_attn_type = use_flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+    // TBQ rotated-domain attention: create rotation matrix tensor once
+    ggml_tensor * tbq_rot = nullptr;
+    if (any_tbq) {
+        const int64_t d = 128;
+        auto inp_tbq = std::make_unique<llm_graph_input_tbq_rot>();
+        inp_tbq->tbq_rot = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, d, d);
+        ggml_set_input(inp_tbq->tbq_rot);
+        ggml_set_name(inp_tbq->tbq_rot, "tbq_rot");
+        tbq_rot = inp_tbq->tbq_rot;
+        res->add_input(std::move(inp_tbq));
+    }
 
     // split the batch into streams if needed
-    const auto n_stream = k->ne[3];
+    const auto n_stream = k_is_tbq ? k->ne[2] : (v_is_tbq ? v->ne[2] : k->ne[3]);
 
     q = ggml_view_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream, q->nb[1], q->nb[2], q->nb[3]/n_stream, 0);
+
+    if (k_is_tbq) {
+        const int64_t n_head_kv = hparams.n_head_kv(il);
+        const int64_t n_embd_k_gqa = k->ne[0];
+
+        GGML_ASSERT(n_head_kv > 0);
+        GGML_ASSERT(n_embd_k_gqa % n_head_kv == 0);
+
+        if (!use_flash_attn) {
+            // Codebook-only dequant: skip rotation (values stay in rotated domain)
+            k = ggml_cast(ctx0, k, tbq_attn_type);
+            int32_t codebook_flag = 1;
+            memcpy(k->op_params, &codebook_flag, sizeof(int32_t));
+            cb(k, "k_tbq_cb_f32", il);
+        }
+
+        k = ggml_reshape_4d(ctx0, k, n_embd_k_gqa / n_head_kv, n_head_kv, k->ne[1], k->ne[2]);
+        cb(k, "k_tbq_reshaped", il);
+    }
+
+    if (v_is_tbq) {
+        const int64_t n_head_kv = hparams.n_head_kv(il);
+        const int64_t n_embd_v_gqa = v->ne[0];
+
+        GGML_ASSERT(n_head_kv > 0);
+        GGML_ASSERT(n_embd_v_gqa % n_head_kv == 0);
+
+        if (!use_flash_attn) {
+            // Codebook-only dequant: skip rotation
+            v = ggml_cast(ctx0, v, tbq_attn_type);
+            int32_t codebook_flag = 1;
+            memcpy(v->op_params, &codebook_flag, sizeof(int32_t));
+            cb(v, "v_tbq_cb_f32", il);
+        }
+
+        v = ggml_reshape_4d(ctx0, v, n_embd_v_gqa / n_head_kv, n_head_kv, v->ne[1], v->ne[2]);
+        cb(v, "v_tbq_reshaped", il);
+    }
 
     q = ggml_permute(ctx0, q, 0, 2, 1, 3);
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
+    // Pre-rotate Q by TBQ rotation matrix so dot products with rotated K are correct
+    if (any_tbq && tbq_rot) {
+        q = ggml_cont(ctx0, q);
+        q = ggml_mul_mat_aux(ctx0, q, tbq_rot);
+        cb(q, "q_tbq_rotated", il);
+    }
+
     ggml_tensor * cur;
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
 
@@ -2191,6 +2367,14 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             // all nodes between the KV store and the attention output are run on the CPU
             ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
         }
+    }
+
+    // Post-rotate attention output back from TBQ rotated domain
+    // H_tbq is self-inverse (Householder), so applying it undoes the rotation
+    if (any_tbq && tbq_rot) {
+        cur = ggml_cont(ctx0, cur);
+        cur = ggml_mul_mat_aux(ctx0, cur, tbq_rot);
+        cb(cur, "attn_tbq_unrotated", il);
     }
 
     ggml_build_forward_expand(gf, cur);

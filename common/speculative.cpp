@@ -26,6 +26,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
+    {"dflash",       COMMON_SPECULATIVE_TYPE_DFLASH},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -1339,6 +1340,214 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 };
 
+// ========================================================================
+// DFlash speculative decoding
+// ========================================================================
+
+struct common_speculative_impl_dflash : public common_speculative_impl {
+    common_params_speculative_draft params;
+
+    llama_context * ctx_tgt;
+    llama_context * ctx_dft_dec = nullptr;
+
+    llama_batch batch;
+
+    int32_t n_target_features = 0;
+
+    int32_t dflash_n_past = 0;
+
+    std::vector<float> accumulated_ctx;
+
+    common_sampler_ptr smpl;
+
+    common_speculative_impl_dflash(const common_params_speculative & params, uint32_t n_seq,
+            llama_context * ctx_tgt)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DFLASH, n_seq)
+        , params(params.draft)
+        , ctx_tgt(ctx_tgt)
+    {
+        ctx_dft_dec = this->params.ctx_dft;
+
+        const int32_t n_target_layer_ids = llama_model_dflash_n_target_layers(llama_get_model(ctx_dft_dec));
+        n_target_features = llama_model_n_embd(llama_get_model(ctx_tgt)) * n_target_layer_ids;
+
+        const int32_t model_block_size = llama_model_dflash_block_size(llama_get_model(ctx_dft_dec));
+        batch = llama_batch_init(model_block_size, 0, 1);
+
+        common_params_sampling sparams;
+        sparams.no_perf = false;
+        sparams.top_k = 1;
+        sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+        smpl.reset(common_sampler_init(llama_get_model(ctx_dft_dec), sparams));
+    }
+
+    ~common_speculative_impl_dflash() override {
+        llama_batch_free(batch);
+    }
+
+    bool need_embd() const override { return false; }
+
+    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
+        dflash_n_past = 0;
+        accumulated_ctx.clear();
+        // Note: target_features is owned by ctx_tgt and reset at the start of
+        // each llama_decode() (see extract_dflash_features). We deliberately
+        // do NOT clear it here because begin() fires AFTER the prompt-prefill
+        // decode has already extracted the prompt features that the first
+        // draft() call is about to consume.
+        llama_set_dflash_need_reserve(ctx_dft_dec);
+    }
+
+    bool process(const llama_batch & /*batch*/) override {
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        const int model_block_size = llama_model_dflash_block_size(llama_get_model(ctx_dft_dec));
+        const int block_size = model_block_size;
+        const int n_draft = std::min(model_block_size - 1, (int)params.n_max);
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+
+            auto & result = *dp.result;
+            int n = (int)dp.prompt->size();
+            if (n < dflash_n_past) {
+                accumulated_ctx.resize((size_t)n * (size_t)n_target_features);
+                dflash_n_past = n;
+            }
+            const int n_new = n - dflash_n_past;
+
+            if (n_new < 1) {
+                continue;
+            }
+            // Step 1: append raw target features for newly committed tokens.  The
+            // DFlash graph performs the trained dflash_fc fusion internally.
+            //
+            // The target's target_features buffer is cleared at the start of
+            // every llama_decode() call (see extract_dflash_features). So
+            // immediately after the target's most recent decode, the buffer
+            // holds exactly the features for the tokens decoded in that call,
+            // in order — which is precisely the slice this draft() needs.
+            // The first draft() after prompt prefill consumes prompt features
+            // (T_0); subsequent draft()s after spec-verify decodes consume
+            // the first n_new positions (sampled + accepted drafts).
+            const float * features = llama_get_dflash_target_features(ctx_tgt);
+            const size_t new_size = (size_t)n_target_features * (size_t)n_new;
+            accumulated_ctx.insert(accumulated_ctx.end(), features, features + new_size);
+
+            // Diagnostics for accept-rate debugging — first 5 floats of the newly
+            // appended features + dflash_n_past advancement. Only fires when
+            // LLAMA_DFLASH_DEBUG env var is set, so production runs stay quiet.
+            static const bool dflash_debug = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_DEBUG");
+                return e && e[0] != '\0' && e[0] != '0';
+            }();
+            if (dflash_debug) {
+                LOG_INF("dflash feat debug: n_new=%d n=%d dflash_n_past_old=%d "
+                        "first5=[%.4f %.4f %.4f %.4f %.4f]\n",
+                        n_new, n, dflash_n_past,
+                        features[0], features[1], features[2], features[3], features[4]);
+            }
+
+            const int n_ctx_total = (int)(accumulated_ctx.size() / (size_t)n_target_features);
+            // Set LLAMA_DFLASH_CTX_WINDOW=0 to disable truncation (use full accumulated ctx).
+            static const int ctx_window = []() {
+                const char * e = std::getenv("LLAMA_DFLASH_CTX_WINDOW");
+                return e ? std::atoi(e) : 512;
+            }();
+            const int n_ctx_used = ctx_window > 0 ? std::min(n_ctx_total, ctx_window) : n_ctx_total;
+            const float * ctx_data = accumulated_ctx.data() + (size_t)(n_ctx_total - n_ctx_used) * (size_t)n_target_features;
+
+            llama_set_dflash_accumulated_target_ctx(ctx_dft_dec, ctx_data, n_target_features, n_ctx_used);
+
+            // Step 2: Decode noise block
+            const llama_token mask_token_id = llama_model_dflash_mask_token_id(llama_get_model(ctx_dft_dec));
+
+            llama_memory_clear(llama_get_memory(ctx_dft_dec), false);
+
+            common_batch_clear(batch);
+            for (int i = 0; i < block_size; i++) {
+                const llama_token tok = (i == 0) ? dp.id_last : mask_token_id;
+                common_batch_add(batch, tok, (int32_t)n_ctx_used + i, { 0 }, true);
+            }
+
+            if (llama_decode(ctx_dft_dec, batch) != 0) {
+                LOG_ERR("DFlash: noise decode failed\n");
+                return;
+            }
+
+            dflash_n_past = n;
+
+            // Step 3: Sample draft tokens from positions 1..block_size-1
+            common_sampler_reset(smpl.get());
+
+            const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft_dec)));
+            for (int i = 1; i < block_size && (int) result.size() < n_draft; i++) {
+                const float * logits = llama_get_logits_ith(ctx_dft_dec, i);
+                if (!logits) {
+                    break;
+                }
+
+                const llama_token id = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+
+                // Top-5 logits diagnostic — gated behind LLAMA_DFLASH_DEBUG (cached
+                // at line 883). The selection loop is O(n_vocab * log 5) per draft
+                // call; one call per generated-token-attempt and several per output
+                // token at typical accept rates. On gemma-class vocabs (~256k) it
+                // would burn ~1ms per draft on production where the LOG_INF would
+                // be suppressed by verbosity anyway.
+                if (i == 1 && dflash_debug) {
+                    std::vector<int> top;
+                    top.reserve(5);
+                    for (int j = 0; j < n_vocab; ++j) {
+                        if ((int) top.size() < 5) {
+                            top.push_back(j);
+                            std::sort(top.begin(), top.end(), [&](int a, int b) { return logits[a] > logits[b]; });
+                        } else if (logits[j] > logits[top.back()]) {
+                            top.back() = j;
+                            std::sort(top.begin(), top.end(), [&](int a, int b) { return logits[a] > logits[b]; });
+                        }
+                    }
+                    std::string top_dbg;
+                    for (int tid : top) {
+                        top_dbg += " ";
+                        top_dbg += std::to_string(tid);
+                        top_dbg += "=";
+                        top_dbg += common_token_to_piece(ctx_dft_dec, tid);
+                        top_dbg += ":";
+                        top_dbg += std::to_string(logits[tid]);
+                    }
+                    LOG_INF("dflash logits debug: ctx=%d%s\n", n_ctx_used, top_dbg.c_str());
+                }
+
+                common_sampler_accept(smpl.get(), id, true);
+                result.push_back(id);
+            }
+
+            if (!result.empty()) {
+                std::string dbg;
+                const int n_dbg = std::min<int>(3, result.size());
+                for (int i = 0; i < n_dbg; ++i) {
+                    dbg += " ";
+                    dbg += std::to_string(result[i]);
+                    dbg += "=";
+                    dbg += common_token_to_piece(ctx_dft_dec, result[i]);
+                }
+                LOG_INF("dflash draft debug: ctx=%d block=%d draft:%s\n", n_ctx_used, block_size, dbg.c_str());
+            }
+        }
+        llama_clear_dflash_target_features(ctx_tgt);
+    }
+
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+        // noop
+    }
+};
+
 // state of self-speculation (simple implementation, not ngram-map)
 struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_params_speculative_ngram_map params;
@@ -1836,6 +2045,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
+        case COMMON_SPECULATIVE_TYPE_DFLASH:        return "dflash";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -1888,6 +2098,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+            case COMMON_SPECULATIVE_TYPE_DFLASH:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -1924,7 +2135,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
 
         bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
         bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
+        bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DFLASH)) && params.dflash;
+        bool has_draft_model_path = !params.draft.mparams.path.empty();
+        bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP)) && params.draft.ctx_dft != nullptr;
 
 
 
@@ -1935,7 +2148,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 9);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -1957,10 +2170,23 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
         }
         if (has_draft_simple) {
+            if (!has_draft_model_path) {
+                LOG_WRN("%s: draft model is not specified - cannot use 'draft' type\n", __func__);
+                has_draft_simple = false;
+            }
+        } else if (has_draft_model_path && !has_mtp && !has_draft_eagle3 && !has_draft_dflash) {
+            LOG_WRN("%s: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it\n", __func__);
+            has_draft_simple = true;
+        }
+
+        if (has_draft_simple) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));
         }
         if (has_draft_eagle3) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));
+        }
+        if (has_draft_dflash) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DFLASH, params));
         }
         if (has_draft_mtp) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
@@ -1979,6 +2205,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_eagle3>(config.params, n_seq));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DFLASH: {
+                impls.push_back(std::make_unique<common_speculative_impl_dflash>(config.params, n_seq, config.params.draft.ctx_tgt));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
