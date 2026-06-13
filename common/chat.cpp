@@ -2173,7 +2173,18 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            // std::invalid_argument maps to HTTP 400 in the server's
+                            // ex_wrapper (server.cpp), whereas std::runtime_error becomes a
+                            // generic 500. A parse failure here almost always means a prior
+                            // tool call in the message history was truncated mid-output
+                            // because the conversation hit the context-size limit, so surface
+                            // it as an actionable client error instead of a server fault.
+                            // See heiervang-technologies/ht-llama.cpp#19.
+                            throw std::invalid_argument(
+                                "Invalid tool call arguments in input messages: " + std::string(e.what()) +
+                                ". This usually means a previous tool call was truncated because the "
+                                "conversation reached the context-size limit; reduce the conversation "
+                                "history or increase --ctx-size, then retry.");
                         }
                     }
                 }
