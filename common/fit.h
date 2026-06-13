@@ -16,6 +16,14 @@ enum common_params_fit_status {
 //   - this function is NOT thread safe because it modifies the global llama logger state
 //   - only parameters that have the same value as in llama_default_model_params are modified
 //     with the exception of the context size which is modified if and only if equal to 0
+//   - if `out_bytes_per_device` is non-null, it is resized to the number of GPU/accel
+//     devices and populated with the projected per-device byte demand for the resolved
+//     plan. plan[i] is the i-th GPU/accel device in the same order as `tensor_split`;
+//     CPU/host memory is NOT included (the router only needs per-GPU demand for admit).
+//     For CPU-only builds (no GPU devices), the plan is empty — treat as trivially
+//     admittable. Populated on SUCCESS only — undefined on FAILURE/ERROR.
+//     The router uses this to admit candidates against per-device free-after-reserved
+//     memory instead of total-pool memory (see ht-llama.cpp issue #66).
 common_params_fit_status common_fit_params(
                          const char * path_model,
                  llama_model_params * mparams,
@@ -24,7 +32,8 @@ common_params_fit_status common_fit_params(
    llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
                              size_t * margins,               // margins of memory to leave per device in bytes
                            uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
-                     ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
+                     ggml_log_level   log_level,             // minimum log level to print during fitting, lower levels go to debug log
+               std::vector<int64_t> * out_bytes_per_device = nullptr); // per-device projected byte demand (ht; see #66)
 
 // print estimated memory to stdout
 void common_fit_print(

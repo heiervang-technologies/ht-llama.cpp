@@ -93,6 +93,7 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+std::string gen_rerankid();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
@@ -283,6 +284,7 @@ std::vector<server_tokens> tokenize_input_prompts(
 // global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
+    bool remap_developer_role = false; // see common_params::remap_developer_role
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
@@ -326,7 +328,16 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx);
+struct server_token_probs {
+    std::vector<llama_token_data> top; // top n_top tokens sorted by logit descending, p filled in
+
+    float sampled_p     = 0.0f; // probability of the token passed as `sampled`
+    bool  sampled_found = false;
+};
+
+// compute the probabilities of the top n_top tokens and of the sampled token
+// avoids sorting the entire vocabulary - the softmax normalization only needs the max and the sum
+server_token_probs get_token_probabilities(llama_context * ctx, int idx, llama_token sampled, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 

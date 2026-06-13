@@ -261,6 +261,21 @@ void server_response::remove_waiting_task_ids(const std::unordered_set<int> & id
         RES_DBG("remove task %d from waiting list. current waiting = %d (before remove)\n", id_task, (int) waiting_task_ids.size());
         waiting_task_ids.erase(id_task);
     }
+
+    // Symmetry with remove_waiting_task_id: also drop any pending results
+    // whose task ids are in the removed set. Without this, a reader that
+    // tears down mid-stream (HTTP client disconnect, abort) can leave
+    // orphaned partial results in queue_results — they never match any
+    // future recv() call's id_tasks set, but the predicate
+    // !queue_results.empty() in recv() is still true, so the next recv()
+    // for an unrelated id can spin-wait at 100% CPU until that task's
+    // result also arrives.
+    queue_results.erase(
+        std::remove_if(queue_results.begin(), queue_results.end(),
+            [&id_tasks](const server_task_result_ptr & res) {
+                return id_tasks.find(res->id) != id_tasks.end();
+            }),
+        queue_results.end());
 }
 
 server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_tasks) {
@@ -439,6 +454,12 @@ server_response_reader::batch_response server_response_reader::wait_for_all(cons
 }
 
 void server_response_reader::stop() {
+    // remove_waiting_task_ids now also clears pending results for the same
+    // ids (see server_response::remove_waiting_task_ids), so the per-id
+    // remove_waiting_task_id calls that used to live in the cancel loop
+    // are no longer needed — they were redundant on the happy path and
+    // they were the only thing covering the orphan case before the
+    // remove_waiting_task_ids fix.
     queue_results.remove_waiting_task_ids(id_tasks);
     if (has_next() && !cancelled) {
         // if tasks is not finished yet, cancel them
@@ -449,7 +470,6 @@ void server_response_reader::stop() {
             SRV_WRN("cancel task, id_task = %d\n", id_task);
             server_task task(SERVER_TASK_TYPE_CANCEL);
             task.id_target = id_task;
-            queue_results.remove_waiting_task_id(id_task);
             cancel_tasks.push_back(std::move(task));
         }
         // push to beginning of the queue, so it has highest priority
