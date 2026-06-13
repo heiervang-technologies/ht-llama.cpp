@@ -1,0 +1,64 @@
+{
+  "label": "gemma4-26B-A4B-IQ4",
+  "issue_100_bullet": "9 - gemma4 26b",
+  "date_iso": "2026-06-09",
+  "host": "crystal",
+  "gpu": "Quadro P5200 (sm_61, 16257 MiB)",
+  "model": {
+    "path": "/home/me/Models/llama.cpp/gemma-4-26B-A4B-it-UD-IQ4_XS.gguf",
+    "sha256": "694a7d2a3b994655db30c8eff7f77933357efed36c6551afb68d14a07484fde5",
+    "size_gib": 12.66
+  },
+  "config": {
+    "ngl": "99",
+    "ctx": 4096,
+    "flash_attention": "on"
+  },
+  "server_ready_seconds": 17,
+  "residency": {
+    "mode": "full-gpu",
+    "offload_kind": "none (embedding-on-host is the normal pattern; classifier-secondary misfired — see note)",
+    "gpu_residency_pct": "94.54",
+    "layers": {
+      "gpu_count": 31,
+      "cpu_count": 0,
+      "total": 31,
+      "source": "load_tensors: layer N assigned to device — primary dense-residency signal (deduped by layer index)"
+    },
+    "gpu": {
+      "model_mib": "12952",
+      "context_mib": "880",
+      "compute_mib": "104",
+      "self_total_mib": "13936",
+      "free_mib": "1910",
+      "card_total_mib": "16257"
+    },
+    "host": {
+      "model_mib": "748",
+      "context_mib": "0",
+      "compute_mib": "19"
+    },
+    "classification_rule": "PRIMARY: layers.cpu_count > 0 -> partial-offload (dense-layer). SECONDARY: host.model_mib > 600 -> partial-offload (expert / MoE). TERTIARY (advisory): host.context_mib > 0 or host.compute_mib > 100 corroborates. Big-vocab boundary compute can false-positive on compute>100 alone, which is why the compute-only signal is tertiary.",
+    "source": "common_memory_breakdown_print + load_tensors layer assignment (both -v emit)",
+    "classifier_note": "PRIMARY layer-count signal: 31/0/31 = full-gpu (no dense-layer offload). SECONDARY host.model_mib (748) tripped the 600 MiB expert-MoE threshold but inspection shows the 748 MiB is the embedding tensor only (gemma4-26B vocab=262144 hidden=5120 IQ4_XS embedding ≈ 671 MiB; 748 ≈ embedding + boundary tensors). MoE config: 128 experts / 8 active per token, all in gpu.model_mib (12952). Classifier 600 MiB threshold was calibrated to 12B embedding (~540 MiB); for 26B+ it needs to scale with hidden_dim or use host_model_pct_of_total (here 5.4%, well below the 10-15% expert-offload signature)."
+  },
+  "vram_mib_used_total": {
+    "pre_inference": "14335, 16384",
+    "peak": "14345, 16384"
+  },
+  "smoke_completion": {
+    "surface": "/completion (raw text)",
+    "tokens_predicted": 13,
+    "predicted_per_second": 42.09640075773521,
+    "content_sample": "\n\n### Answer:\nThe capital of France is Paris."
+  },
+  "smoke_chat": {
+    "surface": "/v1/chat/completions",
+    "completion_tokens": 48,
+    "predicted_per_second": 42.35568183823659,
+    "finish_reason": "length",
+    "content_length": 0,
+    "content_length_note": "Empty content per documented Gemma4-it chat-template quirk — engagement validated via completion_tokens"
+  },
+  "verdict": "PASS"
+}
