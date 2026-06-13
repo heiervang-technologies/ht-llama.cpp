@@ -125,6 +125,14 @@ int main(int argc, char ** argv) {
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
             append_bytes_hex(cpp, bytes);
+            // A zero-byte asset (e.g. build.json / _app/version.json, which the
+            // npm build generates but are absent on the bucket-only fetch path)
+            // would emit `[] = {}` — an ill-formed zero-size array that gcc
+            // (ubuntu-22.04) rejects. Emit one padding byte; asset_%d_size stays
+            // 0 below, so the padding is never served.
+            if (bytes.empty()) {
+                cpp += "0x00,";
+            }
             const auto hash = fnv_hash(bytes.data(), bytes.size());
 
             cpp += fmt("};\nstatic const size_t        asset_%d_size = %zu;\n",
