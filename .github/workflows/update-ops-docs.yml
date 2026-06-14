@@ -1,18 +1,12 @@
 name: Update Operations Documentation
 
 on:
-    push:
-        paths:
-            - '.github/workflows/update-ops-docs.yml'
-            - 'docs/ops.md'
-            - 'docs/ops/**'
-            - 'scripts/create_ops_docs.py'
-    pull_request:
-        paths:
-            - '.github/workflows/update-ops-docs.yml'
-            - 'docs/ops.md'
-            - 'docs/ops/**'
-            - 'scripts/create_ops_docs.py'
+    workflow_dispatch: # allows manual triggering
+    # Auto-triggers (push/pull_request) stripped on the ht fork: this workflow
+    # needs [self-hosted, fast, ARM64] runners that don't exist in this fork's
+    # runner pool, so triggered runs sit QUEUED forever and pollute PR status.
+    # See #84; same fix as build-sycl (#74) / build-cann (#80). Re-add when
+    # self-hosted runners are provisioned.
 
 jobs:
     update-ops-docs:

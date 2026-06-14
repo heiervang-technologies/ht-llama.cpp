@@ -11,23 +11,11 @@ on:
         description: 'Commit SHA1 to build'
         required: false
         type: string
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build-self-hosted.yml',
-      'tools/ui/**.*',
-      'tools/server/tests/**.*'
-    ]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/ui-self-hosted.yml',
-      '.github/workflows/ui-build-self-hosted.yml',
-      'tools/ui/**.*',
-      'tools/server/tests/**.*'
-    ]
+  # Auto-triggers (push/pull_request) stripped on the ht fork: this workflow needs
+  # [self-hosted, PLAYWRIGHT] runners that don't exist in this fork's runner pool,
+  # so triggered runs sit QUEUED forever and pollute PR status (UNSTABLE).
+  # workflow_dispatch remains for manual runs. See #84; same fix as build-sycl
+  # (#74) / build-cann (#80). Re-add when runners are provisioned.
 
 env:
   LLAMA_ARG_LOG_COLORS: 1
