@@ -96,6 +96,34 @@ cmake --build build-vulkan -j 8 --target llama-bench llama-app
 ```
 Pascal Vulkan startup reports `matrix cores: none` — no coopmat path. No usable Vulkan flash-attention on Pascal (needs coopmat2 / Ampere+). Quantized KV (`-ctk q8_0`) also unavailable without FA.
 
+### Containerized build (CUDA sm_61, for k8s / the gems cluster)
+
+The bare-metal recipe above targets one Arch box and installs into `/opt/ht-llama-cuda`. For the **gems Kubernetes cluster** (Pascal worker nodes) the same `llama-server` ships as a lean container image instead — and the container build **sidesteps the entire Arch toolchain climb above**: no runfile extraction, no gcc-14 archive, no glibc-2.43 header patch. A CUDA 12.x `devel` base on ubuntu-22.04 bundles **gcc-11**, which `nvcc` accepts directly. (The gcc-14 hack only exists because stock Arch ships gcc-16, which fails the CUDA 12.9 nvcc probe — a host artifact, not a Pascal one.)
+
+CUDA 13 dropped Pascal (`nvcc fatal: Unsupported gpu architecture compute_61`), so the base image must be CUDA ≤ 12.x. `nvidia/cuda:12.4.1-devel-ubuntu22.04` (build) → `…-runtime-…` (ship) is validated.
+
+```bash
+cmake -B build \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=61 \
+  -DGGML_CUDA_FORCE_MMQ=ON \
+  -DGGML_CUDA_F16=OFF \
+  -DGGML_NATIVE=OFF \
+  -DLLAMA_BUILD_SERVER=ON \
+  -DLLAMA_BUILD_TESTS=OFF \
+  -DLLAMA_CURL=ON \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target llama-server -j"$(nproc)"
+```
+
+Delta vs the bare-metal recipe:
+- **No `CMAKE_CUDA_COMPILER` / `CMAKE_CUDA_HOST_COMPILER`** — the base image's CUDA toolkit + gcc-11 are on `PATH` and just work.
+- **`GGML_NATIVE=OFF` (added, important)** — the bare-metal build runs on one known CPU so `-march=native` is fine; a cluster image runs on *heterogeneous* nodes, where native instructions `SIGILL` on older CPUs (the same trap that bit the titan rollout). The AVX2 baseline is portable.
+- **`--target llama-server` only** — the gem runs `llama-server` in *router mode* (no `-m`; it spawns child workers via `/proc/self/exe`), so the image drops `llama-app`/`llama-cli`/vLLM. ~2.65 GB vs the full fleet image's ~13 GB.
+- nvcc cross-compiles `sm_61` via the CUDA stubs, so **no Pascal GPU is needed at build time** — this builds fine on an Ampere/Ada host. Verify the result targets only Pascal: `cuobjdump --list-elf libggml-cuda.so | grep -o 'sm_[0-9]*' | sort -u` should print `sm_61` and nothing else.
+
+The `Dockerfile.pascal` and the gem router preset (`models-pascal-gem.ini`, a `--models-preset` swap-server at native 256k) live in the cloud repo under `gems/docker/llama-pascal/`. Validated 2026-06-14: image deployed to the gems cluster (opal P5200), serving `gemma-4-12b` at **native 256k context, ~25.2 tok/s**, routed through the pool as a first-class `gemma-4-12b-256k` member.
+
 ## Benchmark
 ```bash
 scripts/bench-pascal-p5200.sh both   # or `cuda` / `vulkan`
