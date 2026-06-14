@@ -208,6 +208,15 @@ llama_context::llama_context(
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
+    // DFlash decodes an entire diffusion block per step with every token flagged
+    // for output (block_size tokens), so the output buffer must hold at least the
+    // block size. The server sizes draft contexts to n_parallel (server-context.cpp),
+    // which is < dflash_block_size and trips GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max)
+    // in output_reserve() on the first draft(). See heiervang-technologies/ht-llama.cpp#108.
+    if (model.arch == LLM_ARCH_DFLASH) {
+        cparams.n_outputs_max = std::max(cparams.n_outputs_max, model.hparams.dflash_block_size);
+    }
+
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
