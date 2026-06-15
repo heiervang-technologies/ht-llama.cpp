@@ -4138,6 +4138,11 @@ server_context_meta server_context::get_meta() const {
         /* model_n_embd_inp       */ llama_model_n_embd(impl->model_tgt),
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
+        /* model_n_layer          */ llama_model_n_layer(impl->model_tgt),
+        /* model_n_head           */ llama_model_n_head(impl->model_tgt),
+        /* model_n_head_kv        */ llama_model_n_head_kv(impl->model_tgt),
+        /* cache_type_k           */ ggml_type_name(impl->params_base.cache_type_k),
+        /* cache_type_v           */ ggml_type_name(impl->params_base.cache_type_v),
     };
 }
 
@@ -5233,6 +5238,18 @@ json server_routes::get_model_info() const {
             {"n_embd",      meta->model_n_embd_inp},
             {"n_params",    meta->model_n_params},
             {"size",        meta->model_size},
+            // KV-cache geometry + configured quant so clients can compute exact
+            // KV bytes/token = n_layer*(n_embd_k_gqa+n_embd_v_gqa)*kv_type_size.
+            // n_embd_{k,v}_gqa = n_head_kv * (n_embd/n_head) (head dims equal for
+            // all served models; the public API exposes n_head[_kv] not the gqa
+            // dims directly).
+            {"n_layer",       meta->model_n_layer},
+            {"n_head",        meta->model_n_head},
+            {"n_head_kv",     meta->model_n_head_kv},
+            {"n_embd_k_gqa",  meta->model_n_head > 0 ? (int64_t) meta->model_n_head_kv * meta->model_n_embd_inp / meta->model_n_head : 0},
+            {"n_embd_v_gqa",  meta->model_n_head > 0 ? (int64_t) meta->model_n_head_kv * meta->model_n_embd_inp / meta->model_n_head : 0},
+            {"cache_type_k",  meta->cache_type_k},
+            {"cache_type_v",  meta->cache_type_v},
         }},
     };
 }
