@@ -1860,7 +1860,13 @@ void server_models_routes::init_routes() {
             return res;
         }
         if (!model->is_running()) {
-            res_err(res, format_error_response("model is not running", ERROR_TYPE_INVALID_REQUEST));
+            // Idempotent unload: the model exists but is already stopped (LRU-evicted,
+            // idle-exited, or crashed), so the caller's target state is already met.
+            // Return success instead of a 400 so clients (e.g. the heierchat webui)
+            // treat unload as a no-op rather than surfacing a spurious "Failed to
+            // unload" when their /v1/models snapshot raced an eviction. 400 is now
+            // reserved for a genuinely unknown model (no meta, handled above).
+            res_ok(res, {{"success", true}, {"already_unloaded", true}});
             return res;
         }
         models.unload(model->name);
