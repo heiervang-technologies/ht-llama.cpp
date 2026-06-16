@@ -2482,6 +2482,10 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     return std::nullopt;
 }
 
+// forward declaration: _apply_jinja's autoparser fallback (below) calls this before its definition
+static common_chat_params common_chat_templates_apply_legacy(const struct common_chat_templates *        tmpls,
+                                                             const struct common_chat_templates_inputs & inputs);
+
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
