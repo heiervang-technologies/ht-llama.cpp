@@ -287,13 +287,21 @@ std::vector<server_tokens> tokenize_input_prompts(
  * and the legacy "image_data": [{data:<base64>}] field, injecting one media marker per
  * image so the image tokens are spliced in. `body` is the full request object (for the
  * sibling "image_data" field); `prompt` is the extracted "input"/"content" value.
+ *
+ * When `embd_prompt_text` / `embd_prompt_image` are non-empty, they are per-modality
+ * wrappers (instruction + chat template) applied to the input: '{content}' is replaced
+ * by the request text, '{media}' by the model's media marker (one per image). This lets
+ * instruction-tuned embedding models (e.g. LCO-Embedding-Omni) get the trained prompt
+ * format server-side without any client change. Empty = raw input (legacy behavior).
  */
 std::vector<server_tokens> tokenize_embedding_input(
                                         const llama_vocab * vocab,
                                         mtmd_context * mctx,
                                         const json & body,
                                         const json & prompt,
-                                        const std::string & media_path);
+                                        const std::string & media_path,
+                                        const std::string & embd_prompt_text,
+                                        const std::string & embd_prompt_image);
 
 //
 // OAI utils

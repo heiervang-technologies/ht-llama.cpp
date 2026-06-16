@@ -2983,6 +2983,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
+        {"--embd-prompt-text"}, "TEMPLATE",
+        "wrapper applied to TEXT embedding inputs (instruction/chat template); '{content}' is replaced by the request text. "
+        "empty = off (raw input). \\n \\t escapes are processed. example: \"<|im_start|>user\\n{content}\\nSummarize the above text in one word:<|im_end|>\\n<|im_start|>assistant\\n\"",
+        [](common_params & params, const std::string & value) {
+            params.embd_prompt_text = value;
+            string_process_escapes(params.embd_prompt_text); // so preset-passed \n become real newlines
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}).set_env("LLAMA_ARG_EMBD_PROMPT_TEXT"));
+    add_opt(common_arg(
+        {"--embd-prompt-image"}, "TEMPLATE",
+        "wrapper applied to IMAGE embedding inputs (instruction/chat template); '{media}' is replaced by the server's media marker (one per image), request content is ignored. "
+        "empty = off. requires --mmproj. \\n \\t escapes are processed. example: \"<|im_start|>user\\n{media}\\nSummarize the above image in one word:<|im_end|>\\n<|im_start|>assistant\\n\"",
+        [](common_params & params, const std::string & value) {
+            params.embd_prompt_image = value;
+            string_process_escapes(params.embd_prompt_image); // so preset-passed \n become real newlines
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_EMBEDDING}).set_env("LLAMA_ARG_EMBD_PROMPT_IMAGE"));
+    add_opt(common_arg(
         {"--cls-separator"}, "STRING",
         "separator of classification sequences (default \\t) for example \"<#seq#>\"",
         [](common_params & params, const std::string & value) {
