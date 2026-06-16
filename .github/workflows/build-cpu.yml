@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - ht # ht is this fork's default branch; compile-gate merges to it (see #124)
     paths: [
       '.github/workflows/build-cpu.yml',
       '.github/workflows/build-cmake-pkg.yml',
