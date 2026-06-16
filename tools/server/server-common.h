@@ -286,6 +286,21 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool add_special,
                                         bool parse_special);
 
+/**
+ * tokenize the input of the /embedding + /v1/embeddings endpoints, with support for
+ * multimodal (image) inputs in addition to the text shapes handled by
+ * tokenize_input_prompts(). Recognizes OAI content-parts ("input": [{type:image_url}])
+ * and the legacy "image_data": [{data:<base64>}] field, injecting one media marker per
+ * image so the image tokens are spliced in. `body` is the full request object (for the
+ * sibling "image_data" field); `prompt` is the extracted "input"/"content" value.
+ */
+std::vector<server_tokens> tokenize_embedding_input(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & body,
+                                        const json & prompt,
+                                        const std::string & media_path);
+
 //
 // OAI utils
 //
