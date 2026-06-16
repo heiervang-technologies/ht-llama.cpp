@@ -13,12 +13,17 @@ authorship. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy.
 - **No upstream contributions**: this fork is strictly downstream. Don't draft
   commits with upstream framing or open PRs against `ggml-org/llama.cpp`.
 - **HT-specific surfaces**:
-  - `tools/server/webui/` — SvelteKit 5 frontend (rebranded UI, AI workspace,
-    sandbox terminals, artifact gallery, /images, doc mode, AI patch editor)
-  - `tools/server/webui-tauri/` — Tauri 2 desktop shell (Linux + Android APK)
+  - `tools/ui/` — embed glue (CMakeLists, `embed.cpp`, PWA configs) that ships
+    the prebuilt upstream UI bundle with `llama-server`
   - `tools/termd/` — Rust sandbox sidecar (gVisor + Docker + iptables LAN-drop)
   - `ggml/src/ggml-turboq*` and `ggml/src/ggml-cuda/turboq.{cu,cuh}` —
     TurboQuant KV cache types and fused CUDA kernels
+  - Server-side embedding / image-input shim (`tools/server/server-*.cpp`)
+  - **Not tracked here**: `tools/server/webui/` and `tools/server/webui-tauri/`
+    may exist on disk as local synced copies from
+    [heierchat](https://github.com/heiervang-technologies/heierchat) (the
+    product-facing SvelteKit 5 + Tauri 2 UI), but are not part of this repo.
+    A fresh clone will not have them.
 - **Out-of-tree assets**: GGUF model files live under `$GGUFS` / `$MODELS`;
   never hard-code paths or look inside `models/`.
 - **README.md `HT Fork Changes`** — canonical feature inventory; consult it
@@ -28,7 +33,6 @@ authorship. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution policy.
 
 | Surface | Command |
 |---|---|
-| Tauri shell | `cd tools/server/webui-tauri/src-tauri && cargo check && cargo clippy` |
 | termd | `cd tools/termd && cargo check && cargo clippy` |
 | C++ / ggml / server | follow upstream's [build.md](docs/build.md) |
 
