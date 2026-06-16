@@ -645,13 +645,13 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tbq3_0(
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
         const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
-        
+
         const int elem_start = k_KQ * 4;
         const int ib = elem_start / 128;
         const int elem = elem_start % 128;
-        
+
         const uint8_t* qs = K_tbq3_0[ib].qs;
-        
+
         const int idx0 = unpack_3bit_index(qs, elem + 0);
         const int idx1 = unpack_3bit_index(qs, elem + 1);
         const int idx2 = unpack_3bit_index(qs, elem + 2);
@@ -694,13 +694,13 @@ static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tbq4_0(
 #pragma unroll
     for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
         const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
-        
+
         const int elem_start = k_KQ * 4;
         const int ib = elem_start / 128;
         const int elem = elem_start % 128;
-        
+
         const uint8_t* qs = K_tbq4_0[ib].qs;
-        
+
         const uint8_t byte0 = qs[(elem + 0) / 2];
         const uint8_t byte1 = qs[(elem + 2) / 2];
 
