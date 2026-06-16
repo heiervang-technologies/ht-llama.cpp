@@ -780,7 +780,7 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtm
 // defined below (used by /chat/completions); forward-declared for the embedding path
 static void handle_media(std::vector<raw_buffer> & out_files, json & media_obj, const std::string & media_path);
 
-std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, mtmd_context * mctx, const json & body, const json & prompt, const std::string & media_path) {
+std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, mtmd_context * mctx, const json & body, const json & prompt, const std::string & media_path, const std::string & embd_prompt_text, const std::string & embd_prompt_image) {
     // Multimodal embedding inputs. Mirrors the chat-completion content-part handling
     // so /embedding + /v1/embeddings can embed images, not just text. A media marker
     // is injected into the text (one per image) so mtmd_tokenize() splices the image
@@ -789,16 +789,27 @@ std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, m
     //   - OAI content-parts: "input": [{"type":"text","text":"..."},
     //                                  {"type":"image_url","image_url":{"url":"data:..."}}]
     //   - legacy field:      {"content":"...", "image_data":[{"data":"<b64>","id":0}]}
-    // Text-only inputs fall through to tokenize_input_prompts() unchanged.
+    //
+    // When embd_prompt_{text,image} are set, they wrap the input (instruction + chat
+    // template): {content} -> request text, {media} -> the marker(s). The image wrapper
+    // ignores the request text entirely (so e.g. an empty or stray content can't leak in).
+    // Empty wrappers => raw input (legacy behavior).
     const auto require_mtmd = [&]() {
         if (mctx == nullptr) {
             throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
         }
     };
+    const auto subst = [](std::string s, const std::string & from, const std::string & to) {
+        for (size_t p = s.find(from); p != std::string::npos; p = s.find(from, p + to.size())) {
+            s.replace(p, from.size(), to);
+        }
+        return s;
+    };
 
     // (a) OAI content-parts array: a single (possibly multimodal) input.
     if (prompt.is_array() && !prompt.empty() && prompt.front().is_object() && prompt.front().contains("type")) {
         std::string text;
+        std::string markers;
         std::vector<raw_buffer> files;
         for (const auto & part : prompt) {
             const std::string type = json_value(part, "type", std::string());
@@ -808,18 +819,21 @@ std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, m
                 require_mtmd();
                 json image_url = json_value(part, "image_url", json::object());
                 handle_media(files, image_url, media_path);
-                text += get_media_marker();
+                text    += get_media_marker();
+                markers += get_media_marker();
             } else {
                 throw std::invalid_argument("unsupported content[].type for embeddings: " + type);
             }
         }
+        std::vector<server_tokens> result;
         if (!files.empty()) {
-            std::vector<server_tokens> result;
-            result.push_back(process_mtmd_prompt(mctx, text, files));
+            const std::string str = embd_prompt_image.empty() ? text : subst(embd_prompt_image, "{media}", markers);
+            result.push_back(process_mtmd_prompt(mctx, str, files));
             return result;
         }
-        // text-only content-parts: tokenize the concatenated text
-        return tokenize_input_prompts(vocab, mctx, json(text), true, true);
+        // text-only content-parts
+        const std::string str = embd_prompt_text.empty() ? text : subst(embd_prompt_text, "{content}", text);
+        return tokenize_input_prompts(vocab, mctx, json(str), true, true);
     }
 
     // (b) legacy "image_data" sibling field, with "content"/"input" as the text.
@@ -835,12 +849,30 @@ std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, m
             markers += get_media_marker();
         }
         const std::string base = prompt.is_string() ? prompt.get<std::string>() : std::string();
+        const std::string str  = embd_prompt_image.empty() ? (markers + base) : subst(embd_prompt_image, "{media}", markers);
         std::vector<server_tokens> result;
-        result.push_back(process_mtmd_prompt(mctx, markers + base, files));
+        result.push_back(process_mtmd_prompt(mctx, str, files));
         return result;
     }
 
-    // text-only: existing behavior.
+    // (c) text-only with a text wrapper: wrap a single string, or each element of a
+    //     string batch ("input": ["a", "b"]).
+    if (!embd_prompt_text.empty()) {
+        if (prompt.is_string()) {
+            return tokenize_input_prompts(vocab, mctx, json(subst(embd_prompt_text, "{content}", prompt.get<std::string>())), true, true);
+        }
+        if (prompt.is_array() && !prompt.empty() && json_is_array_of_mixed_numbers_strings(prompt) == false) {
+            bool all_strings = true;
+            for (const auto & e : prompt) { if (!e.is_string()) { all_strings = false; break; } }
+            if (all_strings) {
+                json wrapped = json::array();
+                for (const auto & e : prompt) { wrapped.push_back(subst(embd_prompt_text, "{content}", e.get<std::string>())); }
+                return tokenize_input_prompts(vocab, mctx, wrapped, true, true);
+            }
+        }
+    }
+
+    // default: raw input (also handles token-list arrays / object shapes unchanged).
     return tokenize_input_prompts(vocab, mctx, prompt, true, true);
 }
 
