@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - ht
     paths: [
       'vendor/**',
       'scripts/sync_vendor.py'
@@ -19,7 +20,7 @@ on:
 
 jobs:
   check-vendor:
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout

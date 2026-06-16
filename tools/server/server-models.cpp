@@ -1697,9 +1697,9 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
             return res;
         }
-        
+
         models.wait_until_ready(meta->name);
-        
+
         auto post_meta = models.get_meta(meta->name);
         if (post_meta.has_value() && post_meta->is_failed()) {
             res_err(res, format_error_response("model failed to load", ERROR_TYPE_SERVER));
