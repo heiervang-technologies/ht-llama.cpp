@@ -262,11 +262,11 @@ streamed patch this is insufficient. Approach:
    with the real `ChangeSet` and `addToHistory.of(true)`,
    `userEvent: "input.type.ai"` (reuses the existing AI-streamed-edit userEvent
    from the doc editor so undo grouping stays consistent).
-   
+
    *Simpler alternative* — skip provisional doc mutation entirely and use
    decorations to simulate the in-flight text via widgets. But this breaks
    markdown preview which reads from the real doc. Rejected.
-   
+
    *Simplest workable* — buffer provisional state in a shadow doc
    (`Text.of(...)`) rendered via `decorations` as a replace-widget. At commit
    time, dispatch a single `addToHistory: true` transaction. This keeps the

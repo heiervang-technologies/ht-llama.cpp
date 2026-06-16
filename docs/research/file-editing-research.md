@@ -161,7 +161,7 @@ Claude Code (available in VS Code, JetBrains, and the web IDE) uses built-in `Ed
 
 ### Behavior & Constraints
 
-**Whitespace Matching:** 
+**Whitespace Matching:**
 - Exact byte-for-byte match required, including spaces, tabs, newlines, and indentation.
 - Claude Code **automatically reads files first** before editing to extract exact strings.
 - **"Must Read first" contract:** The Read tool output is the ground truth for whitespace.
