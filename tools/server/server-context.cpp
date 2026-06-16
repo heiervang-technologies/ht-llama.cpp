@@ -5124,7 +5124,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    auto tokenized_prompts = tokenize_embedding_input(ctx_server.vocab, ctx_server.mctx, body, prompt, params.media_path);
+    auto tokenized_prompts = tokenize_embedding_input(ctx_server.vocab, ctx_server.mctx, body, prompt, params.media_path, params.embd_prompt_text, params.embd_prompt_image);
     for (const auto & tokens : tokenized_prompts) {
         // this check is necessary for models that do not add BOS token to the input
         if (tokens.empty()) {
