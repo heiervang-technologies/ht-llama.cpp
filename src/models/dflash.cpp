@@ -274,13 +274,13 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader & ml) {
     // Layers for draft generation
     for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         auto & layer = layers[il];
-        
+
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", il), {n_embd}, 0);
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", il), {n_embd, n_embd_head_k * n_head}, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", il), {n_embd, n_embd_k_gqa}, 0);
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", il), {n_embd, n_embd_v_gqa}, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", il), {n_embd_head_k * n_head, n_embd}, 0);
-        
+
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), {n_embd_head_k}, TENSOR_NOT_REQUIRED);
 
