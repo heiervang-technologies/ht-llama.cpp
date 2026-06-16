@@ -786,6 +786,73 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtm
     return result;
 }
 
+// defined below (used by /chat/completions); forward-declared for the embedding path
+static void handle_media(std::vector<raw_buffer> & out_files, json & media_obj, const std::string & media_path);
+
+std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, mtmd_context * mctx, const json & body, const json & prompt, const std::string & media_path) {
+    // Multimodal embedding inputs. Mirrors the chat-completion content-part handling
+    // so /embedding + /v1/embeddings can embed images, not just text. A media marker
+    // is injected into the text (one per image) so mtmd_tokenize() splices the image
+    // tokens in the right place — without it tokenization fails with "number of
+    // bitmaps does not match number of markers". Supported shapes:
+    //   - OAI content-parts: "input": [{"type":"text","text":"..."},
+    //                                  {"type":"image_url","image_url":{"url":"data:..."}}]
+    //   - legacy field:      {"content":"...", "image_data":[{"data":"<b64>","id":0}]}
+    // Text-only inputs fall through to tokenize_input_prompts() unchanged.
+    const auto require_mtmd = [&]() {
+        if (mctx == nullptr) {
+            throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+        }
+    };
+
+    // (a) OAI content-parts array: a single (possibly multimodal) input.
+    if (prompt.is_array() && !prompt.empty() && prompt.front().is_object() && prompt.front().contains("type")) {
+        std::string text;
+        std::vector<raw_buffer> files;
+        for (const auto & part : prompt) {
+            const std::string type = json_value(part, "type", std::string());
+            if (type == "text") {
+                text += json_value(part, "text", std::string());
+            } else if (type == "image_url") {
+                require_mtmd();
+                json image_url = json_value(part, "image_url", json::object());
+                handle_media(files, image_url, media_path);
+                text += get_media_marker();
+            } else {
+                throw std::invalid_argument("unsupported content[].type for embeddings: " + type);
+            }
+        }
+        if (!files.empty()) {
+            std::vector<server_tokens> result;
+            result.push_back(process_mtmd_prompt(mctx, text, files));
+            return result;
+        }
+        // text-only content-parts: tokenize the concatenated text
+        return tokenize_input_prompts(vocab, mctx, json(text), true, true);
+    }
+
+    // (b) legacy "image_data" sibling field, with "content"/"input" as the text.
+    if (body.contains("image_data") && body.at("image_data").is_array() && !body.at("image_data").empty()) {
+        require_mtmd();
+        if (!prompt.is_string() && !prompt.is_null()) {
+            throw std::invalid_argument("\"content\" must be a string when \"image_data\" is provided");
+        }
+        std::string markers;
+        std::vector<raw_buffer> files;
+        for (const auto & entry : body.at("image_data")) {
+            files.push_back(base64_decode(json_value(entry, "data", std::string())));
+            markers += get_media_marker();
+        }
+        const std::string base = prompt.is_string() ? prompt.get<std::string>() : std::string();
+        std::vector<server_tokens> result;
+        result.push_back(process_mtmd_prompt(mctx, markers + base, files));
+        return result;
+    }
+
+    // text-only: existing behavior.
+    return tokenize_input_prompts(vocab, mctx, prompt, true, true);
+}
+
 //
 // OAI utils
 //
