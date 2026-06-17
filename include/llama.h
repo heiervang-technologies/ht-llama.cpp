@@ -572,6 +572,8 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_swa_layers(const struct llama_model * model);
+    LLAMA_API const char * llama_model_swa_type_name(const struct llama_model * model);
 
     // DFlash draft model metadata
     LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
