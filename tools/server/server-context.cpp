@@ -3841,6 +3841,9 @@ server_context_meta server_context::get_meta() const {
         /* model_n_head_kv        */ llama_model_n_head_kv(impl->model_tgt),
         /* cache_type_k           */ ggml_type_name(impl->params_base.cache_type_k),
         /* cache_type_v           */ ggml_type_name(impl->params_base.cache_type_v),
+        /* model_n_swa            */ llama_model_n_swa(impl->model_tgt),
+        /* model_n_swa_layers     */ llama_model_n_swa_layers(impl->model_tgt),
+        /* model_swa_type         */ llama_model_swa_type_name(impl->model_tgt),
     };
 }
 
@@ -4983,6 +4986,12 @@ json server_routes::get_model_info() const {
             {"n_embd_v_gqa",  meta->model_n_head > 0 ? (int64_t) meta->model_n_head_kv * meta->model_n_embd_inp / meta->model_n_head : 0},
             {"cache_type_k",  meta->cache_type_k},
             {"cache_type_v",  meta->cache_type_v},
+            // SWA geometry for exact KV prediction on hybrid models
+            // (gemma-4 etc.): n_full_layers = n_layer - n_swa_layers;
+            // SWA layers cap KV at min(ctx, n_swa) instead of ctx.
+            {"n_swa",         meta->model_n_swa},
+            {"n_swa_layers",  meta->model_n_swa_layers},
+            {"swa_type",      meta->model_swa_type},
         }},
     };
 }
