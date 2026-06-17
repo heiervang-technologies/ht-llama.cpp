@@ -57,6 +57,11 @@ struct server_context_meta {
     int32_t model_n_head_kv;
     std::string cache_type_k;
     std::string cache_type_v;
+    // SWA geometry so clients can compute exact KV for hybrid models
+    // (gemma-4 etc.) where SWA layers cap KV at min(ctx, n_swa).
+    int32_t     model_n_swa;
+    int32_t     model_n_swa_layers;
+    std::string model_swa_type;
 };
 
 enum server_state {
