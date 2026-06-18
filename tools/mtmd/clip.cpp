@@ -294,18 +294,35 @@ ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode
     if (ggml_n_dims(pos_embd) == 3) {
         orig_w = pos_embd->ne[1];
         orig_h = pos_embd->ne[2];
-    } else {
-        orig_w = (int)std::sqrt(pos_embd->ne[1]);
-        orig_h = orig_w;
+
+        if (height == orig_h && width == orig_w) {
+            return ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
+        }
+
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_interpolate(ctx0, pos_embd, height, width, n_embd, 1, mode);
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
+        return pos_embd;
     }
+
+    // 2D case
+    orig_w = (int)std::sqrt(pos_embd->ne[1]);
+    orig_h = orig_w;
 
     if (height == orig_h && width == orig_w) {
         return pos_embd;
     }
 
-    if (ggml_n_dims(pos_embd) != 3) {
-        pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, orig_w, orig_h);  // -> (n_embd, orig_w, orig_h)
+    // We must handle cases where ne[1] is not a perfect square (e.g. contains CLS token).
+    // If it's not a square, ggml_reshape_3d will assert if we don't slice it.
+    const int expected_elements = orig_w * orig_h;
+    if (pos_embd->ne[1] > expected_elements) {
+        const int extra_tokens = pos_embd->ne[1] - expected_elements;
+        pos_embd = ggml_view_2d(ctx0, pos_embd, n_embd, expected_elements, pos_embd->nb[1], extra_tokens * pos_embd->nb[1]);
     }
+
+    pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, orig_w, orig_h);  // -> (n_embd, orig_w, orig_h)
     pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (orig_w, orig_h, n_embd)
     pos_embd = ggml_interpolate(ctx0, pos_embd, width, height, n_embd, 1, mode); // -> (width, height, n_embd)
     pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);                         // -> (n_embd, width, height)
