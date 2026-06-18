@@ -287,16 +287,26 @@ ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
     const uint32_t mode    = interpolation_mode;
-    const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
     GGML_ASSERT(pos_embd);
 
-    if (height == n_per_side && width == n_per_side) {
+    int orig_w, orig_h;
+    if (ggml_n_dims(pos_embd) == 3) {
+        orig_w = pos_embd->ne[1];
+        orig_h = pos_embd->ne[2];
+    } else {
+        orig_w = (int)std::sqrt(pos_embd->ne[1]);
+        orig_h = orig_w;
+    }
+
+    if (height == orig_h && width == orig_w) {
         return pos_embd;
     }
 
-    pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, n_per_side, n_per_side);  // -> (n_embd, n_per_side, n_per_side)
-    pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (n_per_side, n_per_side, n_embd)
+    if (ggml_n_dims(pos_embd) != 3) {
+        pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, orig_w, orig_h);  // -> (n_embd, orig_w, orig_h)
+    }
+    pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (orig_w, orig_h, n_embd)
     pos_embd = ggml_interpolate(ctx0, pos_embd, width, height, n_embd, 1, mode); // -> (width, height, n_embd)
     pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);                         // -> (n_embd, width, height)
     pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);             // -> (n_embd, width * height)
