@@ -287,16 +287,43 @@ ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
     const uint32_t mode    = interpolation_mode;
-    const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
 
     GGML_ASSERT(pos_embd);
 
-    if (height == n_per_side && width == n_per_side) {
+    int orig_w, orig_h;
+    if (ggml_n_dims(pos_embd) == 3) {
+        orig_w = pos_embd->ne[1];
+        orig_h = pos_embd->ne[2];
+
+        if (height == orig_h && width == orig_w) {
+            return ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
+        }
+
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_interpolate(ctx0, pos_embd, height, width, n_embd, 1, mode);
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 1, 0, 3);
+        pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);
         return pos_embd;
     }
 
-    pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, n_per_side, n_per_side);  // -> (n_embd, n_per_side, n_per_side)
-    pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (n_per_side, n_per_side, n_embd)
+    // 2D case
+    orig_w = (int)std::sqrt(pos_embd->ne[1]);
+    orig_h = orig_w;
+
+    if (height == orig_h && width == orig_w) {
+        return pos_embd;
+    }
+
+    // We must handle cases where ne[1] is not a perfect square (e.g. contains CLS token).
+    // If it's not a square, ggml_reshape_3d will assert if we don't slice it.
+    const int expected_elements = orig_w * orig_h;
+    if (pos_embd->ne[1] > expected_elements) {
+        const int extra_tokens = pos_embd->ne[1] - expected_elements;
+        pos_embd = ggml_view_2d(ctx0, pos_embd, n_embd, expected_elements, pos_embd->nb[1], extra_tokens * pos_embd->nb[1]);
+    }
+
+    pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, orig_w, orig_h);  // -> (n_embd, orig_w, orig_h)
+    pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (orig_w, orig_h, n_embd)
     pos_embd = ggml_interpolate(ctx0, pos_embd, width, height, n_embd, 1, mode); // -> (width, height, n_embd)
     pos_embd = ggml_permute(ctx0, pos_embd, 1, 2, 0, 3);                         // -> (n_embd, width, height)
     pos_embd = ggml_cont_2d(ctx0, pos_embd, n_embd, width * height);             // -> (n_embd, width * height)
@@ -949,6 +976,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 builder = std::make_unique<clip_graph_whisper_enc>(ctx, img);
             } break;
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
             {
                 builder = std::make_unique<clip_graph_kimivl>(ctx, img);
             } break;
@@ -1379,9 +1407,11 @@ struct clip_model_loader {
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIVL:
+                case PROJECTOR_TYPE_LOCATEANYTHING:
                     {
                         hparams.image_resize_algo = RESIZE_ALGO_BILINEAR;
                         hparams.rope_theta = 10000.0f;
+                        hparams.n_merge = 1; // Default to 1 if not present
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         // TODO: check kimivl preprocessor for exact values
                         hparams.set_limit_image_tokens(8, 1024);
@@ -2279,6 +2309,15 @@ struct clip_model_loader {
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_LOCATEANYTHING:
+                {
+                    model.mm_input_norm_w = get_tensor("mm.input_norm.weight");
+                    model.mm_input_norm_b = get_tensor("mm.input_norm.bias");
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                     model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
@@ -3281,6 +3320,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             } break;
         case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
         case PROJECTOR_TYPE_KIMIK25:
             {
                 // dynamic size
@@ -3940,6 +3980,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
@@ -4490,6 +4531,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_YASA2:
+        case PROJECTOR_TYPE_LOCATEANYTHING:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANVL:
             return ctx->model.mm_model_proj->ne[1];
