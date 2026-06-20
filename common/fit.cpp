@@ -10,8 +10,13 @@
 #include <stdexcept>
 #include <cinttypes>
 #include <set>
+
 #include <string>
 #include <vector>
+
+const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
+
+#include <regex>
 
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 // enum to identify part of a layer for distributing its tensors:
@@ -35,7 +40,9 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         uint32_t & hp_ngl,
         uint32_t & hp_n_ctx_train,
         uint32_t & hp_n_expert,
-        ggml_log_level log_level) {
+        ggml_log_level log_level,
+        llama_model ** out_model = nullptr,
+        llama_context ** out_ctx = nullptr) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -144,8 +151,16 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
 
     common_memory_breakdown_print(ctx);
 
-    llama_free(ctx);
-    llama_model_free(model);
+    if (out_ctx) {
+        *out_ctx = ctx;
+    } else {
+        llama_free(ctx);
+    }
+    if (out_model) {
+        *out_model = model;
+    } else {
+        llama_model_free(model);
+    }
     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
 
     return ret;
@@ -194,8 +209,20 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    llama_model * loaded_model = nullptr;
+    llama_context * loaded_ctx = nullptr;
+    const dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &loaded_model, &loaded_ctx);
     const size_t nd = devs.size(); // number of devices
+
+    struct Cleanup {
+        llama_model * model;
+        llama_context * ctx;
+        ~Cleanup() {
+            if (ctx) llama_free(ctx);
+            if (model) llama_model_free(model);
+        }
+    } cleanup_guard{loaded_model, loaded_ctx};
+
 
     std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
     margins.reserve(nd);
@@ -273,6 +300,8 @@ static void common_params_fit_impl(
                 if (out_bytes_per_device) {
                     out_bytes_per_device->assign({(int64_t) dmds_full[0].mb.total()});
                 }
+                llama_free(loaded_ctx);
+                llama_model_free(loaded_model);
                 return;
             }
         } else {
@@ -292,6 +321,8 @@ static void common_params_fit_impl(
                         out_bytes_per_device->push_back((int64_t) dmds_full[id].mb.total());
                     }
                 }
+                llama_free(loaded_ctx);
+                llama_model_free(loaded_model);
                 return;
             }
         }
@@ -339,7 +370,7 @@ static void common_params_fit_impl(
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min;
-                    const dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    const dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &loaded_model, nullptr);
                     if (nd == 0) {
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
@@ -359,6 +390,8 @@ static void common_params_fit_impl(
                             __func__, hp_nct, cparams->n_ctx, memory_reduction/MiB);
                         if (nd <= 1) {
                             LOG_TRC("%s: entire model can be fit by reducing context\n", __func__);
+                            llama_free(loaded_ctx);
+                            llama_model_free(loaded_model);
                             return;
                         }
                         LOG_TRC("%s: entire model should be fit across devices by reducing context\n", __func__);
@@ -509,7 +542,7 @@ static void common_params_fit_impl(
         mparams.tensor_buft_overrides = tensor_buft_overrides;
     };
 
-    // utility function that returns the memory use per device for given numbers of layers per device
+
     auto get_memory_for_layers = [&](
             const char * func_name,
             const std::vector<ngl_t> & ngl_per_device,
@@ -517,24 +550,108 @@ static void common_params_fit_impl(
         llama_model_params mparams_copy = *mparams;
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
-        const dmds_t dmd_nl = common_get_device_memory_data_impl(
-            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        std::vector<int64_t> ret(nd, 0);
+
+        auto get_id = [&](ggml_backend_buffer_type_t buft) -> int {
+            if (ggml_backend_buft_is_host(buft)) return -1;
+            ggml_backend_dev_t d = ggml_backend_buft_get_device(buft);
+            if (!d) return -1;
+            for (size_t i = 0; i < nd; i++) {
+                if (d == devs[i]) return (int)i;
+            }
+            return -1;
+        };
+
+        const auto & tensors = llama_internal_get_tensor_map(loaded_model);
+        for (const auto & kv : tensors) {
+            const std::string & name = kv.first;
+            struct ggml_tensor * t = kv.second;
+
+            int il = -1;
+            if (name.compare(0, 4, "blk.") == 0) {
+                size_t pos = name.find('.', 4);
+                if (pos != std::string::npos) {
+                    il = std::stoi(name.substr(4, pos - 4));
+                }
+            }
+
+            ggml_backend_buffer_type_t buft = nullptr;
+            if (mparams_copy.tensor_buft_overrides) {
+                for (const auto * overrides = mparams_copy.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                    std::regex pattern(overrides->pattern);
+                    if (std::regex_search(name, pattern)) {
+                        buft = overrides->buft;
+                        break;
+                    }
+                }
+            }
+
+            if (!buft) {
+                int target_id = nd - 1;
+                if (il != -1) {
+                    uint32_t current_il = hp_ngl + 1 - mparams_copy.n_gpu_layers;
+                    if (il < current_il) {
+                        target_id = -1;
+                    } else {
+                        for (size_t id = 0; id < nd; id++) {
+                            if (il >= current_il && il < current_il + ngl_per_device[id].n_layer) {
+                                target_id = id;
+                                break;
+                            }
+                            current_il += ngl_per_device[id].n_layer;
+                        }
+                    }
+                } else {
+                    if (mparams_copy.n_gpu_layers <= hp_ngl) {
+                        target_id = -1;
+                    }
+                }
+
+                if (target_id >= 0 && target_id < (int)nd) {
+                    buft = ggml_backend_dev_buffer_type(devs[target_id]);
+                } else {
+                    buft = ggml_backend_cpu_buffer_type();
+                }
+            }
+
+            int id = get_id(buft);
+            if (id >= 0) {
+                size_t alloc_size = ggml_backend_buft_get_alloc_size(buft, t);
+                size_t alignment = ggml_backend_buft_get_alignment(buft);
+                alloc_size = GGML_PAD(alloc_size, alignment);
+                ret[id] += alloc_size;
+            }
+        }
+
+        // Add compute and context memory.
+        // dmds_full contains the initial compute/context sizes.
+        // We can just estimate context size per layer.
+        int64_t total_ctx_bytes = 0;
+        for (size_t id = 0; id < nd; id++) {
+            total_ctx_bytes += dmds_full[id].mb.context;
+        }
+        // scale context by modified cparams->n_ctx
+        total_ctx_bytes = (total_ctx_bytes * cparams->n_ctx) / std::max((uint32_t)1, hp_nct);
+        int64_t ctx_per_layer = total_ctx_bytes / std::max((uint32_t)1, hp_ngl);
+
+        for (size_t id = 0; id < nd; id++) {
+            if (ngl_per_device[id].n_layer > 0) {
+                ret[id] += ngl_per_device[id].n_layer * ctx_per_layer;
+                ret[id] += dmds_full[id].mb.compute;
+            }
+        }
 
         LOG_TRC("%s: memory for test allocation by device:\n", func_name);
         for (size_t id = 0; id < nd; id++) {
             const ngl_t & n = ngl_per_device[id];
             LOG_TRC(
                 "%s: id=%zu, n_layer=%2" PRIu32 ", n_part=%2" PRIu32 ", overflow_type=%d, mem=%6" PRId64 " MiB\n",
-                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), dmd_nl[id].mb.total()/MiB);
+                func_name, id, n.n_layer, n.n_part, int(n.overflow_type), ret[id]/(1024*1024));
         }
 
-        std::vector<int64_t> ret;
-        ret.reserve(nd);
-        for (size_t id = 0; id < nd; id++) {
-            ret.push_back(dmd_nl[id].mb.total());
-        }
         return ret;
     };
+
 
     int64_t global_surplus_cpu_moe = 0;
     if (hp_nex > 0) {
@@ -546,7 +663,7 @@ static void common_params_fit_impl(
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
         const dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
-            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level, &loaded_model, nullptr);
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
@@ -654,6 +771,8 @@ static void common_params_fit_impl(
         if (out_bytes_per_device) {
             *out_bytes_per_device = mem;
         }
+        llama_free(loaded_ctx);
+        llama_model_free(loaded_model);
         return;
     }
 
