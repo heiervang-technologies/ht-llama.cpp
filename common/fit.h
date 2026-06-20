@@ -5,6 +5,8 @@
 
 #include <vector>
 
+struct common_params;
+
 enum common_params_fit_status {
     COMMON_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
     COMMON_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
@@ -63,3 +65,13 @@ common_device_memory_data_vec common_get_device_memory_data(
                            uint32_t & hp_n_ctx_train,
                            uint32_t & hp_n_expert,
                      ggml_log_level   log_level);
+
+struct common_fitted_params {
+    struct llama_model_params mparams;
+    struct llama_context_params cparams;
+    common_params_fit_status fit_status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
+    std::vector<int64_t> per_device_bytes;
+};
+
+// Converts common_params to model/context params, and fits/measures them
+common_fitted_params common_fit_params_from_common_params(common_params & params);
