@@ -256,6 +256,7 @@ void server_models::add_model(server_model_meta && meta) {
             alias = string_strip(alias);
             if (!alias.empty()) {
                 meta.aliases.insert(alias);
+                alias_to_name[alias] = meta.name;
             }
         }
     }
@@ -542,6 +543,15 @@ void server_models::load_models() {
             }
         }
 
+        // clean up alias_to_name map
+        for (auto it = alias_to_name.begin(); it != alias_to_name.end(); ) {
+            if (mapping.find(it->second) == mapping.end()) {
+                it = alias_to_name.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
         // update presets for non-running models still in source
         for (auto & [name, inst] : mapping) {
             if (inst.meta.is_running()) continue;
@@ -702,6 +712,13 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         return it->second.meta;
+    }
+    auto ait = alias_to_name.find(name);
+    if (ait != alias_to_name.end()) {
+        auto mit = mapping.find(ait->second);
+        if (mit != mapping.end()) {
+            return mit->second.meta;
+        }
     }
     for (const auto & [key, inst] : mapping) {
         if (inst.meta.aliases.count(name)) {
