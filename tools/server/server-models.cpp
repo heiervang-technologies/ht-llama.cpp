@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 #include "server-context.h"
+#include "fit.h"
 
 #include "build-info.h"
 #include "preset.h"
@@ -220,8 +221,22 @@ void server_model_meta::update_caps() {
         } else {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
         }
+
+        // Compute memory footprint across GPU/accelerator devices
+        common_params fit_params;
+        preset.apply_to_params(fit_params);
+        fit_params.offline = true;
+        common_params_handle_models(fit_params, LLAMA_EXAMPLE_SERVER);
+
+        auto fitted = common_fit_params_from_common_params(fit_params);
+        if (fitted.fit_status == COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+            per_device_bytes = fitted.per_device_bytes;
+        } else {
+            LOG_WRN("failed to compute device memory fit plan for model '%s': status = %d\n",
+                    name.c_str(), (int)fitted.fit_status);
+        }
     } catch (const std::exception & e) {
-        LOG_WRN("failed to initialize common_params for multimodal capability detection: %s\n", e.what());
+        LOG_WRN("failed to initialize common_params for multimodal capability/memory footprint detection: %s\n", e.what());
         multimodal = { false, false };
     }
 }
@@ -444,20 +459,21 @@ void server_models::load_models() {
         // FIRST LOAD: add all models, then unlock for autoloading
         for (const auto & [name, preset] : final_presets) {
             server_model_meta meta{
-                /* source        */ get_source(name),
-                /* preset        */ preset,
-                /* name          */ name,
-                /* aliases       */ {},
-                /* tags          */ {},
-                /* port          */ 0,
-                /* status        */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used     */ 0,
-                /* args          */ std::vector<std::string>(),
-                /* loaded_info   */ {},
-                /* exit_code     */ 0,
-                /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal    */ mtmd_caps{false, false},
-                // /* need_download */ false,
+                /* source           */ get_source(name),
+                /* preset           */ preset,
+                /* name             */ name,
+                /* aliases          */ {},
+                /* tags             */ {},
+                /* port             */ 0,
+                /* status           */ SERVER_MODEL_STATUS_UNLOADED,
+                /* last_used        */ 0,
+                /* args             */ std::vector<std::string>(),
+                /* loaded_info      */ {},
+                /* exit_code        */ 0,
+                /* stop_timeout     */ DEFAULT_STOP_TIMEOUT,
+                /* multimodal       */ mtmd_caps{false, false},
+                /* need_download    */ false,
+                /* per_device_bytes */ {}
             };
             add_model(std::move(meta));
         }
@@ -619,20 +635,21 @@ void server_models::load_models() {
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
-                    /* source        */ get_source(name),
-                    /* preset        */ preset,
-                    /* name          */ name,
-                    /* aliases       */ {},
-                    /* tags          */ {},
-                    /* port          */ 0,
-                    /* status        */ SERVER_MODEL_STATUS_UNLOADED,
-                    /* last_used     */ 0,
-                    /* args          */ std::vector<std::string>(),
-                    /* loaded_info   */ {},
-                    /* exit_code     */ 0,
-                    /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal    */ mtmd_caps{false, false},
-                    // /* need_download */ false,
+                    /* source           */ get_source(name),
+                    /* preset           */ preset,
+                    /* name             */ name,
+                    /* aliases          */ {},
+                    /* tags             */ {},
+                    /* port             */ 0,
+                    /* status           */ SERVER_MODEL_STATUS_UNLOADED,
+                    /* last_used        */ 0,
+                    /* args             */ std::vector<std::string>(),
+                    /* loaded_info      */ {},
+                    /* exit_code        */ 0,
+                    /* stop_timeout     */ DEFAULT_STOP_TIMEOUT,
+                    /* multimodal       */ mtmd_caps{false, false},
+                    /* need_download    */ false,
+                    /* per_device_bytes */ {}
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -836,38 +853,100 @@ std::vector<common_lora_adapter_info> server_models::get_discovered_adapters() {
     return discovered_adapters;
 }
 
-void server_models::unload_lru() {
-    if (base_params.models_max <= 0) {
-        return; // no limit
-    }
-    // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
-    size_t count_active = 0;
-    {
-        std::unique_lock<std::mutex> lk(mutex);
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
+void server_models::unload_lru(const std::string & candidate_name) {
+    while (true) {
+        size_t count_active = 0;
+        bool mem_fits = true;
+        std::vector<int64_t> candidate_bytes;
+
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            // 1. Check count limit
+            for (const auto & m : mapping) {
+                if (m.second.meta.is_running()) {
+                    count_active++;
+                }
+            }
+
+            // 2. Fetch candidate VRAM bytes
+            auto map_it = mapping.find(candidate_name);
+            if (map_it != mapping.end()) {
+                candidate_bytes = map_it->second.meta.per_device_bytes;
+            }
+        }
+
+        bool count_ok = (base_params.models_max <= 0) || (count_active < (size_t)base_params.models_max);
+
+        // 3. Query physical free memory for GPUs
+        std::vector<int64_t> projected_free;
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                size_t free = 0;
+                size_t total = 0;
+                ggml_backend_dev_memory(dev, &free, &total);
+                projected_free.push_back(free);
+            }
+        }
+
+        // 4. Check if candidate memory footprint fits and collect constrained devices
+        std::vector<size_t> constrained_devices;
+        if (!candidate_bytes.empty()) {
+            for (size_t id = 0; id < candidate_bytes.size() && id < projected_free.size(); id++) {
+                if (candidate_bytes[id] > projected_free[id]) {
+                    mem_fits = false;
+                    constrained_devices.push_back(id);
                 }
             }
         }
-    }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
-        SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
+
+        // If both limits are satisfied, we can stop!
+        if (count_ok && mem_fits) {
+            break;
+        }
+
+        // 5. Find the LRU active model to evict
+        std::string lru_model_name = "";
+        int64_t lru_last_used = ggml_time_ms();
+
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            for (const auto & m : mapping) {
+                if (m.second.meta.is_running()) {
+                    bool helps_memory = false;
+                    if (!mem_fits) {
+                        for (size_t id : constrained_devices) {
+                            if (id < m.second.meta.per_device_bytes.size() && m.second.meta.per_device_bytes[id] > 0) {
+                                helps_memory = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // We can evict if we need to reduce count, OR if it helps constrained memory
+                    if (!count_ok || helps_memory) {
+                        if (m.second.meta.last_used < lru_last_used) {
+                            lru_model_name = m.first;
+                            lru_last_used = m.second.meta.last_used;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (lru_model_name.empty()) {
+            break; // No more models left to unload that would help
+        }
+
+        SRV_INF("evicting LRU model '%s' (last_used=%" PRId64 ") to make room for '%s' (count_ok=%d, mem_fits=%d)\n",
+                lru_model_name.c_str(), lru_last_used, candidate_name.c_str(), count_ok, mem_fits);
+
         unload(lru_model_name);
+
         // wait for unload to complete
         {
             std::unique_lock<std::mutex> lk(mutex);
             cv.wait(lk, [this, &lru_model_name]() {
-                // operator[] on std::map silently default-inserts on miss; with a
-                // default-init server_model_meta (status = UNLOADED) the predicate
-                // would spuriously return true AND pollute mapping. Use find().
-                // Missing model → treat as done (was unloaded by another thread or
-                // removed by a concurrent reload).
                 auto it = mapping.find(lru_model_name);
                 if (it == mapping.end()) return true;
                 return it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
@@ -880,7 +959,7 @@ void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    unload_lru();
+    unload_lru(name);
 
     std::unique_lock<std::mutex> lk(mutex);
     // edge case: block until any in-progress reload has finished so we always load
