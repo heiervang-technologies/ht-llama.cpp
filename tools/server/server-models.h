@@ -127,6 +127,8 @@ private:
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
+    std::map<std::string, std::string> alias_to_name;
+
 
     // for stopping models
     std::condition_variable cv_stop;
