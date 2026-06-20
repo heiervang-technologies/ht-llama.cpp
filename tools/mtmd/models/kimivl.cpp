@@ -37,7 +37,8 @@ ggml_cgraph * clip_graph_kimivl::build() {
 
         // projection norm
         int proj_inp_dim = cur->ne[0];
-        if (scale_factor > 1) {
+        bool is_locateanything = (proj_type == PROJECTOR_TYPE_LOCATEANYTHING);
+        if (scale_factor > 1 && !is_locateanything) {
             cur = ggml_view_2d(ctx0, cur,
                 n_embd, cur->ne[1] * scale_factor * scale_factor,
                 ggml_row_size(cur->type, n_embd), 0);
@@ -45,7 +46,7 @@ ggml_cgraph * clip_graph_kimivl::build() {
         cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
         cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
         cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
-        if (scale_factor > 1) {
+        if (scale_factor > 1 && !is_locateanything) {
             cur = ggml_view_2d(ctx0, cur,
                 proj_inp_dim, cur->ne[1] / scale_factor / scale_factor,
                 ggml_row_size(cur->type, proj_inp_dim), 0);
