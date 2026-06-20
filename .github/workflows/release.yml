@@ -10,7 +10,6 @@ on:
   push:
     branches:
       - master
-      - ht
     paths: [
       '.github/workflows/release.yml',
       '**/CMakeLists.txt',
