@@ -29,5 +29,7 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Run check-requirements.sh script
         run:  bash scripts/check-requirements.sh
