@@ -635,3 +635,134 @@ json convert_transcriptions_to_chatcmpl(
 
     return chatcmpl_body;
 }
+
+json server_chat_convert_gemini_to_oai(const json & body) {
+    json oai_body;
+    json oai_messages = json::array();
+
+    if (body.contains("systemInstruction")) {
+        const json & sys = body.at("systemInstruction");
+        if (sys.contains("parts") && sys.at("parts").is_array()) {
+            std::string sys_content;
+            for (const auto & part : sys.at("parts")) {
+                sys_content += json_value(part, "text", std::string());
+            }
+            oai_messages.push_back({
+                {"role", "system"},
+                {"content", sys_content}
+            });
+        }
+    }
+
+    if (body.contains("contents") && body.at("contents").is_array()) {
+        for (const auto & content_item : body.at("contents")) {
+            std::string role = json_value(content_item, "role", std::string("user"));
+            if (role == "model") role = "assistant";
+
+            if (content_item.contains("parts") && content_item.at("parts").is_array()) {
+                json converted_content = json::array();
+                json tool_calls = json::array();
+                json tool_results = json::array();
+                bool has_tool_calls = false;
+
+                for (const auto & part : content_item.at("parts")) {
+                    if (part.contains("text")) {
+                        converted_content.push_back({
+                            {"type", "text"},
+                            {"text", json_value(part, "text", std::string())}
+                        });
+                    } else if (part.contains("inlineData")) {
+                        const json & inlineData = part.at("inlineData");
+                        std::string mimeType = json_value(inlineData, "mimeType", std::string("image/jpeg"));
+                        std::string data = json_value(inlineData, "data", std::string());
+                        std::ostringstream ss;
+                        ss << "data:" << mimeType << ";base64," << data;
+                        converted_content.push_back({
+                            {"type", "image_url"},
+                            {"image_url", {
+                                {"url", ss.str()}
+                            }}
+                        });
+                    } else if (part.contains("functionCall")) {
+                        const json & fc = part.at("functionCall");
+                        tool_calls.push_back({
+                            {"id", json_value(fc, "name", std::string())}, 
+                            {"type", "function"},
+                            {"function", {
+                                {"name", json_value(fc, "name", std::string())},
+                                {"arguments", fc.contains("args") ? fc.at("args").dump() : "{}"}
+                            }}
+                        });
+                        has_tool_calls = true;
+                    } else if (part.contains("functionResponse")) {
+                        const json & fr = part.at("functionResponse");
+                        std::string name = json_value(fr, "name", std::string());
+                        std::string response_text = fr.contains("response") ? fr.at("response").dump() : "";
+                        tool_results.push_back({
+                            {"role", "tool"},
+                            {"tool_call_id", name},
+                            {"content", response_text}
+                        });
+                    }
+                }
+
+                if (!converted_content.empty() || has_tool_calls) {
+                    json new_msg = {{"role", role}};
+                    if (!converted_content.empty()) {
+                        if (converted_content.size() == 1 && json_value(converted_content[0], "type", std::string()) == "text") {
+                            new_msg["content"] = json_value(converted_content[0], "text", std::string());
+                        } else {
+                            new_msg["content"] = converted_content;
+                        }
+                    } else if (has_tool_calls) {
+                        new_msg["content"] = "";
+                    }
+                    if (!tool_calls.empty()) {
+                        new_msg["tool_calls"] = tool_calls;
+                    }
+                    oai_messages.push_back(new_msg);
+                }
+
+                for (const auto & tool_msg : tool_results) {
+                    oai_messages.push_back(tool_msg);
+                }
+            }
+        }
+    }
+    
+    oai_body["messages"] = oai_messages;
+
+    if (body.contains("tools") && body.at("tools").is_array()) {
+        json oai_tools = json::array();
+        for (const auto & tool : body.at("tools")) {
+            if (tool.contains("functionDeclarations") && tool.at("functionDeclarations").is_array()) {
+                for (const auto & fd : tool.at("functionDeclarations")) {
+                    oai_tools.push_back({
+                        {"type", "function"},
+                        {"function", {
+                            {"name", json_value(fd, "name", std::string())},
+                            {"description", json_value(fd, "description", std::string())},
+                            {"parameters", fd.contains("parameters") ? fd.at("parameters") : json::object()}
+                        }}
+                    });
+                }
+            }
+        }
+        if (!oai_tools.empty()) {
+            oai_body["tools"] = oai_tools;
+        }
+    }
+
+    if (body.contains("generationConfig") && body.at("generationConfig").is_object()) {
+        const json & gc = body.at("generationConfig");
+        if (gc.contains("temperature")) oai_body["temperature"] = gc.at("temperature");
+        if (gc.contains("topP")) oai_body["top_p"] = gc.at("topP");
+        if (gc.contains("topK")) oai_body["top_k"] = gc.at("topK");
+        if (gc.contains("maxOutputTokens")) oai_body["max_tokens"] = gc.at("maxOutputTokens");
+        if (gc.contains("stopSequences")) oai_body["stop"] = gc.at("stopSequences");
+        if (gc.contains("presencePenalty")) oai_body["presence_penalty"] = gc.at("presencePenalty");
+        if (gc.contains("frequencyPenalty")) oai_body["frequency_penalty"] = gc.at("frequencyPenalty");
+    }
+
+    return oai_body;
+}
