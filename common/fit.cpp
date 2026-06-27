@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
+LLAMA_API const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model);
 
 #include <regex>
 
