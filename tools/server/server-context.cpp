@@ -2796,7 +2796,7 @@ private:
                     const char * tmpl = params_base.chat_template.empty() ? nullptr : params_base.chat_template.c_str();
 
                     int32_t n_tokens = llama_steering_hint_prepare(
-                        model,
+                        model_tgt,
                         tmpl,
                         role.c_str(),
                         text.c_str(),
@@ -2819,7 +2819,7 @@ private:
                     // inject into KV cache
                     // position = -1 means inject at current max position (handled by core function)
                     int32_t rc = llama_steering_hint_inject(
-                        ctx,
+                        slot->ctx_tgt,
                         slot->id,
                         (llama_pos) position,
                         hint_tokens.data(),
