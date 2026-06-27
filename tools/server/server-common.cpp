@@ -817,9 +817,8 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtm
     return result;
 }
 
-// defined below (used by /chat/completions); forward-declared for the embedding path
-static void handle_media(std::vector<raw_buffer> & out_files, json & media_obj, const std::string & media_path);
-
+// defined below
+static void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path, bool accept_base64_uri);
 std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, mtmd_context * mctx, const json & body, const json & prompt, const std::string & media_path, const std::string & embd_prompt_text, const std::string & embd_prompt_image) {
     // Multimodal embedding inputs. Mirrors the chat-completion content-part handling
     // so /embedding + /v1/embeddings can embed images, not just text. A media marker
@@ -858,7 +857,8 @@ std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, m
             } else if (type == "image_url") {
                 require_mtmd();
                 json image_url = json_value(part, "image_url", json::object());
-                handle_media(files, image_url, media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(files, url, media_path, true);
                 text    += get_media_marker();
                 markers += get_media_marker();
             } else {

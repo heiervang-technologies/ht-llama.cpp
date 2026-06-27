@@ -242,7 +242,8 @@ void server_model_meta::update_caps() {
         common_params fit_params;
         preset.apply_to_params(fit_params);
         fit_params.offline = true;
-        common_params_handle_models(fit_params, LLAMA_EXAMPLE_SERVER);
+        common_models_handler fit_handler = common_models_handler_init(fit_params, LLAMA_EXAMPLE_SERVER);
+        common_models_handler_apply(fit_handler, fit_params);
 
         auto fitted = common_fit_params_from_common_params(fit_params);
         if (fitted.fit_status == COMMON_PARAMS_FIT_STATUS_SUCCESS) {
@@ -1181,7 +1182,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
                 if (child_proc->sproc.has_value()) {
                     subprocess_join(&child_proc->get(), &child_exit);
                 }
-                this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, child_exit);
+                this->update_status(name, {SERVER_MODEL_STATUS_UNLOADED, child_exit});
                 // Force the stdout pipe read end closed so log_thread's fgets() returns and
                 // the outer thread can proceed past log_thread.join().
                 if (child_proc->sproc.has_value() && child_proc->get().stdout_file) {
@@ -1378,30 +1379,7 @@ void server_models::wait_until_unloaded(const std::string & name) {
     });
 }
 
-void server_models::update_loaded_info(const std::string & name, std::string & raw_info) {
-    if (!string_starts_with(raw_info, CMD_CHILD_TO_ROUTER_INFO)) {
-        SRV_WRN("invalid loaded info format from child for model name=%s: %s\n", name.c_str(), raw_info.c_str());
-        return;
-    }
 
-    json info;
-    try {
-        info = json::parse(raw_info.substr(strlen(CMD_CHILD_TO_ROUTER_INFO)));
-    } catch (const std::exception & e) {
-        SRV_WRN("failed to parse loaded info from child for model name=%s: %s\n", name.c_str(), e.what());
-        return;
-    }
-
-    std::unique_lock<std::mutex> lk(mutex);
-    auto it = mapping.find(name);
-    if (it != mapping.end()) {
-        auto & meta = it->second.meta;
-        meta.loaded_info = info;
-    }
-    cv.notify_all();
-}
-
->>>>>>> 5c2961067 (feat(server): downstream router + heierchat + fit-params + hardening)
 void server_models::update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok) {
     json curr;
     {

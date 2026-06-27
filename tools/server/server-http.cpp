@@ -2,7 +2,7 @@
 #include "server-http.h"
 #include "server-stream.h"
 #include "server-common.h"
-#include "ui.h"
+
 
 #include <cpp-httplib/httplib.h>
 
@@ -183,9 +183,7 @@ bool server_http_context::init(const common_params & params) {
             "/v1/models",
             "/",
         };
-        for (const llama_ui_asset & a : llama_ui_get_assets()) {
-            endpoints.insert("/" + a.name);
-        }
+
         return endpoints;
     }();
 
@@ -400,15 +398,7 @@ bool server_http_context::init(const common_params & params) {
                 "build.json"
             };
 
-            for (const auto & a : llama_ui_get_assets()) {
-                if (a.name == "index.html") continue;  // served at "/" and "/index.html" above
-                if (no_cache_names.count(a.name)) {
-                    SRV_DBG("serve nocache for %s\n", a.name.c_str());
-                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_nocache(a.name));
-                } else {
-                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false));
-                }
-            }
+
 
 #endif
         }
