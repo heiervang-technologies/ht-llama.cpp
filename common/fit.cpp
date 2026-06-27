@@ -192,7 +192,7 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level,
+        size_t * margins_s, uint32_t /* n_ctx_min */, enum ggml_log_level log_level,
         std::vector<int64_t> * out_bytes_per_device) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
@@ -501,11 +501,11 @@ static void common_params_fit_impl(
                 int target_id = nd - 1;
                 if (il != -1) {
                     uint32_t current_il = hp_ngl + 1 - mparams_copy.n_gpu_layers;
-                    if (il < current_il) {
+                    if ((uint32_t)il < current_il) {
                         target_id = -1;
                     } else {
                         for (size_t id = 0; id < nd; id++) {
-                            if (il >= current_il && il < current_il + ngl_per_device[id].n_layer) {
+                            if ((uint32_t)il >= current_il && (uint32_t)il < current_il + ngl_per_device[id].n_layer) {
                                 target_id = id;
                                 break;
                             }
@@ -513,7 +513,7 @@ static void common_params_fit_impl(
                         }
                     }
                 } else {
-                    if (mparams_copy.n_gpu_layers <= hp_ngl) {
+                    if (mparams_copy.n_gpu_layers <= (int32_t)hp_ngl) {
                         target_id = -1;
                     }
                 }
