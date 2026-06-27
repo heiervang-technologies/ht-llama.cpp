@@ -1566,6 +1566,18 @@ std::string format_anthropic_sse(const json & data) {
     return ss.str();
 }
 
+std::string format_gemini_sse(const json & data) {
+    std::ostringstream ss;
+    if (data.is_array()) {
+        for (const auto & event : data) {
+            ss << "data: " << safe_json_to_str(event) << "\n\n";
+        }
+    } else {
+        ss << "data: " << safe_json_to_str(data) << "\n\n";
+    }
+    return ss.str();
+}
+
 bool is_valid_utf8(const std::string & str) {
     const unsigned char* bytes = reinterpret_cast<const unsigned char*>(str.data());
     const unsigned char* end = bytes + str.length();
