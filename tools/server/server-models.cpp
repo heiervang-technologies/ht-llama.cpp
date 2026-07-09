@@ -1542,7 +1542,10 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     }
     if (update_last_used) {
         std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
+        auto it = mapping.find(name);
+        if (it != mapping.end()) {
+            it->second.meta.last_used = ggml_time_ms();
+        }
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
