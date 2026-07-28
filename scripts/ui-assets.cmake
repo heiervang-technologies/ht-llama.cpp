@@ -28,57 +28,29 @@ set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
 
-function(assets_present out_var)
-    set(present TRUE)
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${DIST_DIR}/${asset}")
-            set(present FALSE)
-            break()
-        endif()
-    endforeach()
-    set(${out_var} ${present} PARENT_SCOPE)
-endfunction()
-
 function(copy_public_dist out_var)
-    # Priority 1: manual-override pre-built bundle at tools/server/public/.
-    # Not present on ht by default — the upstream llama.cpp UI is fetched
-    # from HF in priority 4. Drop assets here only for local experimentation.
     set(${out_var} FALSE PARENT_SCOPE)
 
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${PUBLIC_DIST_DIR}/${asset}")
-            return()
-        endif()
-    endforeach()
+    if(NOT EXISTS "${PUBLIC_DIST_DIR}/index.html")
+        return()
+    endif()
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
     message(STATUS "UI: using committed pre-built bundle from ${PUBLIC_DIST_DIR}")
-    foreach(asset ${ASSETS})
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${PUBLIC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
-        )
-    endforeach()
+    file(COPY "${PUBLIC_DIST_DIR}/" DESTINATION "${DIST_DIR}")
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
 function(copy_src_dist out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
-    foreach(asset ${ASSETS})
-        if(NOT EXISTS "${SRC_DIST_DIR}/${asset}")
-            return()
-        endif()
-    endforeach()
+    if(NOT EXISTS "${SRC_DIST_DIR}/index.html")
+        return()
+    endif()
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
     message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
-    foreach(asset ${ASSETS})
-        execute_process(
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${SRC_DIST_DIR}/${asset}" "${DIST_DIR}/${asset}"
-        )
-    endforeach()
+    file(COPY "${SRC_DIST_DIR}/" DESTINATION "${DIST_DIR}")
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
@@ -243,12 +215,6 @@ function(hf_download version out_var out_resolved)
 
     set(archive "${UI_BINARY_DIR}/dist.tar.gz")
 
-    # Use HF_TOKEN to benefit from higher rate limits
-    set(auth_headers "")
-    if(DEFINED ENV{HF_TOKEN} AND NOT "$ENV{HF_TOKEN}" STREQUAL "")
-        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{HF_TOKEN}")
-    endif()
-
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
         list(APPEND candidates "${version}")
@@ -260,23 +226,21 @@ function(hf_download version out_var out_resolved)
 
         message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
-        file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
-            STATUS status TIMEOUT 300 ${auth_headers}
+        execute_process(
+            COMMAND curl -L -s -f -o "${archive}" "${base}/dist.tar.gz?download=true"
+            RESULT_VARIABLE rc
         )
-        list(GET status 0 rc)
         if(NOT rc EQUAL 0)
-            list(GET status 1 errmsg)
-            message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
+            message(STATUS "UI: download dist.tar.gz from ${resolved} failed with exit code: ${rc}")
             continue()
         endif()
 
-        file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
-            STATUS status TIMEOUT 30 ${auth_headers}
+        execute_process(
+            COMMAND curl -L -s -f -o "${archive}.sha256" "${base}/dist.tar.gz.sha256?download=true"
+            RESULT_VARIABLE rc
         )
-        list(GET status 0 rc)
         if(NOT rc EQUAL 0)
-            list(GET status 1 errmsg)
-            message(STATUS "UI: download dist.tar.gz.sha256 from ${resolved} failed: ${errmsg}")
+            message(STATUS "UI: download dist.tar.gz.sha256 from ${resolved} failed with exit code: ${rc}")
             continue()
         endif()
 
@@ -354,7 +318,7 @@ endfunction()
 # ---------------------------------------------------------------------------
 copy_public_dist(PUBLIC_OK)
 if(PUBLIC_OK)
-    emit_files()
+    emit_files("${DIST_DIR}")
     return()
 endif()
 

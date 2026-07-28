@@ -1,0 +1,28 @@
+{
+  "_": "DFlash deployment-parity prompt suite. Greedy temp=0, max_new_tokens=128 (MT-Bench) / 256 (code+math).",
+  "_": "Same set runs on llama.cpp (scripts/bench-dflash-parity.sh) AND on vLLM/SGLang reference (snoop-kube).",
+  "_": "z-lab's published Gemma τ (conc=1, block=16, BF16): MT-Bench 4.23, HumanEval 8.00, GSM8K 7.53, MBPP 6.13, Math500 8.59.",
+  "_": "We use 5 representative prompts per class for statistical signal without bench-time blowup.",
+  "max_new_tokens_per_class": { "mt_bench": 128, "humaneval": 256, "gsm8k": 256 },
+  "block_size": 16,
+  "spec_draft_n_max": 15,
+  "prompts": [
+    { "id": "mt_bench_001", "class": "mt_bench", "text": "Compose an engaging travel blog post about a recent trip to Hawaii, highlighting cultural experiences and must-see attractions." },
+    { "id": "mt_bench_002", "class": "mt_bench", "text": "Draft a professional email seeking your supervisor's feedback on the 'Quarterly Financial Report' you prepared. Ask specifically about the data analysis, presentation style, and the clarity of conclusions drawn." },
+    { "id": "mt_bench_003", "class": "mt_bench", "text": "Imagine you are writing a blog post comparing two popular smartphone models. Develop an outline for the blog post, including key points and subheadings to effectively compare and contrast the features, performance, and user experience of the two models." },
+    { "id": "mt_bench_004", "class": "mt_bench", "text": "Pretend yourself to be Elon Musk in all the following conversations. Speak like Elon Musk as much as possible. Why do we need to go to Mars?" },
+    { "id": "mt_bench_005", "class": "mt_bench", "text": "Write a 50-word paragraph about speculative decoding." },
+
+    { "id": "humaneval_001", "class": "humaneval", "text": "Complete the Python function:\n\nfrom typing import List\n\ndef has_close_elements(numbers: List[float], threshold: float) -> bool:\n    \"\"\" Check if in given list of numbers, are any two numbers closer to each other than\n    given threshold.\n    >>> has_close_elements([1.0, 2.0, 3.0], 0.5)\n    False\n    >>> has_close_elements([1.0, 2.8, 3.0, 4.0, 5.0, 2.0], 0.3)\n    True\n    \"\"\"\n" },
+    { "id": "humaneval_002", "class": "humaneval", "text": "Complete the Python function:\n\ndef fibonacci(n: int) -> list[int]:\n    \"\"\"Return the first n Fibonacci numbers as a list.\n    >>> fibonacci(0)\n    []\n    >>> fibonacci(5)\n    [0, 1, 1, 2, 3]\n    \"\"\"\n" },
+    { "id": "humaneval_003", "class": "humaneval", "text": "Complete the Python function:\n\ndef is_palindrome(s: str) -> bool:\n    \"\"\"Return True if the string s is a palindrome (ignoring case and non-alphanumerics).\n    >>> is_palindrome(\"A man, a plan, a canal: Panama\")\n    True\n    >>> is_palindrome(\"race a car\")\n    False\n    \"\"\"\n" },
+    { "id": "humaneval_004", "class": "humaneval", "text": "Complete the Python function:\n\ndef merge_sorted(a: list[int], b: list[int]) -> list[int]:\n    \"\"\"Merge two sorted lists into a single sorted list in O(len(a)+len(b)).\n    >>> merge_sorted([1, 3, 5], [2, 4, 6])\n    [1, 2, 3, 4, 5, 6]\n    \"\"\"\n" },
+    { "id": "humaneval_005", "class": "humaneval", "text": "Complete the Python function:\n\ndef count_vowels(s: str) -> int:\n    \"\"\"Return the number of vowels (a, e, i, o, u, case-insensitive) in s.\n    >>> count_vowels(\"Hello, World!\")\n    3\n    \"\"\"\n" },
+
+    { "id": "gsm8k_001", "class": "gsm8k", "text": "Question: Natalia sold clips to 48 of her friends in April, and then she sold half as many clips in May. How many clips did Natalia sell altogether in April and May?\nAnswer: Let's think step by step.\n" },
+    { "id": "gsm8k_002", "class": "gsm8k", "text": "Question: Weng earns $12 an hour for babysitting. Yesterday, she just did 50 minutes of babysitting. How much did she earn?\nAnswer: Let's think step by step.\n" },
+    { "id": "gsm8k_003", "class": "gsm8k", "text": "Question: Betty is saving money for a new wallet which costs $100. Betty has only half of the money she needs. Her parents decided to give her $15 for that purpose, and her grandparents twice as much as her parents. How much more money does Betty need to buy the wallet?\nAnswer: Let's think step by step.\n" },
+    { "id": "gsm8k_004", "class": "gsm8k", "text": "Question: Julie is reading a 120-page book. Yesterday, she was able to read 12 pages and today, she read twice as many pages as yesterday. If she wants to read half of the remaining pages tomorrow, how many pages should she read?\nAnswer: Let's think step by step.\n" },
+    { "id": "gsm8k_005", "class": "gsm8k", "text": "Question: James writes a 3-page letter to 2 different friends twice a week. How many pages does he write a year?\nAnswer: Let's think step by step.\n" }
+  ]
+}

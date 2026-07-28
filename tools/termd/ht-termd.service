@@ -1,0 +1,37 @@
+# Systemd user unit for ht-termd. Drop into
+#   ~/.config/systemd/user/ht-termd.service
+# then:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ht-termd
+#
+# `EnvironmentFile` reads `~/.config/ht-termd/env` for the two secrets
+# you don't want in the unit file: HT_TERMD_BIND (loopback vs 0.0.0.0)
+# and HT_TERMD_TOKEN (bearer). Example file:
+#
+#   HT_TERMD_BIND=0.0.0.0
+#   HT_TERMD_PORT=43127
+#   HT_TERMD_TOKEN=<paste a 64-hex secret>
+#
+# Anything tailnet-wide should set a token — the daemon warns loudly
+# at startup if you don't.
+
+[Unit]
+Description=ht-termd — sandbox terminal sidecar (gVisor + WS bridge)
+Documentation=https://github.com/heiervang-technologies/ht-llama.cpp/tree/ht/tools/termd
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The binary is built from the fork; adjust to wherever you checked
+# this repo out. `%h` is the user's $HOME.
+ExecStart=%h/ht/forks/ht-llama.cpp/tools/termd/target/release/ht-termd
+EnvironmentFile=-%h/.config/ht-termd/env
+Restart=on-failure
+RestartSec=5s
+# Keep logs readable in `journalctl --user -u ht-termd`.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
