@@ -287,6 +287,24 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+// TurboQuant blocks
+
+#define TBQ_BLK_SIZE 128
+
+// 3.125 bpw
+typedef struct {
+    uint8_t qs[TBQ_BLK_SIZE * 3 / 8];
+    ggml_half d;
+} block_tbq3_0;
+static_assert(sizeof(block_tbq3_0) == sizeof(ggml_half) + TBQ_BLK_SIZE * 3 / 8, "wrong tbq3_0 block size/padding");
+
+// 4.125 bpw
+typedef struct {
+    uint8_t qs[TBQ_BLK_SIZE / 2];
+    ggml_half d;
+} block_tbq4_0;
+static_assert(sizeof(block_tbq4_0) == sizeof(ggml_half) + TBQ_BLK_SIZE / 2, "wrong tbq4_0 block size/padding");
+
 //
 // Super-block quantization structures
 //

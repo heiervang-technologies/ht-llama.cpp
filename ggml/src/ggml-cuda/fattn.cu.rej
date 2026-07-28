@@ -1,0 +1,11 @@
+--- ggml/src/ggml-cuda/fattn.cu
++++ ggml/src/ggml-cuda/fattn.cu
+@@ -470,6 +500,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+         case GGML_TYPE_Q4_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_BF16:
++        case GGML_TYPE_TBQ3_0:
++        case GGML_TYPE_TBQ4_0:
+             break;
+         default:
+             return BEST_FATTN_KERNEL_NONE;
