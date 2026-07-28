@@ -1,0 +1,59 @@
+{
+  "bench_id": "gemma4-12b-qat-mtp-pascal-p5200",
+  "host": "crystal",
+  "gpu": "Quadro P5200 (GP104, sm_61, 16257 MiB)",
+  "build_commit": "4d04cbc + LLAMA_BUILD_SERVER=ON re-configure",
+  "binary": "/opt/ht-llama-cuda/bin/llama serve",
+  "base_model": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+  "draft_model": "gemma-4-12B-it-qat-assistant-MTP-Q8_0.gguf",
+  "bench_date": "2026-06-09",
+  "methodology_shared": {
+    "sampling": "greedy (temperature=0, top_k=1)",
+    "flash_attention": "on",
+    "ngl": 99,
+    "ngld": 99,
+    "ctx_size": 4096,
+    "spec_draft_n_max": 16,
+    "spec_draft_p_min": 0.9,
+    "reps": 3
+  },
+  "regime_1_ceiling": {
+    "label": "greedy, DEGENERATE output (0×128) — upper-bound only",
+    "endpoint": "/completion",
+    "n_predict": 128,
+    "completion_content": "0×128+\\n",
+    "completion_sha256": "f86e07cb8add90146925767fa69f81e810fdffa292d66458098e92c689533379",
+    "bit_identical_A_vs_B": true,
+    "A_tps_avg": 25.257309811974594,
+    "B_tps_avg": 103.71955546518778,
+    "speedup": 4.106516340707588,
+    "draft_accept_rate": 1.0,
+    "note": "100% accept by construction — draft trivially predicts the next 0. Not a deployment number."
+  },
+  "regime_2_representative": {
+    "label": "greedy, non-degenerate output — REPRESENTATIVE single greedy speedup",
+    "endpoint": "/v1/chat/completions",
+    "max_tokens": 256,
+    "completion_tokens": 256,
+    "chat_template_quirk": "content field returned empty despite 256 tokens generated — Gemma4 it chat-template artifact in /v1/chat/completions; throughput + accept-rate measurement remains sound since predicted_n=256 and draft_n=295 are real",
+    "bit_identical_A_vs_B": true,
+    "A_tps_avg": 25.166343263339815,
+    "B_tps_avg": 76.0543180384133,
+    "speedup": 3.022064717252854,
+    "draft_n": 295,
+    "draft_n_accepted": 225,
+    "draft_accept_rate": 0.7627118644067796,
+    "note": "Representative greedy MTP speedup on Pascal. Real sampling will land below this."
+  },
+  "regime_3_titan_memory_ref": {
+    "label": "titan default sampling — deployment point (recorded in memory, not re-measured)",
+    "speedup": 1.66,
+    "decode_improvement": "+9-13% per memory project_gemma4_mtp_merge_2026_06_07",
+    "note": "Different bench framing; not paired with this Pascal run."
+  },
+  "engagement_proof": {
+    "canonical_read": "server stderr — `draft acceptance` line + `statistics draft-mtp: ...` summary",
+    "pitfall": "/props default_generation_settings.params[\"speculative.types\"] is per-REQUEST sampler default, NOT server engine state — reads `none` even when MTP is engaged. Misleading.",
+    "spec_type_footgun": "Default --spec-type=none means -md is silently ignored. Must pass --spec-type draft-mtp explicitly."
+  }
+}
