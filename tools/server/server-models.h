@@ -84,7 +84,8 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
+    bool need_download = false; // whether the model needs to be downloaded before loading
+    std::vector<int64_t> per_device_bytes; // per-device VRAM footprint plan (in bytes)
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -105,6 +106,15 @@ struct server_model_meta {
 struct server_models_routes;
 struct server_subproc; // defined in server-models.cpp
 
+// Thrown when a model that is listed in /v1/models can't be loaded right now
+// (memory pressure, contention, eviction policy). Distinct from std::runtime_error
+// so the HTTP wrapper can map it to 503 Service Unavailable instead of 500 —
+// the request was well-formed and the model exists; the failure is transient.
+// See heiervang-technologies/ht-llama.cpp#41.
+struct model_unavailable_error : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct server_models {
     friend struct server_models_routes;
 
@@ -118,6 +128,8 @@ private:
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
+    std::map<std::string, std::string> alias_to_name;
+
 
     // for stopping models
     std::condition_variable cv_stop;
@@ -191,10 +203,13 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> discovered_adapters;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
-    // unload least recently used models if the limit is reached
-    void unload_lru();
+    // unload least recently used models if the limit is reached or memory is tight
+    void unload_lru(const std::string & candidate_name);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
@@ -232,6 +247,14 @@ public:
         std::optional<server_model_meta> custom_meta = std::nullopt;
     };
 
+    // return discovered LoRA adapters from models directory
+    std::vector<common_lora_adapter_info> get_discovered_adapters();
+
+    // resolve the "any" sentinel: pick a model that is currently resident in memory.
+    // prefers LOADED over SLEEPING, and within each tier picks the most-recently-used.
+    // returns the canonical model name, or empty string if nothing is resident.
+    std::string pick_any_resident();
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
@@ -239,6 +262,17 @@ public:
     void unload(const std::string & name);
     void unload_all();
 
+    // download a new model, progress is reported via SSE
+    // to stop the download, call unload()
+    void download(common_params_model && model, common_download_opts && opts);
+
+    // block until the model is loaded or failed
+    void wait_until_ready(const std::string & name);
+
+    // block until the model is unloaded
+    void wait_until_unloaded(const std::string & name);
+
+    // update the status of a model instance (thread-safe)
     struct update_status_args {
         server_model_status status;
         int exit_code = 0; // only valid if status == UNLOADED

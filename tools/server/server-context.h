@@ -51,6 +51,18 @@ struct server_context_meta {
     uint64_t model_n_params;
     uint64_t model_size;
     std::string model_ftype;
+    // KV-cache geometry + configured cache quant, so clients can compute exact
+    // KV bytes per token = n_layer * (n_embd_k_gqa + n_embd_v_gqa) * kv_type_size.
+    int32_t model_n_layer;
+    int32_t model_n_head;
+    int32_t model_n_head_kv;
+    std::string cache_type_k;
+    std::string cache_type_v;
+    // SWA geometry so clients can compute exact KV for hybrid models
+    // (gemma-4 etc.) where SWA layers cap KV at min(ctx, n_swa).
+    int32_t     model_n_swa;
+    int32_t     model_n_swa_layers;
+    std::string model_swa_type;
 };
 
 enum server_state {
@@ -144,6 +156,8 @@ struct server_routes {
     server_http_context::handler_t post_transcriptions_oai;
     server_http_context::handler_t post_anthropic_messages;
     server_http_context::handler_t post_anthropic_count_tokens;
+    server_http_context::handler_t post_gemini_generate_content;
+    server_http_context::handler_t post_gemini_count_tokens;
     server_http_context::handler_t post_apply_template;
     server_http_context::handler_t get_models;
     server_http_context::handler_t post_tokenize;
@@ -153,10 +167,10 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
-
     // to be used in router mode
     json get_model_info() const;
 
+    server_http_context::handler_t post_steering_inject;
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,

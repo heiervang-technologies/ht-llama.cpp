@@ -85,6 +85,10 @@ std::string gen_tool_call_id() {
     return random_string();
 }
 
+std::string gen_rerankid() {
+    return "rerank-" + random_string();
+}
+
 const char * get_media_marker() {
     static const std::string marker = []() {
         // allow user to pin a reproducible marker via env var
@@ -548,6 +552,37 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     return true;
 }
 
+int32_t server_tokens::process_chunk(
+            llama_context * ctx,
+            mtmd_context * mctx,
+            size_t idx,
+            llama_pos pos,
+            int32_t seq_id,
+            size_t & n_tokens_out) const {
+    const auto & chunk = find_chunk(idx);
+    const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
+                        ? "image" : "audio";
+    SRV_INF("processing %s...\n", name);
+    int32_t n_batch = llama_n_batch(ctx);
+    int64_t t0 = ggml_time_ms();
+    llama_pos new_n_past; // unused for now
+    int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
+        chunk.get(),
+        pos,
+        seq_id,
+        n_batch,
+        true, // logits last
+        &new_n_past);
+    SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+    if (result != 0) {
+        LOG_ERR("mtmd_helper_eval failed with status %d", result);
+        n_tokens_out = 0;
+        return result;
+    }
+    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+    return 0;
+}
+
 server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
@@ -783,6 +818,105 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtm
     return result;
 }
 
+// defined below
+static void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path, bool accept_base64_uri);
+std::vector<server_tokens> tokenize_embedding_input(const llama_vocab * vocab, mtmd_context * mctx, const json & body, const json & prompt, const std::string & media_path, const std::string & embd_prompt_text, const std::string & embd_prompt_image) {
+    // Multimodal embedding inputs. Mirrors the chat-completion content-part handling
+    // so /embedding + /v1/embeddings can embed images, not just text. A media marker
+    // is injected into the text (one per image) so mtmd_tokenize() splices the image
+    // tokens in the right place — without it tokenization fails with "number of
+    // bitmaps does not match number of markers". Supported shapes:
+    //   - OAI content-parts: "input": [{"type":"text","text":"..."},
+    //                                  {"type":"image_url","image_url":{"url":"data:..."}}]
+    //   - legacy field:      {"content":"...", "image_data":[{"data":"<b64>","id":0}]}
+    //
+    // When embd_prompt_{text,image} are set, they wrap the input (instruction + chat
+    // template): {content} -> request text, {media} -> the marker(s). The image wrapper
+    // ignores the request text entirely (so e.g. an empty or stray content can't leak in).
+    // Empty wrappers => raw input (legacy behavior).
+    const auto require_mtmd = [&]() {
+        if (mctx == nullptr) {
+            throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+        }
+    };
+    const auto subst = [](std::string s, const std::string & from, const std::string & to) {
+        for (size_t p = s.find(from); p != std::string::npos; p = s.find(from, p + to.size())) {
+            s.replace(p, from.size(), to);
+        }
+        return s;
+    };
+
+    // (a) OAI content-parts array: a single (possibly multimodal) input.
+    if (prompt.is_array() && !prompt.empty() && prompt.front().is_object() && prompt.front().contains("type")) {
+        std::string text;
+        std::string markers;
+        std::vector<raw_buffer> files;
+        for (const auto & part : prompt) {
+            const std::string type = json_value(part, "type", std::string());
+            if (type == "text") {
+                text += json_value(part, "text", std::string());
+            } else if (type == "image_url") {
+                require_mtmd();
+                json image_url = json_value(part, "image_url", json::object());
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(files, url, media_path, true);
+                text    += get_media_marker();
+                markers += get_media_marker();
+            } else {
+                throw std::invalid_argument("unsupported content[].type for embeddings: " + type);
+            }
+        }
+        std::vector<server_tokens> result;
+        if (!files.empty()) {
+            const std::string str = embd_prompt_image.empty() ? text : subst(embd_prompt_image, "{media}", markers);
+            result.push_back(process_mtmd_prompt(mctx, str, files));
+            return result;
+        }
+        // text-only content-parts
+        const std::string str = embd_prompt_text.empty() ? text : subst(embd_prompt_text, "{content}", text);
+        return tokenize_input_prompts(vocab, mctx, json(str), true, true);
+    }
+
+    // (b) legacy "image_data" sibling field, with "content"/"input" as the text.
+    if (body.contains("image_data") && body.at("image_data").is_array() && !body.at("image_data").empty()) {
+        require_mtmd();
+        if (!prompt.is_string() && !prompt.is_null()) {
+            throw std::invalid_argument("\"content\" must be a string when \"image_data\" is provided");
+        }
+        std::string markers;
+        std::vector<raw_buffer> files;
+        for (const auto & entry : body.at("image_data")) {
+            files.push_back(base64_decode(json_value(entry, "data", std::string())));
+            markers += get_media_marker();
+        }
+        const std::string base = prompt.is_string() ? prompt.get<std::string>() : std::string();
+        const std::string str  = embd_prompt_image.empty() ? (markers + base) : subst(embd_prompt_image, "{media}", markers);
+        std::vector<server_tokens> result;
+        result.push_back(process_mtmd_prompt(mctx, str, files));
+        return result;
+    }
+
+    // (c) text-only with a text wrapper: wrap a single string, or each element of a
+    //     string batch ("input": ["a", "b"]).
+    if (!embd_prompt_text.empty()) {
+        if (prompt.is_string()) {
+            return tokenize_input_prompts(vocab, mctx, json(subst(embd_prompt_text, "{content}", prompt.get<std::string>())), true, true);
+        }
+        if (prompt.is_array() && !prompt.empty() && json_is_array_of_mixed_numbers_strings(prompt) == false) {
+            bool all_strings = true;
+            for (const auto & e : prompt) { if (!e.is_string()) { all_strings = false; break; } }
+            if (all_strings) {
+                json wrapped = json::array();
+                for (const auto & e : prompt) { wrapped.push_back(subst(embd_prompt_text, "{content}", e.get<std::string>())); }
+                return tokenize_input_prompts(vocab, mctx, wrapped, true, true);
+            }
+        }
+    }
+
+    // default: raw input (also handles token-list arrays / object shapes unchanged).
+    return tokenize_input_prompts(vocab, mctx, prompt, true, true);
+}
+
 //
 // OAI utils
 //
@@ -962,6 +1096,10 @@ json oaicompat_chat_params_parse(
     }
     for (auto & msg : messages) {
         std::string role = json_value(msg, "role", std::string());
+        if (opt.remap_developer_role && role == "developer") {
+            msg["role"] = "system";
+            role = "system";
+        }
         if (role != "assistant" && !msg.contains("content")) {
             throw std::invalid_argument("All non-assistant messages must contain 'content'");
         }
@@ -1218,7 +1356,11 @@ json format_response_rerank(
         std::vector<std::string> & texts,
         int top_n) {
     int32_t n_tokens = 0;
-    bool return_text = is_tei_format && json_value(request, "return_text", false);
+    // TEI uses `return_text` on items; HT-compat / Cohere uses
+    // `return_documents` with the document text echoed at
+    // results[].document.text. Honor both shapes per-format.
+    bool return_text      = is_tei_format && json_value(request, "return_text", false);
+    bool return_documents = !is_tei_format && json_value(request, "return_documents", false);
     std::vector<json> elements; // Temporary vector to hold unsorted elements
     std::string score_label = is_tei_format ? "score" : "relevance_score";
     for (const auto & rank : ranks) {
@@ -1230,6 +1372,9 @@ json format_response_rerank(
         n_tokens += json_value(rank, "tokens_evaluated", 0);
         if (return_text) {
             elem["text"] = std::move(texts[index]);
+        }
+        if (return_documents) {
+            elem["document"] = json{{"text", texts[index]}};
         }
         elements.push_back(elem);
     }
@@ -1244,6 +1389,7 @@ json format_response_rerank(
     if (is_tei_format) return results;
 
     json res = json{
+        {"id", gen_rerankid()},
         {"model", json_value(request, "model", model_name)},
         {"object", "list"},
         {"usage", json{
@@ -1261,13 +1407,18 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
+server_token_probs get_token_probabilities(llama_context * ctx, int idx, llama_token sampled, size_t n_top) {
+    server_token_probs res;
+
     std::vector<llama_token_data> cur;
 
     const auto * logits = llama_get_logits_ith(ctx, idx);
     const llama_token * sampled_ids = llama_get_sampled_candidates_ith(ctx, idx);
 
     const int n_logits = llama_get_sampled_logits_count_ith(ctx, idx);
+    if (n_logits <= 0) {
+        return res;
+    }
 
     cur.resize(n_logits);
     if (sampled_ids) {
@@ -1280,37 +1431,47 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
         }
     }
 
-    // sort tokens by logits (partial: only the leading `n_top` need ordering)
-    if (n_top > cur.size()) {
-        n_top = cur.size();
-    }
-    if (n_top > 0) {
-        std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(),
-            [](const llama_token_data & a, const llama_token_data & b) {
-                return a.logit > b.logit;
-            });
-    }
-
-    // apply softmax
-    float max_l = -std::numeric_limits<float>::infinity();
-    if (n_top > 0) {
-        max_l = cur[0].logit; // partial_sort guarantees the absolute maximum is at index 0
-    } else {
-        for (const auto & t : cur) {
-            max_l = std::max(max_l, t.logit);
-        }
+    // softmax normalization constants over all logits in O(n) - no need to sort the entire vocabulary:
+    float max_l = cur[0].logit;
+    for (int i = 1; i < n_logits; i++) {
+        max_l = std::max(max_l, cur[i].logit);
     }
     float cum_sum = 0.0f;
-    for (auto & t : cur) {
-        float p = expf(t.logit - max_l);
-        t.p = p;
-        cum_sum += p;
-    }
-    for (auto & t : cur) {
-        t.p /= cum_sum;
+    for (int i = 0; i < n_logits; i++) {
+        cum_sum += expf(cur[i].logit - max_l);
     }
 
-    return cur;
+    // probability of the sampled token:
+    if (!sampled_ids) {
+        if (sampled >= 0 && sampled < n_logits) {
+            res.sampled_p     = expf(cur[sampled].logit - max_l) / cum_sum;
+            res.sampled_found = true;
+        }
+    } else {
+        for (int i = 0; i < n_logits; i++) {
+            if (cur[i].id == sampled) {
+                res.sampled_p     = expf(cur[i].logit - max_l) / cum_sum;
+                res.sampled_found = true;
+                break;
+            }
+        }
+    }
+
+    // only the top n_top tokens are needed - select and sort just those:
+    n_top = std::min(n_top, cur.size());
+    std::partial_sort(cur.begin(), cur.begin() + n_top, cur.end(), [](const llama_token_data & a, const llama_token_data & b) {
+        return a.logit > b.logit;
+    });
+    cur.resize(n_top);
+
+    // apply softmax to the top tokens
+    for (size_t i = 0; i < cur.size(); ++i) {
+        cur[i].p = expf(cur[i].logit - max_l) / cum_sum;
+    }
+
+    res.top = std::move(cur);
+
+    return res;
 }
 
 std::string safe_json_to_str(const json & data) {
@@ -1412,6 +1573,18 @@ std::string format_anthropic_sse(const json & data) {
         send_event(data);
     }
 
+    return ss.str();
+}
+
+std::string format_gemini_sse(const json & data) {
+    std::ostringstream ss;
+    if (data.is_array()) {
+        for (const auto & event : data) {
+            ss << "data: " << safe_json_to_str(event) << "\n\n";
+        }
+    } else {
+        ss << "data: " << safe_json_to_str(data) << "\n\n";
+    }
     return ss.str();
 }
 

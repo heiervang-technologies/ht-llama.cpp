@@ -11,6 +11,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1130,8 +1131,19 @@ private:
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
-                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
-                            has_draft ? "draft model" : "MTP context", e.what());
+                    // Some arches (e.g. Gemma4Assistant) self-identify as "normal during
+                    // memory fitting" because their init requires ctx_other which can't
+                    // exist before the target is loaded. Downgrade those to DBG to avoid
+                    // a misleading "failed" warning on every load. See upstream TODO at
+                    // src/llama-context.cpp around the GEMMA4_ASSISTANT ctx_other check.
+                    const std::string msg = e.what();
+                    if (msg.find("normal during memory fitting") != std::string::npos) {
+                        SRV_DBG("[spec] skipping memory measurement of %s (benign): %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    } else {
+                        SRV_WRN("[spec] failed to measure %s memory: %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    }
                 }
             }
         }
@@ -1164,6 +1176,18 @@ private:
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
         if (has_spec) {
+            // DFlash extracts target hidden states into a single ctx_tgt-scoped buffer
+            // (dflash.target_features). Under continuous batching with n_parallel > 1,
+            // multiple slots co-decode in one batched llama_decode() call and their
+            // features interleave in that buffer, so per-slot draft() reads garbage.
+            // Until target_features is keyed per seq_id, refuse to start.
+            if (params_base.speculative.dflash && params_base.n_parallel > 1) {
+                SRV_ERR("DFlash speculative decoding requires --parallel 1 (got --parallel %d); "
+                        "multi-slot continuous batching is not yet supported by the dflash feature buffer\n",
+                        params_base.n_parallel);
+                return false;
+            }
+
             // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
             load_progress_callback(0.0f, &load_progress_spec);
             load_progress_spec.t_last_load_progress_ms = 0;  // reset so internal cbs aren't delayed
@@ -1469,6 +1493,7 @@ private:
             //            as they may be invalidated after sleeping
             chat_params = {
                 /* use_jinja             */ params_base.use_jinja,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* prefill_assistant     */ params_base.prefill_assistant,
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
@@ -1616,6 +1641,30 @@ private:
 
             // cache prompts only for completion tasks
             update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
+
+            // DFlash + prompt cache reuse causes drafter NaN logits.
+            //
+            // Background: prompt cache restores the target's KV state for cached prefix tokens
+            // via llama_state_seq_set_data_ext, but DOES NOT re-extract dflash target features
+            // for those positions. After restore, only NEW tokens get decoded → only NEW token
+            // features end up in ctx_tgt's dflash.target_features buffer.
+            //
+            // Then dflash impl's draft() reads `n_new = n - dflash_n_past` features from that
+            // buffer, where `n_new` counts ALL prompt tokens (cached + new). The read overflows
+            // the buffer past its actual size (just the NEW token count) → out-of-bounds read
+            // → garbage features fed to drafter → NaN logits → 0% accept rate.
+            //
+            // Until the dflash impl learns to skip cached positions (or the cache restore path
+            // re-extracts features for them), the safest fix is to disable prompt cache reuse
+            // when this slot's task is configured for DFlash speculation. Performance impact:
+            // first request pays full prompt-eval cost; subsequent dflash requests already
+            // benefit from spec acceptance and don't strictly need prefix caching.
+            //
+            // Mission m-20260527-103737. Confirmed via cache_prompt=false workaround → 6.74%
+            // accept on the same request that hits 0% NaN with default cache_prompt=true.
+            if (params_base.speculative.dflash) {
+                update_cache = false;
+            }
 
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
@@ -1966,26 +2015,21 @@ private:
                 });
             }
         } else {
-            std::vector<llama_token_data> cur = get_token_probabilities(ctx_tgt, idx, n_probs_request);
-            const size_t max_probs = cur.size();
-            const size_t n_probs = std::min(max_probs, n_probs_request);
+            // TODO: optimize this with min-p optimization
+            const server_token_probs cur = get_token_probabilities(ctx_tgt, idx, result.tok, n_probs_request);
 
             // set probability for sampled token
-            for (size_t i = 0; i < max_probs; i++) {
-                // set probability for sampled token
-                if (cur[i].id == result.tok) {
-                    result.prob = cur[i].p;
-                    break;
-                }
+            if (cur.sampled_found) {
+                result.prob = cur.sampled_p;
             }
 
             // set probability for top n_probs tokens
-            result.probs.reserve(n_probs);
-            for (size_t i = 0; i < n_probs; i++) {
+            result.probs.reserve(cur.top.size());
+            for (const auto & td : cur.top) {
                 result.probs.push_back({
-                    cur[i].id,
-                    common_token_to_piece(ctx_tgt, cur[i].id, special),
-                    cur[i].p
+                    td.id,
+                    common_token_to_piece(ctx_tgt, td.id, special),
+                    td.p
                 });
             }
         }
@@ -2292,6 +2336,10 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+        if (params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
+
         const int id_task = slot.task->id;
 
         // evict checkpoints within min-step of a previous checkpoint, unless they were
@@ -2310,12 +2358,36 @@ private:
             ++it;
         }
 
-        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+        // Per-slot footprint accounting (issue #67): the count-only cap let a single slot
+        // accumulate ~20 GB of checkpoints under heierchat's long contexts, driving titan
+        // SystemOOM. The byte cap is FIFO-evicted alongside the count cap; whichever bites
+        // first is the active limit.
+        auto total_bytes = [&]() {
+            size_t b = 0;
+            for (const auto & ckpt : slot.prompt.checkpoints) {
+                b += ckpt.size();
+            }
+            return b;
+        };
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+        const size_t byte_cap =
+            (params_base.ctx_checkpoints_max_mib > 0)
+                ? (size_t) params_base.ctx_checkpoints_max_mib * 1024 * 1024
+                : 0; // 0 → byte cap disabled, count-only behavior
+
+        auto over_count = [&]() {
+            return slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints;
+        };
+        auto over_bytes = [&]() {
+            return byte_cap > 0 && !slot.prompt.checkpoints.empty() && total_bytes() >= byte_cap;
+        };
+
+        while (over_count() || over_bytes()) {
+            const auto & front = slot.prompt.checkpoints.front();
+            const char * reason = (over_bytes() && !over_count()) ? "bytes" : "count";
+
+            SLT_WRN(slot, "erasing old context checkpoint (reason=%s, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    reason, front.pos_min, front.pos_max, front.n_tokens, (float) front.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
@@ -2334,10 +2406,12 @@ private:
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
 
-        SLT_TRC(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+        SLT_INF(slot,
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, slot total = %.3f MiB / %d MiB cap)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024,
+                (float) total_bytes() / 1024 / 1024,
+                params_base.ctx_checkpoints_max_mib);
     }
 
     void process_single_task(server_task && task) {
@@ -2661,6 +2735,79 @@ private:
                     params_base.lora_adapters = new_loras;
                     auto res = std::make_unique<server_task_result_apply_lora>();
                     res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_STEERING_INJECT:
+                {
+                    const int id_slot = task.steering_action.id_slot;
+                    server_slot * slot = get_slot_by_id(id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot->state != SLOT_STATE_GENERATING) {
+                        send_error(task, "Slot is not in generating state", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const std::string & text = task.steering_action.text;
+                    const std::string & role = task.steering_action.role;
+                    const int32_t position   = task.steering_action.position;
+
+                    // prepare (wrap + tokenize) the steering hint
+                    const int32_t max_tokens = 1024;
+                    std::vector<llama_token> hint_tokens(max_tokens);
+
+                    const char * tmpl = params_base.chat_template.empty() ? nullptr : params_base.chat_template.c_str();
+
+                    int32_t n_tokens = llama_steering_hint_prepare(
+                        model_tgt,
+                        tmpl,
+                        role.c_str(),
+                        text.c_str(),
+                        hint_tokens.data(),
+                        max_tokens);
+
+                    if (n_tokens < 0) {
+                        send_error(task, "Failed to prepare steering hint (token buffer too small or tokenization error)", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    hint_tokens.resize(n_tokens);
+
+                    // check that injection won't exceed context size
+                    if (slot->prompt.n_tokens() + n_tokens >= slot->n_ctx) {
+                        send_error(task, "Steering hint would exceed context size", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    // inject into KV cache
+                    // position = -1 means inject at current max position (handled by core function)
+                    int32_t rc = llama_steering_hint_inject(
+                        slot->ctx_tgt,
+                        slot->id,
+                        (llama_pos) position,
+                        hint_tokens.data(),
+                        n_tokens);
+
+                    if (rc != 0) {
+                        send_error(task, "Failed to inject steering hint into KV cache", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    // Update the slot's token tracking to reflect the injected tokens
+                    // This ensures pos_next() returns the correct position for subsequent generation
+                    for (int32_t i = 0; i < n_tokens; i++) {
+                        slot->prompt.tokens.push_back(hint_tokens[i]);
+                    }
+
+                    SLT_INF(*slot, "steering hint injected: %d tokens at pos %d, role=%s\n",
+                        n_tokens, position, role.c_str());
+
+                    auto res = std::make_unique<server_task_result_steering_inject>();
+                    res->id         = task.id;
+                    res->id_slot    = id_slot;
+                    res->n_injected = n_tokens;
                     queue_results.send(std::move(res));
                 } break;
         }
@@ -3149,7 +3296,17 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            // DFlash + per-slot prompt reuse causes drafter NaN logits. Same
+                            // bug class as the prompt_cache gate above: any path that lets the
+                            // target skip decoding cached prefix tokens means the dflash feature
+                            // buffer only has features for the NEW tokens, but the drafter still
+                            // reads n_new = n_total - dflash_n_past entries -> OOB read -> NaN.
+                            // The auto-gate at the prompt_cache load site only covers one of two
+                            // cache mechanisms. This per-slot prompt-token-reuse path (different
+                            // from the global server_prompt_cache) also has to be force-disabled
+                            // when DFlash is on. Mission m-20260527-103737.
+                            const bool dflash_active = params_base.speculative.dflash;
+                            if (slot.task->params.cache_prompt && !dflash_active) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -3304,6 +3461,25 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
+                                    // DFlash + checkpoint restore is the third cache mechanism in the
+                                    // same bug class as the prompt_cache + per-slot reuse gates above.
+                                    // load_tgt restores the target's KV state for cached positions,
+                                    // but does NOT re-extract dflash target features for them. The
+                                    // subsequent decode only fills features for [n_past..n_total),
+                                    // while the drafter reads n_new = n_total - dflash_n_past entries
+                                    // (with dflash_n_past=0 right after common_speculative_begin) →
+                                    // OOB read past end of buffer → NaN logits → 0% accept.
+                                    //
+                                    // Rarely reachable with --parallel >= 4 (requests spread across
+                                    // slots, fewer checkpoints per slot), but trivially fires under
+                                    // --parallel 1 + repeated-prompt traffic. Force a full re-prefill
+                                    // when dflash is active. Mission m-20260527-103737, verified on
+                                    // titan with default cache_prompt:true going from 0/873 -> 96/1179
+                                    // (8.14%) accept on the chat-completions smoke after this gate.
+                                    if (params_base.speculative.dflash) {
+                                        do_reset = true;
+                                    }
+
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -3433,6 +3609,17 @@ private:
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
+                        }
+
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft.get()) != ctx_tgt) {
+                            // TODO: in the future, figure out how to infuse target embeddings to the images
+                            //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
+                            res = input_tokens.process_chunk(ctx_dft.get(), mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
@@ -4001,6 +4188,14 @@ server_context_meta server_context::get_meta() const {
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
         /* model_ftype            */ ftype_name,
+        /* model_n_layer          */ llama_model_n_layer(impl->model_tgt),
+        /* model_n_head           */ llama_model_n_head(impl->model_tgt),
+        /* model_n_head_kv        */ llama_model_n_head_kv(impl->model_tgt),
+        /* cache_type_k           */ ggml_type_name(impl->params_base.cache_type_k),
+        /* cache_type_v           */ ggml_type_name(impl->params_base.cache_type_v),
+        /* model_n_swa            */ llama_model_n_swa(impl->model_tgt),
+        /* model_n_swa_layers     */ llama_model_n_swa_layers(impl->model_tgt),
+        /* model_swa_type         */ llama_model_swa_type_name(impl->model_tgt),
     };
 }
 
@@ -4190,6 +4385,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             res->data = ""; // simply send HTTP headers and status code
         } else if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
+        } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+            res->data = format_gemini_sse(first_result_json);
         } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
             res->data = format_oai_resp_sse(first_result_json);
         } else {
@@ -4203,6 +4400,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     return format_anthropic_sse({
                         {"event", "error"},
                         {"data", res_json},
+                    });
+                } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                    return format_gemini_sse({
+                        {"error", res_json}
                     });
                 } else {
                     return format_oai_sse(json {{ "error", res_json }});
@@ -4234,6 +4435,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         case TASK_RESPONSE_TYPE_NONE:
                         case TASK_RESPONSE_TYPE_OAI_RESP:
                         case TASK_RESPONSE_TYPE_ANTHROPIC:
+                        case TASK_RESPONSE_TYPE_GEMINI:
                             output = "";
                             break;
 
@@ -4285,6 +4487,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
+                    } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                        output = format_gemini_sse(res_json);
                     } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
                         output = format_oai_resp_sse(res_json);
                     } else {
@@ -4813,6 +5017,34 @@ void server_routes::init_routes() {
         return handle_count_tokens(ctx_server.vocab, ctx_server.mctx, req, TASK_RESPONSE_TYPE_ANTHROPIC);
     };
 
+    this->post_gemini_generate_content = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = server_chat_convert_gemini_to_oai(json::parse(req.body));
+        
+        // Handle Gemini stream endpoint convention
+        if (req.path.find("streamGenerateContent") != std::string::npos) {
+            body["stream"] = true;
+        }
+
+        SRV_DBG("%s\n", "Request converted: Gemini -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_GEMINI);
+    };
+
+    this->post_gemini_count_tokens = [this](const server_http_req & req) {
+        return handle_count_tokens(ctx_server.vocab, ctx_server.mctx, req, TASK_RESPONSE_TYPE_GEMINI);
+    };
+
     // same with handle_chat_completions, but without inference part
     this->post_apply_template = [this](const server_http_req & req) {
         auto res = create_response();
@@ -5071,6 +5303,48 @@ void server_routes::init_routes() {
         res->ok(result->to_json());
         return res;
     };
+
+    this->post_steering_inject = [this](const server_http_req & req) {
+        auto res = create_response();
+        const json body = json::parse(req.body);
+
+        // validate required fields
+        if (!body.contains("id_slot") || !body["id_slot"].is_number_integer()) {
+            res->error(format_error_response("Missing or invalid 'id_slot' field", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (!body.contains("text") || !body["text"].is_string()) {
+            res->error(format_error_response("Missing or invalid 'text' field", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_STEERING_INJECT);
+            task.id = rd.get_new_id();
+            task.steering_action.id_slot  = body.at("id_slot").get<int>();
+            task.steering_action.text     = body.at("text").get<std::string>();
+            task.steering_action.role     = body.value("role", "system");
+            task.steering_action.position = body.value("position", -1);
+            rd.post_task(std::move(task));
+        }
+
+        // get the result
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_steering_inject*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
 }
 
 json server_routes::get_model_info() const {
@@ -5090,6 +5364,24 @@ json server_routes::get_model_info() const {
             {"n_params",    meta->model_n_params},
             {"size",        meta->model_size},
             {"ftype",       meta->model_ftype},
+            // KV-cache geometry + configured quant so clients can compute exact
+            // KV bytes/token = n_layer*(n_embd_k_gqa+n_embd_v_gqa)*kv_type_size.
+            // n_embd_{k,v}_gqa = n_head_kv * (n_embd/n_head) (head dims equal for
+            // all served models; the public API exposes n_head[_kv] not the gqa
+            // dims directly).
+            {"n_layer",       meta->model_n_layer},
+            {"n_head",        meta->model_n_head},
+            {"n_head_kv",     meta->model_n_head_kv},
+            {"n_embd_k_gqa",  meta->model_n_head > 0 ? (int64_t) meta->model_n_head_kv * meta->model_n_embd_inp / meta->model_n_head : 0},
+            {"n_embd_v_gqa",  meta->model_n_head > 0 ? (int64_t) meta->model_n_head_kv * meta->model_n_embd_inp / meta->model_n_head : 0},
+            {"cache_type_k",  meta->cache_type_k},
+            {"cache_type_v",  meta->cache_type_v},
+            // SWA geometry for exact KV prediction on hybrid models
+            // (gemma-4 etc.): n_full_layers = n_layer - n_swa_layers;
+            // SWA layers cap KV at min(ctx, n_swa) instead of ctx.
+            {"n_swa",         meta->model_n_swa},
+            {"n_swa_layers",  meta->model_n_swa_layers},
+            {"swa_type",      meta->model_swa_type},
         }},
     };
 }
@@ -5231,7 +5523,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+    auto tokenized_prompts = tokenize_embedding_input(ctx_server.vocab, ctx_server.mctx, body, prompt, params.media_path, params.embd_prompt_text, params.embd_prompt_image);
     for (const auto & tokens : tokenized_prompts) {
         // this check is necessary for models that do not add BOS token to the input
         if (tokens.empty()) {
@@ -5311,6 +5603,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             {
                 body = server_chat_convert_anthropic_to_oai(body);
+            } break;
+        case TASK_RESPONSE_TYPE_GEMINI:
+            {
+                body = server_chat_convert_gemini_to_oai(body);
             } break;
         default:
             res->error(format_error_response("invalid res_type", ERROR_TYPE_INVALID_REQUEST));
