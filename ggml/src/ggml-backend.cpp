@@ -754,7 +754,15 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 #ifndef GGML_SCHED_MAX_SPLIT_INPUTS
-#define GGML_SCHED_MAX_SPLIT_INPUTS 30
+// ht-llama.cpp: bumped from upstream's 30. Gemma-4-E4B's MatFormer-style
+// routed MoE blows past the old limit during scheduler split, firing
+// `GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS)` at load time.
+// Memory cost is two pointer arrays of this size inside each
+// `ggml_backend_sched_split` (~2 KB per split at 256), which is
+// negligible next to a single model weight tensor. Override with
+// `-DGGML_SCHED_MAX_SPLIT_INPUTS=<n>` at configure time if a future
+// model needs more headroom.
+#define GGML_SCHED_MAX_SPLIT_INPUTS 256
 #endif
 
 #ifndef GGML_SCHED_MAX_COPIES
