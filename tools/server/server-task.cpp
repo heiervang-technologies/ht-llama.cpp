@@ -360,6 +360,8 @@ json server_task_result_cmpl_final::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return stream ? to_json_gemini_stream() : to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -448,6 +450,63 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         msg.role = "assistant";
         msg.content = content;
     }
+
+    // HT: Fallback tool call parser for models that output {"name": ..., "arguments"|"parameters": ...}
+    // This catches tool calls that the PEG parser didn't handle (e.g. custom templates).
+    if (msg.tool_calls.empty() && !msg.content.empty()) {
+        auto trimmed = msg.content;
+        while (!trimmed.empty() && (trimmed.front() == ' ' || trimmed.front() == '\n')) trimmed.erase(trimmed.begin());
+        while (!trimmed.empty() && (trimmed.back() == ' ' || trimmed.back() == '\n')) trimmed.pop_back();
+        if (!trimmed.empty() && trimmed.front() == '{') {
+            // Try to parse each top-level JSON object as a tool call
+            size_t pos = 0;
+            while (pos < trimmed.size()) {
+                // Skip whitespace/newlines between objects
+                while (pos < trimmed.size() && (trimmed[pos] == ' ' || trimmed[pos] == '\n' || trimmed[pos] == '\r')) pos++;
+                if (pos >= trimmed.size() || trimmed[pos] != '{') break;
+
+                // Find matching closing brace
+                int depth = 0;
+                size_t start = pos;
+                for (size_t j = pos; j < trimmed.size(); j++) {
+                    if (trimmed[j] == '{') depth++;
+                    else if (trimmed[j] == '}') {
+                        depth--;
+                        if (depth == 0) {
+                            std::string candidate = trimmed.substr(start, j - start + 1);
+                            try {
+                                auto obj = json::parse(candidate);
+                                if (obj.contains("name")) {
+                                    common_chat_tool_call tc;
+                                    tc.name = obj["name"].get<std::string>();
+                                    // Accept both "arguments" and "parameters"
+                                    if (obj.contains("arguments")) {
+                                        tc.arguments = obj["arguments"].is_string()
+                                            ? obj["arguments"].get<std::string>()
+                                            : obj["arguments"].dump();
+                                    } else if (obj.contains("parameters")) {
+                                        tc.arguments = obj["parameters"].is_string()
+                                            ? obj["parameters"].get<std::string>()
+                                            : obj["parameters"].dump();
+                                    }
+                                    msg.tool_calls.push_back(tc);
+                                }
+                            } catch (...) {
+                                // Not valid JSON, skip
+                            }
+                            pos = j + 1;
+                            break;
+                        }
+                    }
+                }
+                if (depth != 0) break; // unmatched brace
+            }
+            if (!msg.tool_calls.empty()) {
+                msg.content.clear(); // Clear content since it's now in tool_calls
+            }
+        }
+    }
+
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
     }
@@ -562,6 +621,15 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         msg.content = content;
     }
 
+    // Propagate truncation to the OAI Responses status (issue #19): when the
+    // generation hit max_output_tokens / ctx limit, mark output items and the
+    // top-level response as "incomplete" with the reason. Otherwise agentic
+    // clients can't distinguish a finished response from a truncated one and
+    // end up retrying with the malformed/partial output in conversation
+    // history.
+    const bool is_incomplete = (stop == STOP_TYPE_LIMIT);
+    const char * item_status = is_incomplete ? "incomplete" : "completed";
+
     std::vector<json> output;
 
     if (msg.reasoning_content != "") {
@@ -574,7 +642,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
                 {"type", "reasoning_text"},
             }})},
             {"encrypted_content", ""},
-            {"status",            "completed"},
+            {"status",            item_status},
         });
     }
 
@@ -588,7 +656,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
             }})},
             {"id",     "msg_" + random_string()},
             {"role",   msg.role},
-            {"status", "completed"},
+            {"status", item_status},
             {"type",   "message"},
         });
     }
@@ -597,7 +665,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         output.push_back(json {
             {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    item_status},
             {"arguments", tool_call.arguments},
             {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name},
@@ -612,7 +680,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         {"model",        oaicompat_model},
         {"object",       "response"},
         {"output",       output},
-        {"status",       "completed"},
+        {"status",       is_incomplete ? "incomplete" : "completed"},
         {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
@@ -621,12 +689,22 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         }},
     };
 
+    if (is_incomplete) {
+        res["incomplete_details"] = json {{"reason", "max_output_tokens"}};
+    }
+
     return res;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     std::vector<json> server_sent_events;
     std::vector<json> output;
+
+    // See to_json_oaicompat_resp() for the issue-#19 background. Same mapping
+    // here so streaming clients see the truncation in the final
+    // response.completed event payload and on the per-item statuses.
+    const bool is_incomplete = (stop == STOP_TYPE_LIMIT);
+    const char * item_status = is_incomplete ? "incomplete" : "completed";
 
     if (oaicompat_msg.reasoning_content != "") {
         const json output_item = json {
@@ -677,7 +755,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         });
         const json output_item = {
             {"type",    "message"},
-            {"status",  "completed"},
+            {"status",  item_status},
             {"id",      oai_resp_message_id},
             {"content", json::array({content_part})},
             {"role",    "assistant"}
@@ -697,7 +775,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         const json output_item = {
             {"id",        "fc_" + tool_call.id},
             {"type",      "function_call"},
-            {"status",    "completed"},
+            {"status",    item_status},
             {"arguments", tool_call.arguments},
             {"call_id",   "call_" + tool_call.id},
             {"name",      tool_call.name}
@@ -713,24 +791,29 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     }
 
     std::time_t t = std::time(0);
+    json response_payload = json {
+        {"id",         oai_resp_id},
+        {"object",     "response"},
+        {"created_at", t},
+        {"status",     is_incomplete ? "incomplete" : "completed"},
+        {"model",      oaicompat_model},
+        {"output",     output},
+        {"usage",      json {
+            {"input_tokens",  n_prompt_tokens},
+            {"output_tokens", n_decoded},
+            {"total_tokens",  n_decoded + n_prompt_tokens},
+            {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
+        }}
+    };
+    if (is_incomplete) {
+        response_payload["incomplete_details"] = json {{"reason", "max_output_tokens"}};
+    }
+
     server_sent_events.push_back(json {
-        {"event", "response.completed"},
+        {"event", is_incomplete ? "response.incomplete" : "response.completed"},
         {"data", json {
-            {"type", "response.completed"},
-            {"response", json {
-                {"id",         oai_resp_id},
-                {"object",     "response"},
-                {"created_at", t},
-                {"status",     "completed"},
-                {"model",      oaicompat_model},
-                {"output",     output},
-                {"usage",      json {
-                    {"input_tokens",  n_prompt_tokens},
-                    {"output_tokens", n_decoded},
-                    {"total_tokens",  n_decoded + n_prompt_tokens},
-                    {"input_tokens_details", json { {"cached_tokens", n_prompt_tokens_cache} }},
-                }}
-            }},
+            {"type",     is_incomplete ? "response.incomplete" : "response.completed"},
+            {"response", response_payload},
         }}
     });
 
@@ -1069,6 +1152,8 @@ json server_task_result_cmpl_partial::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1633,6 +1718,13 @@ json server_task_result_apply_lora::to_json() {
     return json {{ "success", true }};
 }
 
+json server_task_result_steering_inject::to_json() {
+    return json {
+        { "success",    true },
+        { "n_injected", n_injected },
+    };
+}
+
 //
 // server_prompt_cache
 //
@@ -1844,4 +1936,123 @@ void server_prompt_cache::update() {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
+}
+
+json server_task_result_cmpl_final::to_json_gemini() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = oaicompat_msg.tool_calls.empty() ? "STOP" : "STOP";
+    }
+
+    json parts = json::array();
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "model";
+        msg.content = content;
+    }
+
+    if (!msg.reasoning_content.empty()) {
+        parts.push_back({
+            {"text", "```thinking\n" + msg.reasoning_content + "\n```\n"}
+        });
+    }
+
+    if (!msg.content.empty()) {
+        parts.push_back({
+            {"text", msg.content}
+        });
+    }
+
+    for (const auto & tool_call : msg.tool_calls) {
+        json tool_use_block = {
+            {"functionCall", {
+                {"name", tool_call.name}
+            }}
+        };
+
+        try {
+            tool_use_block["functionCall"]["args"] = json::parse(tool_call.arguments);
+        } catch (const std::exception &) {
+            tool_use_block["functionCall"]["args"] = json::object();
+        }
+
+        parts.push_back(tool_use_block);
+    }
+
+    json candidate = {
+        {"content", {
+            {"parts", parts},
+            {"role", "model"}
+        }},
+        {"finishReason", finish_reason},
+        {"index", 0}
+    };
+
+    json res = {
+        {"candidates", json::array({candidate})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_gemini_stream() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = "STOP";
+    }
+
+    return json::array({{
+        {"candidates", json::array({{
+            {"finishReason", finish_reason},
+            {"index", 0}
+        }})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    }});
+}
+
+json server_task_result_cmpl_partial::to_json_gemini() {
+    json chunks = json::array();
+    
+    for (const auto & diff : oaicompat_msg_diffs) {
+        json parts = json::array();
+        
+        if (!diff.reasoning_content_delta.empty()) {
+            parts.push_back({{"text", diff.reasoning_content_delta}});
+        }
+        if (!diff.content_delta.empty()) {
+            parts.push_back({{"text", diff.content_delta}});
+        }
+        if (diff.tool_call_index != std::string::npos) {
+            json fc = {{"name", diff.tool_call_delta.name}};
+            if (!diff.tool_call_delta.arguments.empty()) {
+                fc["args"] = diff.tool_call_delta.arguments; 
+            }
+            parts.push_back({{"functionCall", fc}});
+        }
+        
+        if (!parts.empty()) {
+            chunks.push_back({
+                {"candidates", json::array({{
+                    {"content", {
+                        {"parts", parts}, 
+                        {"role", "model"}
+                    }},
+                    {"index", 0}
+                }})}
+            });
+        }
+    }
+    
+    return chunks;
 }

@@ -319,6 +319,50 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
+def test_input_with_truncated_tool_call_arguments_returns_400():
+    # Regression for #19: when a tool_call in the input message history carries an
+    # `arguments` string that is invalid JSON — which happens when a prior response
+    # was truncated because the conversation hit the context-size limit — the server
+    # must answer with a 400 client error and an actionable hint, not a generic 500.
+    # A 500 traps agentic clients (Codex CLI etc.) in endless retry loops because the
+    # history only grows. The parse failure is raised in func_args_not_string()
+    # (common/chat.cpp), gated on the template advertising object-arguments support;
+    # the Hermes-2-Pro tool_use template does.
+    #
+    # The truncated call must be followed by a tool result + a fresh user turn: a
+    # *trailing* assistant tool_call is stripped by the continue-final-message path
+    # before func_args_not_string runs, so it would not exercise the bug.
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja'
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "tools": [TEST_TOOL],
+        "messages": [
+            {"role": "user", "content": "Call the test tool."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_truncated",
+                        "type": "function",
+                        "function": {
+                            "name": "test",
+                            "arguments": '{"success": tr',  # truncated mid-value: invalid JSON
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_truncated", "content": "ok"},
+            {"role": "user", "content": "continue"},
+        ],
+    })
+    assert res.status_code == 400, f"Expected 400, got {res.status_code}: {res.body}"
+    assert "context-size limit" in res.body["error"]["message"], res.body
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("template_name,n_predict,tools,tool_choice", [

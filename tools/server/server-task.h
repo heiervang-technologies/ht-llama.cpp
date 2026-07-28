@@ -27,6 +27,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_STEERING_INJECT,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -38,6 +39,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_OAI_ASR, // transcriptions API
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
+    TASK_RESPONSE_TYPE_GEMINI,
 };
 
 enum stop_type {
@@ -174,6 +176,15 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
+
+    // used by SERVER_TASK_TYPE_STEERING_INJECT
+    struct steering_action {
+        int id_slot = -1;
+        std::string text;
+        std::string role;
+        int32_t position = -1; // -1 means inject at current position
+    };
+    steering_action steering_action;
 
     server_task() = default;
 
@@ -408,8 +419,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_oaicompat_asr();
 
     json to_json_anthropic();
+    json to_json_gemini();
 
     json to_json_anthropic_stream();
+    json to_json_gemini_stream();
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
@@ -469,6 +482,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_asr();
 
     json to_json_anthropic();
+    json to_json_gemini();
 };
 
 struct server_task_result_embd : server_task_result {
@@ -604,6 +618,12 @@ struct server_prompt {
             checkpoints,
         };
     }
+};
+
+struct server_task_result_steering_inject : server_task_result {
+    int32_t n_injected = 0;
+
+    virtual json to_json() override;
 };
 
 struct server_prompt_data {

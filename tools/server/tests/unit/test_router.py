@@ -103,6 +103,22 @@ def _load_model_and_wait(
     _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
 
 
+def test_router_chat_unknown_model_returns_400():
+    """Posting to /chat/completions with a model name absent from /v1/models
+    must return 400 invalid_request_error, not 500. See #41."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "model": "non-existent/model",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert res.status_code == 400, f"expected 400 (invalid_request), got {res.status_code}: {res.body}"
+    err = res.body.get("error", {}) if isinstance(res.body, dict) else {}
+    assert err.get("type") == "invalid_request_error", f"unexpected error type: {err}"
+    assert "not found" in (err.get("message") or "").lower()
+
+
 def test_router_unload_model():
     global server
     server.start()
@@ -114,6 +130,36 @@ def test_router_unload_model():
     assert unload_res.status_code == 200
     assert unload_res.body.get("success") is True
     _wait_for_model_status(model_id, {"unloaded"})
+
+
+def test_router_unload_already_unloaded_is_idempotent():
+    """Unloading a model that is not currently running must be a no-op success,
+    not a 400. The router evicts models on its own (LRU / idle exit), so a client
+    whose /v1/models snapshot is stale would otherwise get a spurious
+    'Failed to unload model'. Genuine unknown models still 400."""
+    global server
+    server.start()
+    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+
+    _load_model_and_wait(model_id)
+
+    # First unload actually stops the running instance.
+    first = server.make_request("POST", "/models/unload", data={"model": model_id})
+    assert first.status_code == 200
+    assert first.body.get("success") is True
+    _wait_for_model_status(model_id, {"unloaded"})
+
+    # Second unload of the now-stopped model is an idempotent no-op success.
+    second = server.make_request("POST", "/models/unload", data={"model": model_id})
+    assert second.status_code == 200, f"expected idempotent 200, got {second.status_code}: {second.body}"
+    assert second.body.get("success") is True
+    assert second.body.get("already_unloaded") is True
+
+    # A genuinely unknown model still returns 400 invalid_request.
+    unknown = server.make_request("POST", "/models/unload", data={"model": "non-existent/model"})
+    assert unknown.status_code == 400
+    err = unknown.body.get("error", {}) if isinstance(unknown.body, dict) else {}
+    assert "not found" in (err.get("message") or "").lower()
 
 
 def test_router_models_max_evicts_lru():

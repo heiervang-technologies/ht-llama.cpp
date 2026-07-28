@@ -99,6 +99,7 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+std::string gen_rerankid();
 
 // get a random marker; note: each time the server restarts, the marker will be different
 const char * get_media_marker();
@@ -233,6 +234,15 @@ public:
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
 
+    // encode and decode the image chunk
+    int32_t process_chunk(
+                llama_context * ctx,
+                mtmd_context * mctx,
+                size_t idx,
+                llama_pos pos,
+                int32_t seq_id,
+                size_t & n_tokens_out) const;
+
     server_tokens clone() const;
 };
 
@@ -288,6 +298,29 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool add_special,
                                         bool parse_special);
 
+/**
+ * tokenize the input of the /embedding + /v1/embeddings endpoints, with support for
+ * multimodal (image) inputs in addition to the text shapes handled by
+ * tokenize_input_prompts(). Recognizes OAI content-parts ("input": [{type:image_url}])
+ * and the legacy "image_data": [{data:<base64>}] field, injecting one media marker per
+ * image so the image tokens are spliced in. `body` is the full request object (for the
+ * sibling "image_data" field); `prompt` is the extracted "input"/"content" value.
+ *
+ * When `embd_prompt_text` / `embd_prompt_image` are non-empty, they are per-modality
+ * wrappers (instruction + chat template) applied to the input: '{content}' is replaced
+ * by the request text, '{media}' by the model's media marker (one per image). This lets
+ * instruction-tuned embedding models (e.g. LCO-Embedding-Omni) get the trained prompt
+ * format server-side without any client change. Empty = raw input (legacy behavior).
+ */
+std::vector<server_tokens> tokenize_embedding_input(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & body,
+                                        const json & prompt,
+                                        const std::string & media_path,
+                                        const std::string & embd_prompt_text,
+                                        const std::string & embd_prompt_image);
+
 //
 // OAI utils
 //
@@ -295,6 +328,7 @@ std::vector<server_tokens> tokenize_input_prompts(
 // global server parameters for chat formatting / parsing
 struct server_chat_params {
     bool use_jinja;
+    bool remap_developer_role = false; // see common_params::remap_developer_role
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
     std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
@@ -338,7 +372,15 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
+struct server_token_probs {
+    std::vector<llama_token_data> top; // top n_top tokens sorted by logit descending, p filled in
+    float sampled_p;
+    bool  sampled_found = false;
+};
+
+// compute the probabilities of the top n_top tokens and of the sampled token
+// avoids sorting the entire vocabulary - the softmax normalization only needs the max and the sum
+server_token_probs get_token_probabilities(llama_context * ctx, int idx, llama_token sampled, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 
@@ -356,6 +398,7 @@ std::string format_oai_resp_sse(const json & data);
 
 // format Anthropic-style SSE with event types
 std::string format_anthropic_sse(const json & data);
+std::string format_gemini_sse(const json & data);
 
 bool is_valid_utf8(const std::string & str);
 

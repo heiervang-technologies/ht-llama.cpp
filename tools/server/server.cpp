@@ -61,6 +61,12 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
             // treat invalid_argument as invalid request (400)
             error = ERROR_TYPE_INVALID_REQUEST;
             message = e.what();
+        } catch (const model_unavailable_error & e) {
+            // model exists in /v1/models but isn't loadable right now —
+            // transient capability gap, 503 Service Unavailable. See
+            // heiervang-technologies/ht-llama.cpp#41.
+            error = ERROR_TYPE_UNAVAILABLE;
+            message = e.what();
         } catch (const std::exception & e) {
             // treat other exceptions as server error (500)
             error = ERROR_TYPE_SERVER;
@@ -205,6 +211,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_transcriptions_oai     = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
+        routes.post_gemini_generate_content = models_routes->proxy_post;
+        routes.post_gemini_count_tokens    = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
         routes.post_embeddings             = models_routes->proxy_post;
         routes.post_embeddings_oai         = models_routes->proxy_post;
@@ -216,6 +224,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_responses_tok_oai      = models_routes->proxy_post;
         routes.get_lora_adapters           = models_routes->proxy_get;
         routes.post_lora_adapters          = models_routes->proxy_post;
+        routes.post_steering_inject        = models_routes->proxy_post;
         routes.get_slots                   = models_routes->proxy_get;
         routes.post_slots                  = models_routes->proxy_post;
 
@@ -248,6 +257,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.post("/v1beta/models/:model:generateContent", ex_wrapper(routes.post_gemini_generate_content)); // gemini generate content
+    ctx_http.post("/v1beta/models/:model:streamGenerateContent", ex_wrapper(routes.post_gemini_generate_content)); // gemini stream
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy
     ctx_http.post("/embeddings",               ex_wrapper(routes.post_embeddings));
@@ -265,9 +276,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/responses/input_tokens",           ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/responses/input_tokens",        ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/messages/count_tokens",         ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
+    ctx_http.post("/v1beta/models/:model:countTokens", ex_wrapper(routes.post_gemini_count_tokens)); // gemini token counting
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));
+
+    // Steering hints
+    ctx_http.post("/steering/inject",          ex_wrapper(routes.post_steering_inject));
+    ctx_http.post("/v1/steering/inject",       ex_wrapper(routes.post_steering_inject));
     // Save & load slots
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
@@ -476,6 +492,20 @@ int llama_server(common_params & params, int argc, char ** argv) {
         sigint_action.sa_flags = 0;
         sigaction(SIGINT, &sigint_action, NULL);
         sigaction(SIGTERM, &sigint_action, NULL);
+
+        // Ignore SIGPIPE so broken-pipe writes (e.g. client disconnecting mid-stream
+        // during a chat completion) surface as EPIPE returns instead of silently
+        // killing the process. cpp-httplib calls send() with flags=0 (no MSG_NOSIGNAL),
+        // so without this any streaming client cancel during a long-running response
+        // can drop the whole llama-server child. Observed mission m-20260527-103737
+        // on titan dflash preset: 449 MiB checkpoints in flight, client cancel,
+        // child died silently — no segfault, no log line — leaving the router with
+        // a zombie/defunct backend port. SIG_IGN is the standard network-server fix.
+        struct sigaction sigpipe_action;
+        sigpipe_action.sa_handler = SIG_IGN;
+        sigemptyset(&sigpipe_action.sa_mask);
+        sigpipe_action.sa_flags = 0;
+        sigaction(SIGPIPE, &sigpipe_action, NULL);
 #elif defined (_WIN32)
         auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
             return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
