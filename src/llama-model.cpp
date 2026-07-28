@@ -306,7 +306,7 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
         case LLM_ARCH_DFLASH:
             return new llama_model_dflash(params);
         case LLM_ARCH_MIMO2:
-            return new llama_model_mimo2(params);
+            return new llama_model_dflash(params);
         case LLM_ARCH_KIMI_LINEAR:
             return new llama_model_kimi_linear(params);
         case LLM_ARCH_STEP35:
@@ -2322,23 +2322,26 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 //
 
 llama_model_params llama_model_default_params() {
-    llama_model_params result = {
-        /*.devices                     =*/ nullptr,
-        /*.tensor_buft_overrides       =*/ nullptr,
-        /*.n_gpu_layers                =*/ -1,
-        /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
-        /*.load_mode                   =*/ LLAMA_LOAD_MODE_MMAP,
-        /*.main_gpu                    =*/ 0,
-        /*.tensor_split                =*/ nullptr,
-        /*.progress_callback           =*/ nullptr,
-        /*.progress_callback_user_data =*/ nullptr,
-        /*.kv_overrides                =*/ nullptr,
-        /*.vocab_only                  =*/ false,
-        /*.check_tensors               =*/ false,
-        /*.use_extra_bufts             =*/ true,
-        /*.no_host                     =*/ false,
-        /*.no_alloc                    =*/ false,
-    };
+    llama_model_params result = {};
+    result.devices = nullptr;
+    result.tensor_buft_overrides = nullptr;
+    result.n_gpu_layers = -1;
+    result.split_mode = LLAMA_SPLIT_MODE_LAYER;
+    result.load_mode = LLAMA_LOAD_MODE_MMAP;
+    result.main_gpu = 0;
+    result.tensor_split = nullptr;
+    result.progress_callback = nullptr;
+    result.progress_callback_user_data = nullptr;
+    result.kv_overrides = nullptr;
+    result.vocab_only = false;
+    result.use_mmap = true;
+    result.use_direct_io = false;
+    result.use_mlock = false;
+    result.check_tensors = false;
+    result.use_extra_bufts = true;
+    result.no_host = false;
+    result.no_alloc = false;
+
 
     return result;
 }
@@ -2387,6 +2390,25 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
     return model->hparams.n_head_kv();
 }
 
+int32_t llama_model_dflash_block_size(const llama_model * model) {
+    return (int32_t) model->hparams.dflash_block_size;
+}
+
+int32_t llama_model_dflash_mask_token_id(const llama_model * model) {
+    return (int32_t) model->hparams.dflash_mask_token_id;
+}
+
+int32_t llama_model_dflash_n_target_layers(const llama_model * model) {
+    int32_t n = 0;
+    for (const int il : model->hparams.dflash_target_layer_ids) {
+        if (il < 0) {
+            break;
+        }
+        n++;
+    }
+    return n;
+}
+
 int32_t llama_model_n_swa(const llama_model * model) {
     // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
     // other compression ratios, so we return 0 here
@@ -2396,6 +2418,26 @@ int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
 
+int32_t llama_model_n_swa_layers(const llama_model * model) {
+    const auto & hparams = model->hparams;
+    int32_t n = 0;
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        if (hparams.is_swa(il)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+const char * llama_model_swa_type_name(const llama_model * model) {
+    switch (model->hparams.swa_type) {
+        case LLAMA_SWA_TYPE_NONE:      return "none";
+        case LLAMA_SWA_TYPE_STANDARD:  return "standard";
+        case LLAMA_SWA_TYPE_CHUNKED:   return "chunked";
+        case LLAMA_SWA_TYPE_SYMMETRIC: return "symmetric";
+    }
+    return "none";
+}
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;
@@ -2723,7 +2765,7 @@ bool llama_model_is_diffusion(const llama_model * model) {
     return llm_arch_is_diffusion(model->arch);
 }
 
-const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
+LLAMA_API const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
 }
 

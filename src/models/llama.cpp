@@ -223,6 +223,17 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
+        // DFlash target layer ids refer to post-layer hidden states.
+        if (dflash && !dflash->extract_layer_indices.empty()) {
+            for (size_t i = 0; i < dflash->extract_layer_indices.size(); ++i) {
+                if (dflash->extract_layer_indices[i] == il) {
+                    const std::string name = "dflash_extract_" + std::to_string(i);
+                    cb(cur, name.c_str(), il);
+                    break;
+                }
+            }
+        }
+
         // input for next layer
         inpL = cur;
     }
