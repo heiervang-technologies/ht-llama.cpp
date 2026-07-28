@@ -157,6 +157,7 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_TBQ3_0       = 41, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_TBQ4_0       = 42, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_0          = 43, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
@@ -199,6 +200,17 @@ extern "C" {
         LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
+
+    enum llama_load_mode {
+        LLAMA_LOAD_MODE_NONE       = 0, 
+        LLAMA_LOAD_MODE_MMAP       = 1, 
+        LLAMA_LOAD_MODE_MLOCK      = 2, 
+        LLAMA_LOAD_MODE_MMAP_MLOCK = 3, 
+        LLAMA_LOAD_MODE_DIRECT_IO  = 4, 
+    };
+
+    LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
+    LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
 
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
@@ -299,6 +311,7 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
+        enum llama_load_mode  load_mode;  // how to load the model
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
@@ -573,6 +586,13 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_swa_layers(const struct llama_model * model);
+    LLAMA_API const char * llama_model_swa_type_name(const struct llama_model * model);
+
+    // DFlash draft model metadata
+    LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_mask_token_id(const struct llama_model * model);
+    LLAMA_API int32_t llama_model_dflash_n_target_layers(const struct llama_model * model);
 
     // DFlash draft model metadata
     LLAMA_API int32_t llama_model_dflash_block_size  (const struct llama_model * model);
@@ -710,6 +730,32 @@ extern "C" {
                          int32_t   n_embd,
                          int32_t   il_start,
                          int32_t   il_end);
+
+    //
+    // Steering hints
+    //
+
+    // Inject steering hint tokens into active generation at a given context position.
+    // Shifts existing KV cache entries and decodes hint tokens into the gap.
+    // inject_pos = -1 means inject after current max position.
+    // Returns 0 on success, negative on error.
+    LLAMA_API int32_t llama_steering_hint_inject(
+            struct llama_context * ctx,
+            llama_seq_id           seq_id,
+            llama_pos              inject_pos,
+            const llama_token    * tokens,
+            int32_t                n_tokens);
+
+    // Wrap text with chat template and tokenize for use with llama_steering_hint_inject.
+    // If out_tokens is NULL, returns the number of tokens needed.
+    // Returns number of tokens written, or negative on error.
+    LLAMA_API int32_t llama_steering_hint_prepare(
+            const struct llama_model * model,
+            const char               * chat_template,
+            const char               * role,
+            const char               * text,
+            llama_token              * out_tokens,
+            int32_t                    max_tokens);
 
     //
     // Memory

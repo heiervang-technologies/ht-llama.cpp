@@ -604,3 +604,33 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+//
+// DFlash speculative decoding API
+//
+
+void llama_set_dflash(
+        struct llama_context * ctx,
+        const struct llama_model * model) {
+    ctx->set_dflash(model);
+}
+
+const float * llama_get_dflash_target_features(struct llama_context * ctx) {
+    return ctx->get_dflash_target_features();
+}
+
+void llama_clear_dflash_target_features(struct llama_context * ctx) {
+    ctx->clear_dflash_target_features();
+}
+
+void llama_set_dflash_accumulated_target_ctx(
+        struct llama_context * ctx,
+               const float * data,
+                   int32_t   n_embd,
+                   int32_t   n_tokens) {
+    ctx->set_dflash_accumulated_target_ctx(data, n_embd, n_tokens);
+}
+
+void llama_set_dflash_need_reserve(struct llama_context * ctx) {
+    ctx->set_dflash_need_reserve();
+}
+
