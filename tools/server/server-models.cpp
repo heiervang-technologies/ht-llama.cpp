@@ -1086,15 +1086,12 @@ void server_models::load(const std::string & name, const load_options & opts) {
                 // hProcess + GetExitCodeProcess via subprocess_join). subprocess_alive()
                 // already reaped the zombie on POSIX, so subprocess_join() returns
                 // immediately with the cached status.
-                int child_exit = 0;
-                if (child_proc->sproc.has_value()) {
-                    subprocess_join(&child_proc->get(), &child_exit);
-                }
+                int child_exit = child_proc->sproc.join();
                 this->update_status(name, {SERVER_MODEL_STATUS_UNLOADED, child_exit});
                 // Force the stdout pipe read end closed so log_thread's fgets() returns and
                 // the outer thread can proceed past log_thread.join().
-                if (child_proc->sproc.has_value() && child_proc->get().stdout_file) {
-                    int fd = fileno(child_proc->get().stdout_file);
+                if (FILE * f = child_proc->sproc.stdout_file()) {
+                    int fd = fileno(f);
                     if (fd >= 0) {
 #ifdef _WIN32
                         _close(fd);

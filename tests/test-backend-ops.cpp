@@ -8164,8 +8164,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     for (ggml_type type : turboq_types) {
         for (bool v : {false, true}) {
-            test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 256, 5, 1, 3 }, { 1, 1 }, 1, v));
-            test_cases.emplace_back(new test_set_rows(type, GGML_TYPE_I64, { 256, 11, 1, 1 }, { 2, 3 }, 7, v));
+            test_cases.emplace_back(new test_set_rows(type, type, GGML_TYPE_I64, { 256, 5, 1, 3 }, { 1, 1 }, 1, v));
+            test_cases.emplace_back(new test_set_rows(type, type, GGML_TYPE_I64, { 256, 11, 1, 1 }, { 2, 3 }, 7, v));
         }
     }
 

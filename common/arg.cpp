@@ -370,7 +370,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
 
     const bool spec_type_draft_dflash = std::find(params.speculative.types.begin(),
                                            params.speculative.types.end(),
-                                           COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
+                                           COMMON_SPECULATIVE_TYPE_DFLASH) != params.speculative.types.end();
 
     const bool spec_type_draft_eagle3 = std::find(params.speculative.types.begin(),
                                            params.speculative.types.end(),
@@ -555,7 +555,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
             plan_spec.dflash = {};
             plan_spec.eagle3 = {};
         } else if (!plan_spec.dflash.local_path.empty()) {
-            params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH };
+            params.speculative.types = { COMMON_SPECULATIVE_TYPE_DFLASH };
             plan_spec.eagle3 = {};
         } else if (!plan_spec.eagle3.local_path.empty()) {
             params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 };
@@ -2989,7 +2989,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--dflash"},
         "also download the DFlash sidecar, if available (default: unused)",
         [](common_params & params) {
-            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+            params.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DFLASH);
         }
     ).set_examples({LLAMA_EXAMPLE_DOWNLOAD}));
     add_opt(common_arg(

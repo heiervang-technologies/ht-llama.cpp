@@ -36,6 +36,26 @@ uint64_t turboq_seed_from_row(int64_t row_idx);
 // This makes TBQ attention cost comparable to q8_0.
 // ---------------------------------------------------------------------------
 
+static ggml_tensor * ggml_mul_mat_aux(
+        ggml_context * ctx,
+        ggml_tensor * cur,
+        ggml_tensor * rot) {
+    const auto n = rot->ne[0];
+
+    ggml_tensor * res;
+
+    if (!ggml_is_contiguous(cur)) {
+        res = ggml_cont_2d   (ctx, cur, n, ggml_nelements(cur)/n);
+    } else {
+        res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    }
+    res = ggml_mul_mat   (ctx, rot, res);
+    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
+    res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+    return res;
+}
+
 static std::vector<float> & get_tbq_rotation_matrix() {
     static std::vector<float> s_rot;
     if (s_rot.empty()) {

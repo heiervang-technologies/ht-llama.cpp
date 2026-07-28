@@ -635,6 +635,9 @@ extern "C" {
     LLAMA_API int32_t llama_model_meta_val_str_by_index(const struct llama_model * model, int32_t i, char * buf, size_t buf_size);
 
     // Get a string describing the model type
+    LLAMA_API enum llama_ftype llama_model_ftype(const struct llama_model * model);
+    LLAMA_API const char * llama_ftype_name(enum llama_ftype ftype);
+
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
 
     // Returns the total size of all the tensors in the model in bytes

@@ -80,12 +80,12 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             if (ctx->start_matcher.advance(token) >= 0) {
                 ctx->state = REASONING_BUDGET_COUNTING;
                 ctx->remaining = ctx->budget;
-                COM_TRC("activated, budget=%d tokens\n", ctx->budget);
+                LOG_TRC("activated, budget=%d tokens\n", ctx->budget);
 
                 if (ctx->remaining <= 0) {
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
-                    COM_TRC("%s", "budget=0, forcing immediately\n");
+                    LOG_TRC("%s", "budget=0, forcing immediately\n");
                 }
             }
             break;
@@ -97,7 +97,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             if (match >= 0) {
                 ctx->state = REASONING_BUDGET_DONE;
                 ctx->end_match = match;
-                COM_TRC("%s", "deactivated (natural end)\n");
+                LOG_TRC("%s", "deactivated (natural end)\n");
                 break;
             }
 
@@ -112,7 +112,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
                     ctx->end_matcher.reset();
-                    COM_TRC("%s", "UTF-8 complete, now forcing end sequence\n");
+                    LOG_TRC("%s", "UTF-8 complete, now forcing end sequence\n");
                 }
             } else if (ctx->state == REASONING_BUDGET_COUNTING) {
                 ctx->remaining--;
@@ -121,11 +121,11 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
                         ctx->state = REASONING_BUDGET_FORCING;
                         ctx->force_pos = 0;
                         ctx->end_matcher.reset();
-                        COM_TRC("%s", "budget exhausted, forcing end sequence\n");
+                        LOG_TRC("%s", "budget exhausted, forcing end sequence\n");
                     } else {
                         ctx->state = REASONING_BUDGET_WAITING_UTF8;
                         ctx->end_matcher.reset();
-                        COM_TRC("%s", "budget exhausted, waiting for UTF-8 completion\n");
+                        LOG_TRC("%s", "budget exhausted, waiting for UTF-8 completion\n");
                     }
                 }
             }
@@ -139,7 +139,7 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
             if (ctx->force_pos >= ctx->forced_tokens.size()) {
                 ctx->state = REASONING_BUDGET_DONE;
                 ctx->end_match = match;
-                COM_TRC("%s", "forced sequence complete, done\n");
+                LOG_TRC("%s", "forced sequence complete, done\n");
             }
             break;
         }
@@ -151,12 +151,12 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
                 ctx->remaining = ctx->budget;
                 ctx->end_matcher.reset();
                 ctx->end_match = -1;
-                COM_TRC("re-activated on new start tag, budget=%d tokens\n", ctx->budget);
+                LOG_TRC("re-activated on new start tag, budget=%d tokens\n", ctx->budget);
 
                 if (ctx->remaining <= 0) {
                     ctx->state = REASONING_BUDGET_FORCING;
                     ctx->force_pos = 0;
-                    COM_TRC("%s", "budget=0, forcing immediately\n");
+                    LOG_TRC("%s", "budget=0, forcing immediately\n");
                 }
             }
             break;
@@ -302,7 +302,7 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
     ctx->state = REASONING_BUDGET_FORCING;
     ctx->force_pos = 0;
     ctx->end_matcher.reset();
-    COM_TRC("%s", "forced into forcing state (manual transition)\n");
+    LOG_TRC("%s", "forced into forcing state (manual transition)\n");
 
     return true;
 }

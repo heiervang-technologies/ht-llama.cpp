@@ -935,7 +935,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<float> features_buf;
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DFLASH, n_seq)
         , params(params.draft)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -2615,7 +2615,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
         }
         if (has_draft_dflash) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DFLASH, params));
         }
     }
 
@@ -2633,15 +2633,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::make_unique<common_speculative_impl_draft_eagle3>(config.params, n_seq));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_DFLASH: {
-                impls.push_back(std::make_unique<common_speculative_impl_dflash>(config.params, n_seq, config.params.draft.ctx_tgt));
-                break;
-            }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH: {
+            case COMMON_SPECULATIVE_TYPE_DFLASH: {
                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));
                 break;
             }

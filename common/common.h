@@ -98,6 +98,7 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
 
+    LLAMA_EXAMPLE_TOKENIZE,
     LLAMA_EXAMPLE_COUNT,
 };
 
@@ -276,7 +277,7 @@ struct common_params_sampling {
     // these are populated by the server/CLI based on chat template params
     int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
     std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
-    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
+    std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
     std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
     std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
     bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
@@ -476,6 +477,7 @@ struct common_params {
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
+    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_MMAP; // how to load the model
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -566,10 +568,7 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // enable mmap to use filesystem cache
-    bool use_direct_io     = false; // read from disk without buffering
-    bool use_mlock         = false; // use mlock to keep model in memory
-    bool verbose_prompt    = false; // print prompt tokens before generation
+                bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
     bool warmup            = true;  // warmup run
@@ -616,6 +615,28 @@ struct common_params {
     int32_t timeout_read        = 3600;          // http read timeout in seconds
     int32_t timeout_write       = timeout_read;  // http write timeout in seconds
     int32_t sse_ping_interval   = 30;            // SSE ping interval in seconds
+    int32_t n_threads_batch = -1;
+
+    // server CORS params
+    std::string cors_origins = "*";
+    std::string cors_methods = "GET, POST, DELETE, OPTIONS";
+    std::string cors_headers = "*";
+    bool cors_credentials = true;
+    bool cors_origins_explicit = false;
+
+    // CLI params
+    std::string server_base;
+
+    // MCP server configs
+    std::string mcp_servers_config;
+    std::string mcp_servers_json;
+
+    // tokenize params
+    bool tokenize_ids        = false;
+    bool tokenize_stdin      = false;
+    bool tokenize_no_bos     = false;
+    bool tokenize_show_count = false;
+
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
@@ -1078,6 +1099,7 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 struct common_prompt_checkpoint {
     int64_t n_tokens;
+    int id_task = -1;
 
     llama_pos pos_min;
     llama_pos pos_max;

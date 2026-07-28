@@ -2,6 +2,7 @@
 #include "http.h"
 #include "server-http.h"
 #include "server-common.h"
+#include "ui.h"
 
 
 #include <cpp-httplib/httplib.h>
