@@ -1,18 +1,20 @@
 # MTP speculative decoding on Pascal (Quadro P5200, sm_61)
 
 Measured results for `--spec-type draft-mtp` on a compute-capability 6.1 GPU,
-plus two Pascal-specific behaviours that are easy to hit and are not obvious
-from the option list.
+plus two behaviours that are easy to hit and are not obvious from the option
+list.
 
 All numbers below were recomputed from the raw per-request timings in
-[`data/pascal-p5200-2026-08-02/`](data/pascal-p5200-2026-08-02/), not copied
+[`data/pascal-p5200-2026-08-02/`](data/pascal-p5200-2026-08-02/), and both
+cautions were reproduced from scratch with the scripts in
+[`data/repro-2026-08-07/`](data/repro-2026-08-07/) rather than carried over
 from a summary.
 
 ## Test setup
 
 | | |
 | --- | --- |
-| GPU | NVIDIA Quadro P5200 Mobile, 16 GiB, compute capability **6.1** |
+| GPU | NVIDIA Quadro P5200 Mobile, 16 GiB, compute capability **6.1**, driver 580.159.04 |
 | CPU | Intel Core i7-7820HQ, 4C/8T |
 | Build | `b9862-798cf6cbe`, `CMAKE_CUDA_ARCHITECTURES=61`, `GGML_CUDA_FORCE_MMQ=ON`, `GGML_CUDA_F16=OFF` |
 | Target | `gemma-4-12b-it-qat-q4_0.gguf` — 6,975,879,296 B, `93567e57a8fe10b2…` |
@@ -42,44 +44,92 @@ i.e. 92 of 111 in each of the three runs.
 On a 16 GiB card where VRAM is the binding constraint, +300 MiB for 2.35x is a
 favourable trade; the assistant model itself is only 254 MB on disk.
 
-## Pascal caution 1 — `-md` alone does not enable MTP
+## Caution 1 — `-md` without `--spec-type` makes a healthy server that 500s
 
-Supplying a draft model without an explicit `--spec-type draft-mtp` does not
-turn MTP on. The server starts, loads both models and serves normally, so the
-failure mode is silent: you get baseline throughput and no error.
+Passing an MTP assistant via `-md` **without** `--spec-type draft-mtp` does not
+fall back to plain generation. The server auto-selects a different speculative
+implementation, which the MTP head model cannot satisfy:
 
-Confirm from the response `timings`: if `draft_n` is `0`, MTP is not running.
+```
+W srv  load_model: [spec] failed to measure draft model memory: failed to create llama_context from model
+I srv  load_model: loading draft model '.../mtp-gemma-4-12B-it-Q4_0.gguf'
+W common_speculative_init: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it
+I common_speculative_impl_draft_simple: adding speculative implementation 'draft-simple'
+I common_speculative_impl_draft_simple: - n_max=3, n_min=0, p_min=0.000000
+```
 
-## Pascal caution 2 — draft backend sampling is non-repeatable on sm_61
+Startup then completes, and `GET /health` reports healthy. **Every completion
+request fails:**
 
-`--spec-draft-backend-sampling` defaults to **enabled**
-(`common/common.h`: `backend_sampling = true`, "offload draft sampling to the
-backend"). With it enabled on this P5200, repeated **greedy** requests with
-identical input produced **different** outputs.
+```
+HTTP 500
+{"error":{"code":500,"message":"decode() failed: failed to process speculative batch","type":"server_error"}}
+```
 
-Passing `--no-spec-draft-backend-sampling` made repeated MTP runs byte-identical
-to one another without materially reducing speed — the 56.44 tok/s above was
-measured with backend sampling disabled.
+So the tell is not slow generation — it is a server that passes its health
+check and cannot serve a single request. The earlier
+`failed to create llama_context from model` line is logged at warning level and
+is not treated as fatal.
 
-This is reported as an observation on one sm_61 device, not as a diagnosis. It
-has not been bisected, and no claim is made about other architectures. The
-isolation runs are in `gemma12-mtp-cpu-sampler-1.json` and
-`gemma12-mtp-cpu-sampler-2.json`.
+Reproduced with `data/repro-2026-08-07/mtp-g2.sh`; the response body above is
+`data/repro-2026-08-07/G2.1.json`.
 
-Note that the flag is currently absent from the option list in
-[`../speculative.md`](../speculative.md); it is added there by the same change
-that adds this page.
+## Caution 2 — greedy output is not reproducible across requests by default
+
+With `cache_prompt` at its default of `true`, repeated **identical greedy
+requests** to the same server do not all return the same text. The first
+request differs from the rest.
+
+The cause is prompt cache reuse changing the prompt batch split, not sampling:
+
+| Request | `cache_n` | `prompt_n` |
+| --- | ---: | ---: |
+| 1st | 0 | 34 |
+| 2nd and later | 7 | 27 |
+
+A different batch shape gives a different floating-point reduction order, which
+can flip a greedy token, after which the continuations diverge.
+
+Six conditions, five identical greedy requests each (`temperature: 0`,
+`top_k: 1`, `seed: 42`):
+
+| | Configuration | Distinct outputs / 5 |
+| --- | --- | ---: |
+| A | MTP, draft backend sampling **enabled** (default) | 2 |
+| B | MTP, draft backend sampling **disabled** | 2 |
+| C | target only, no draft model (control) | 2 |
+| D | target only, `-bs` (main backend sampling on) | 2 |
+| E | target only, `cache_prompt: false` | **1** |
+| F | MTP, `cache_prompt: false` | **1** |
+
+Three things worth reading off that table:
+
+- **A and B produced byte-identical output sets.**
+  `--no-spec-draft-backend-sampling` changed nothing. Backend sampling is not
+  the cause.
+- **The control diverges too.** C has no draft model at all, so MTP is not the
+  cause either. C and D are likewise byte-identical to each other.
+- **`cache_prompt: false` makes it fully repeatable**, in both the target-only
+  and the MTP condition.
+
+In every condition the split was the same: run 1 differed, runs 2–5 were
+identical to one another — matching the cache-state table above exactly.
+
+If you need reproducible greedy output across requests, send
+`"cache_prompt": false`, or ensure every request starts from the same cache
+state. Nothing here is specific to sm_61; the same reasoning applies wherever
+batch shape affects reduction order.
 
 ## What "deterministic" does and does not mean here
 
-With `--no-spec-draft-backend-sampling`, all three MTP responses were
-byte-identical **to one another**, and all three target-only responses were
-byte-identical to one another.
+Holding cache state fixed, MTP is repeatable: all five runs in condition F were
+byte-identical.
 
-The MTP response was **not** byte-identical to the target-only response. This is
-expected rather than a defect: the target still verifies every proposed token,
-but batched target evaluation can select a different greedy token than
-single-token evaluation because GPU floating-point reduction order differs.
+The MTP output was **not** byte-identical to the target-only output (condition F
+vs condition E). This is expected rather than a defect: the target still
+verifies every proposed token, but batched target evaluation can select a
+different greedy token than single-token evaluation because GPU floating-point
+reduction order differs.
 
 So this result demonstrates verified-token speculation and run-to-run
 repeatability. It should **not** be described as bit-identical to
@@ -93,7 +143,6 @@ non-speculative generation.
   -md /path/to/mtp-gemma-4-12B-it-Q4_0.gguf \
   -c 4096 -ngl all -ngld all -fa on --parallel 1 \
   --spec-type draft-mtp --spec-draft-n-max 16 --spec-draft-p-min 0.9 \
-  --no-spec-draft-backend-sampling \
   --host 127.0.0.1 --port 8080 --no-webui --jinja
 ```
 
@@ -109,8 +158,8 @@ multi-slot measurement was taken.
 
 ## Raw data
 
-[`data/pascal-p5200-2026-08-02/`](data/pascal-p5200-2026-08-02/) — verbatim, as
-produced by the run:
+[`data/pascal-p5200-2026-08-02/`](data/pascal-p5200-2026-08-02/) — the
+throughput run, verbatim:
 
 - `README.md` — the original run report, including a same-build `llama-bench`
   pass over Qwen3.6-35B-A3B Q4_K_M and Gemma 4 26B-A4B QAT Q4_0 on the same GPU
@@ -121,3 +170,12 @@ produced by the run:
 - `gemma12-*-smoke.json`, `gemma12-mtp-cpu-sampler-*.json` — smoke and
   determinism-isolation runs
 - `qwen-*`, `gemma-*` — the `llama-bench` pass and its telemetry
+
+[`data/repro-2026-08-07/`](data/repro-2026-08-07/) — the caution repros:
+
+- `mtp-determinism.sh` — conditions A–D, including the no-draft control
+- `mtp-determinism2.sh` — conditions E–F, the `cache_prompt: false` test
+- `mtp-g2.sh` — caution 1, `-md` without `--spec-type`
+- `{A..F}.{1..5}.json` — every response, with timings and cache counters
+- `G2.1.json`, `G2.server.log.excerpt` — the 500 and the startup log
+- `summary.txt` — condition-by-condition distinct-output counts
