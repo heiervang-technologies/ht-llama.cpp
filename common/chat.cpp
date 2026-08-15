@@ -2464,7 +2464,18 @@ static void func_args_not_string(json & messages) {
                         try {
                             args = json::parse(args.get<std::string>());
                         } catch (const std::exception & e) {
-                            throw std::runtime_error("Failed to parse tool call arguments as JSON: " + std::string(e.what()));
+                            // std::invalid_argument maps to HTTP 400 in the server's
+                            // ex_wrapper (server.cpp), whereas std::runtime_error becomes a
+                            // generic 500. A parse failure here almost always means a prior
+                            // tool call in the message history was truncated mid-output
+                            // because the conversation hit the context-size limit, so surface
+                            // it as an actionable client error instead of a server fault.
+                            // See heiervang-technologies/ht-llama.cpp#19.
+                            throw std::invalid_argument(
+                                "Invalid tool call arguments in input messages: " + std::string(e.what()) +
+                                ". This usually means a previous tool call was truncated because the "
+                                "conversation reached the context-size limit; reduce the conversation "
+                                "history or increase --ctx-size, then retry.");
                         }
                     }
                 }
@@ -2740,6 +2751,10 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     return std::nullopt;
 }
 
+// forward declaration: _apply_jinja's autoparser fallback (below) calls this before its definition
+static common_chat_params common_chat_templates_apply_legacy(const struct common_chat_templates *        tmpls,
+                                                             const struct common_chat_templates_inputs & inputs);
+
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     autoparser::generation_params params;
@@ -2879,7 +2894,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
         return auto_params;
     } catch (const std::exception & e) {
-        throw std::invalid_argument(std::string("Unable to generate parser for this template. Automatic parser generation failed: ") + e.what());
+        LOG_WRN("%s: Unable to generate parser for this template. Automatic parser generation failed: %s. Falling back to legacy parser.\n", __func__, e.what());
+        return common_chat_templates_apply_legacy(tmpls, inputs);
     }
 }
 

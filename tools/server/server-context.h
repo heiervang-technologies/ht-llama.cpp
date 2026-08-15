@@ -51,6 +51,20 @@ struct server_context_meta {
     uint64_t model_n_params;
     uint64_t model_size;
     std::string model_ftype;
+    // KV-cache geometry + configured cache quant, so clients can compute exact
+    // KV bytes per token = n_layer * (n_embd_k_gqa + n_embd_v_gqa) * kv_type_size.
+    int32_t model_n_layer;
+    int32_t model_n_head;
+    int32_t model_n_head_kv;
+    int32_t model_n_embd_k_gqa;
+    int32_t model_n_embd_v_gqa;
+    std::string cache_type_k;
+    std::string cache_type_v;
+    // SWA geometry so clients can compute exact KV for hybrid models
+    // (gemma-4 etc.) where SWA layers cap KV at min(ctx, n_swa).
+    int32_t     model_n_swa;
+    int32_t     model_n_swa_layers;
+    std::string model_swa_type;
 };
 
 enum server_state {

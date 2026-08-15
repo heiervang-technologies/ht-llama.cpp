@@ -2387,6 +2387,14 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
     return model->hparams.n_head_kv();
 }
 
+int32_t llama_model_n_embd_k_gqa(const llama_model * model) {
+    return model->hparams.n_embd_k_gqa();
+}
+
+int32_t llama_model_n_embd_v_gqa(const llama_model * model) {
+    return model->hparams.n_embd_v_gqa();
+}
+
 int32_t llama_model_n_swa(const llama_model * model) {
     // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
     // other compression ratios, so we return 0 here
@@ -2396,6 +2404,26 @@ int32_t llama_model_n_swa(const llama_model * model) {
     return model->hparams.n_swa;
 }
 
+int32_t llama_model_n_swa_layers(const llama_model * model) {
+    const auto & hparams = model->hparams;
+    int32_t n = 0;
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        if (hparams.is_swa(il)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+const char * llama_model_swa_type_name(const llama_model * model) {
+    switch (model->hparams.swa_type) {
+        case LLAMA_SWA_TYPE_NONE:      return "none";
+        case LLAMA_SWA_TYPE_STANDARD:  return "standard";
+        case LLAMA_SWA_TYPE_CHUNKED:   return "chunked";
+        case LLAMA_SWA_TYPE_SYMMETRIC: return "symmetric";
+    }
+    return "none";
+}
 
 uint32_t llama_model_n_cls_out(const struct llama_model * model) {
     return model->hparams.n_cls_out;

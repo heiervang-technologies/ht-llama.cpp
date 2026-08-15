@@ -85,6 +85,7 @@ struct server_model_meta {
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
     bool need_download = false; // whether the model needs to be downloaded before loading
+    std::vector<int64_t> per_device_bytes; // per-device VRAM footprint plan (in bytes)
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -127,6 +128,8 @@ private:
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
+    std::map<std::string, std::string> alias_to_name;
+
 
     // for stopping models
     std::condition_variable cv_stop;
@@ -205,8 +208,8 @@ private:
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
-    // unload least recently used models if the limit is reached
-    void unload_lru();
+    // unload least recently used models if the limit is reached or memory is tight
+    void unload_lru(const std::string & candidate_name);
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);

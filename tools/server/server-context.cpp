@@ -4057,6 +4057,16 @@ server_context_meta server_context::get_meta() const {
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
         /* model_ftype            */ ftype_name,
+        /* model_n_layer          */ llama_model_n_layer(impl->model_tgt),
+        /* model_n_head           */ llama_model_n_head(impl->model_tgt),
+        /* model_n_head_kv        */ llama_model_n_head_kv(impl->model_tgt),
+        /* model_n_embd_k_gqa     */ llama_model_n_embd_k_gqa(impl->model_tgt),
+        /* model_n_embd_v_gqa     */ llama_model_n_embd_v_gqa(impl->model_tgt),
+        /* cache_type_k           */ ggml_type_name(impl->params_base.cache_type_k),
+        /* cache_type_v           */ ggml_type_name(impl->params_base.cache_type_v),
+        /* model_n_swa            */ llama_model_n_swa(impl->model_tgt),
+        /* model_n_swa_layers     */ llama_model_n_swa_layers(impl->model_tgt),
+        /* model_swa_type         */ llama_model_swa_type_name(impl->model_tgt),
     };
 }
 
@@ -5146,6 +5156,24 @@ json server_routes::get_model_info() const {
             {"n_params",    meta->model_n_params},
             {"size",        meta->model_size},
             {"ftype",       meta->model_ftype},
+            // KV-cache geometry + configured quant so clients can compute exact
+            // KV bytes/token = n_layer*(n_embd_k_gqa+n_embd_v_gqa)*kv_type_size.
+            // The GQA dimensions come directly from the loaded model hparams rather
+            // than assuming K/V head dimensions equal n_embd/n_head. This is exact
+            // for the uniform per-layer geometry represented by these scalar fields.
+            {"n_layer",       meta->model_n_layer},
+            {"n_head",        meta->model_n_head},
+            {"n_head_kv",     meta->model_n_head_kv},
+            {"n_embd_k_gqa",  meta->model_n_embd_k_gqa},
+            {"n_embd_v_gqa",  meta->model_n_embd_v_gqa},
+            {"cache_type_k",  meta->cache_type_k},
+            {"cache_type_v",  meta->cache_type_v},
+            // SWA geometry for exact KV prediction on hybrid models
+            // (gemma-4 etc.): n_full_layers = n_layer - n_swa_layers;
+            // SWA layers cap KV at min(ctx, n_swa) instead of ctx.
+            {"n_swa",         meta->model_n_swa},
+            {"n_swa_layers",  meta->model_n_swa_layers},
+            {"swa_type",      meta->model_swa_type},
         }},
     };
 }
@@ -5287,7 +5315,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+    auto tokenized_prompts = tokenize_embedding_input(ctx_server.vocab, ctx_server.mctx, body, prompt, params.media_path, params.embd_prompt_text, params.embd_prompt_image);
     for (const auto & tokens : tokenized_prompts) {
         // this check is necessary for models that do not add BOS token to the input
         if (tokens.empty()) {

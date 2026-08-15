@@ -132,6 +132,36 @@ def test_router_unload_model():
     _wait_for_model_status(model_id, {"unloaded"})
 
 
+def test_router_unload_already_unloaded_is_idempotent():
+    """Unloading a model that is not currently running must be a no-op success,
+    not a 400. The router evicts models on its own (LRU / idle exit), so a client
+    whose /v1/models snapshot is stale would otherwise get a spurious
+    'Failed to unload model'. Genuine unknown models still 400."""
+    global server
+    server.start()
+    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+
+    _load_model_and_wait(model_id)
+
+    # First unload actually stops the running instance.
+    first = server.make_request("POST", "/models/unload", data={"model": model_id})
+    assert first.status_code == 200
+    assert first.body.get("success") is True
+    _wait_for_model_status(model_id, {"unloaded"})
+
+    # Second unload of the now-stopped model is an idempotent no-op success.
+    second = server.make_request("POST", "/models/unload", data={"model": model_id})
+    assert second.status_code == 200, f"expected idempotent 200, got {second.status_code}: {second.body}"
+    assert second.body.get("success") is True
+    assert second.body.get("already_unloaded") is True
+
+    # A genuinely unknown model still returns 400 invalid_request.
+    unknown = server.make_request("POST", "/models/unload", data={"model": "non-existent/model"})
+    assert unknown.status_code == 400
+    err = unknown.body.get("error", {}) if isinstance(unknown.body, dict) else {}
+    assert "not found" in (err.get("message") or "").lower()
+
+
 def test_router_models_max_evicts_lru():
     global server
     server.models_max = 2
@@ -244,6 +274,7 @@ def test_router_reload_models():
             "\n"
             "[model-reload-b]\n"
             "hf-repo = ggml-org/test-model-stories260K-infill\n"
+            "alias = reload-old-alias\n"
         )
 
     server.models_preset = preset_path
@@ -252,12 +283,15 @@ def test_router_reload_models():
     ids = _get_model_ids(is_reload=False)
     assert "model-reload-a" in ids
     assert "model-reload-b" in ids
+    old_alias = server.make_request("POST", "/models/unload", data={"model": "reload-old-alias"})
+    assert old_alias.status_code == 200
 
     # Updated preset: remove a, keep b unchanged, add c
     with open(preset_path, "w") as f:
         f.write(
             "[model-reload-b]\n"
             "hf-repo = ggml-org/test-model-stories260K-infill\n"
+            "alias = reload-new-alias\n"
             "\n"
             "[model-reload-c]\n"
             "hf-repo = ggml-org/test-model-stories260K\n"
@@ -268,6 +302,13 @@ def test_router_reload_models():
         assert "model-reload-a" not in ids, "removed model should no longer appear"
         assert "model-reload-b" in ids, "unchanged model should still appear"
         assert "model-reload-c" in ids, "newly added model should appear"
+
+        # Alias lookup is indexed separately so loaded-instance metadata cannot
+        # shadow it. Reload must replace that index, not retain removed aliases.
+        old_alias = server.make_request("POST", "/models/unload", data={"model": "reload-old-alias"})
+        assert old_alias.status_code == 400
+        new_alias = server.make_request("POST", "/models/unload", data={"model": "reload-new-alias"})
+        assert new_alias.status_code == 200
     finally:
         os.remove(preset_path)
 

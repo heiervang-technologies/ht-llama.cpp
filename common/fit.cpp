@@ -1,4 +1,5 @@
 #include "fit.h"
+#include "common.h"
 
 #include "log.h"
 
@@ -996,4 +997,88 @@ void common_fit_print(
     printf("%zu ", dmd.back().mb.context/1024/1024);
     printf("%zu ", dmd.back().mb.compute/1024/1024);
     printf("\n");
+}
+
+common_fitted_params common_fit_params_from_common_params(common_params & params) {
+    common_fitted_params res;
+    res.mparams = common_model_params_to_llama(params);
+    res.cparams = common_context_params_to_llama(params);
+
+    std::vector<ggml_backend_dev_t> model_devs;
+
+    if (params.fit_params) {
+        res.fit_status = common_fit_params(params.model.path.c_str(), &res.mparams, &res.cparams,
+            params.tensor_split,
+            params.tensor_buft_overrides.data(),
+            params.fit_params_target.data(),
+            params.fit_params_min_ctx,
+            params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR,
+            &res.per_device_bytes);
+
+        if (res.fit_status == COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+            // Retrieve model devices by loading model headers with no_alloc = true.
+            // A failed fit has no usable byte plan to align and may leave the
+            // fitted params incomplete, so avoid a redundant second load then.
+            llama_model_params mparams_copy = res.mparams;
+            mparams_copy.no_alloc = true;
+            mparams_copy.load_mode = LLAMA_LOAD_MODE_NONE;
+            llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams_copy);
+            if (model) {
+                for (int i = 0; i < llama_model_n_devices(model); i++) {
+                    model_devs.push_back(llama_model_get_device(model, i));
+                }
+                llama_model_free(model);
+            }
+        }
+    } else {
+        uint32_t hp_ngl = 0;
+        uint32_t hp_n_ctx_train = 0;
+        uint32_t hp_n_expert = 0;
+        try {
+            auto dmd = common_get_device_memory_data(params.model.path.c_str(), &res.mparams, &res.cparams,
+                model_devs, hp_ngl, hp_n_ctx_train, hp_n_expert,
+                params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            if (!model_devs.empty()) {
+                res.per_device_bytes.clear();
+                res.per_device_bytes.reserve(model_devs.size());
+                for (size_t id = 0; id < model_devs.size(); id++) {
+                    res.per_device_bytes.push_back((int64_t)(dmd[id].model + dmd[id].context + dmd[id].compute));
+                }
+            }
+        } catch (const std::exception & e) {
+            LOG_WRN("%s: failed to measure device memory: %s\n", __func__, e.what());
+            res.fit_status = COMMON_PARAMS_FIT_STATUS_ERROR;
+        }
+    }
+
+    // Now, align res.per_device_bytes to the system's global GPUs
+    std::vector<ggml_backend_dev_t> system_gpus;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            system_gpus.push_back(dev);
+        }
+    }
+
+    if (!system_gpus.empty() && !res.per_device_bytes.empty() && res.per_device_bytes.size() <= model_devs.size()) {
+        std::vector<int64_t> aligned_bytes(system_gpus.size(), 0);
+        for (size_t i = 0; i < res.per_device_bytes.size(); i++) {
+            ggml_backend_dev_t dev = model_devs[i];
+            int gpu_idx = -1;
+            for (size_t idx = 0; idx < system_gpus.size(); idx++) {
+                if (system_gpus[idx] == dev) {
+                    gpu_idx = idx;
+                    break;
+                }
+            }
+            if (gpu_idx != -1) {
+                aligned_bytes[gpu_idx] = res.per_device_bytes[i];
+            }
+        }
+        res.per_device_bytes = std::move(aligned_bytes);
+    } else if (!system_gpus.empty()) {
+        res.per_device_bytes.assign(system_gpus.size(), 0);
+    }
+
+    return res;
 }

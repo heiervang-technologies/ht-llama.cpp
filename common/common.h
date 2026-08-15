@@ -611,6 +611,10 @@ struct common_params {
     std::string embd_out   = "";    // empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
     std::string embd_sep   = "\n";  // separator of embeddings
     std::string cls_sep    = "\t";  // separator of classification sequences
+    // per-modality embedding prompt wrappers (instruction + chat template). empty = off (raw input).
+    // {content} is replaced by the request text; {media} by the server's media marker (one per image).
+    std::string embd_prompt_text  = ""; // applied to text-only embedding inputs
+    std::string embd_prompt_image = ""; // applied to image embedding inputs (request content is ignored)
 
     // server params
     int32_t port                = 8080;          // server listens on this network port
