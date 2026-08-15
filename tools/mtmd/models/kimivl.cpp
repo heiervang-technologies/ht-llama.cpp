@@ -30,20 +30,27 @@ ggml_cgraph * clip_graph_kimivl::build() {
 
     {
         // patch_merger
-        const int scale_factor = model.hparams.n_merge;
-        cur = build_patch_merge_permute(cur, scale_factor);
+        const int scale_factor = model.hparams.n_merge > 0 ? model.hparams.n_merge : 1;
+        if (scale_factor > 1) {
+            cur = build_patch_merge_permute(cur, scale_factor);
+        }
 
         // projection norm
-        int proj_inp_dim = cur->ne[0];
-        cur = ggml_view_2d(ctx0, cur,
-            n_embd, cur->ne[1] * scale_factor * scale_factor,
-            ggml_row_size(cur->type, n_embd), 0);
+        const int  proj_inp_dim      = cur->ne[0];
+        const bool is_locateanything = proj_type == PROJECTOR_TYPE_LOCATEANYTHING;
+        if (scale_factor > 1 && !is_locateanything) {
+            cur = ggml_view_2d(ctx0, cur,
+                n_embd, cur->ne[1] * scale_factor * scale_factor,
+                ggml_row_size(cur->type, n_embd), 0);
+        }
         cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
         cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
         cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
-        cur = ggml_view_2d(ctx0, cur,
-            proj_inp_dim, cur->ne[1] / scale_factor / scale_factor,
-            ggml_row_size(cur->type, proj_inp_dim), 0);
+        if (scale_factor > 1 && !is_locateanything) {
+            cur = ggml_view_2d(ctx0, cur,
+                proj_inp_dim, cur->ne[1] / scale_factor / scale_factor,
+                ggml_row_size(cur->type, proj_inp_dim), 0);
+        }
         cb(cur, "proj_inp_normed", -1);
 
         // projection mlp
@@ -51,7 +58,7 @@ ggml_cgraph * clip_graph_kimivl::build() {
             model.mm_1_w, model.mm_1_b,
             nullptr, nullptr,
             model.mm_2_w, model.mm_2_b,
-            FFN_GELU,
+            proj_type == PROJECTOR_TYPE_LOCATEANYTHING ? FFN_GELU_ERF : FFN_GELU,
             -1);
         cb(cur, "proj_out", -1);
     }
