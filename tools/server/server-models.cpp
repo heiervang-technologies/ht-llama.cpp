@@ -9,6 +9,7 @@
 #include "download.h"
 #include "http.h"
 #include "subproc.h"
+#include "gguf.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
@@ -320,11 +321,14 @@ void server_models::load_models() {
     // 1. cached models
     common_presets cached_models = ctx_preset.load_from_cache();
     SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
-    // 2. local models from --models-dir
+    // 2. local models from --models-dir (also discovers LoRA adapters)
     common_presets local_models;
     if (!base_params.models_dir.empty()) {
-        local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
-        SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
+        auto dir_result = ctx_preset.load_from_models_dir_with_lora(base_params.models_dir);
+        local_models = std::move(dir_result.presets);
+        discovered_adapters = std::move(dir_result.adapters);
+        SRV_INF("Loaded %zu local model presets and %zu LoRA adapters from %s\n",
+            local_models.size(), discovered_adapters.size(), base_params.models_dir.c_str());
     }
     // 3. custom-path models from presets
     common_preset global = {};
@@ -389,6 +393,13 @@ void server_models::load_models() {
             if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
             SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
         }
+
+        if (!discovered_adapters.empty()) {
+            SRV_INF("Available LoRA adapters (%zu)\n", discovered_adapters.size());
+            for (const auto & adapter : discovered_adapters) {
+                SRV_INF("    %s (arch: %s)\n", adapter.name.c_str(), adapter.architecture.c_str());
+            }
+        }
     };
     auto apply_stop_timeout = [&]() {
         for (auto & [name, inst] : mapping) {
@@ -439,7 +450,7 @@ void server_models::load_models() {
                 /* exit_code     */ 0,
                 /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
                 /* multimodal    */ mtmd_caps{false, false},
-                // /* need_download */ false,
+                /* need_download */ false,
             };
             add_model(std::move(meta));
         }
@@ -612,7 +623,7 @@ void server_models::load_models() {
                     /* exit_code     */ 0,
                     /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
                     /* multimodal    */ mtmd_caps{false, false},
-                    // /* need_download */ false,
+                    /* need_download */ false,
                 };
                 add_model(std::move(meta));
                 newly_added.push_back(name);
@@ -672,6 +683,30 @@ bool server_models::has_model(const std::string & name) {
     return false;
 }
 
+std::string server_models::pick_any_resident() {
+    std::lock_guard<std::mutex> lk(mutex);
+    const std::string * best_loaded   = nullptr;
+    const std::string * best_sleeping = nullptr;
+    int64_t best_loaded_used   = -1;
+    int64_t best_sleeping_used = -1;
+    for (const auto & [name, inst] : mapping) {
+        if (inst.meta.status == SERVER_MODEL_STATUS_LOADED) {
+            if (inst.meta.last_used >= best_loaded_used) {
+                best_loaded_used = inst.meta.last_used;
+                best_loaded      = &name;
+            }
+        } else if (inst.meta.status == SERVER_MODEL_STATUS_SLEEPING) {
+            if (inst.meta.last_used >= best_sleeping_used) {
+                best_sleeping_used = inst.meta.last_used;
+                best_sleeping      = &name;
+            }
+        }
+    }
+    if (best_loaded)   return *best_loaded;
+    if (best_sleeping) return *best_sleeping;
+    return {};
+}
+
 std::optional<server_model_meta> server_models::get_meta(const std::string & name) {
     std::unique_lock<std::mutex> lk(mutex);
     if (need_reload) {
@@ -708,6 +743,11 @@ std::vector<server_model_meta> server_models::get_all_meta() {
     return result;
 }
 
+std::vector<common_lora_adapter_info> server_models::get_discovered_adapters() {
+    std::lock_guard<std::mutex> lk(mutex);
+    return discovered_adapters;
+}
+
 void server_models::unload_lru() {
     if (base_params.models_max <= 0) {
         return; // no limit
@@ -735,7 +775,14 @@ void server_models::unload_lru() {
         {
             std::unique_lock<std::mutex> lk(mutex);
             cv.wait(lk, [this, &lru_model_name]() {
-                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+                // operator[] on std::map silently default-inserts on miss; with a
+                // default-init server_model_meta (status = UNLOADED) the predicate
+                // would spuriously return true AND pollute mapping. Use find().
+                // Missing model → treat as done (was unloaded by another thread or
+                // removed by a concurrent reload).
+                auto it = mapping.find(lru_model_name);
+                if (it == mapping.end()) return true;
+                return it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED;
             });
         }
     }
@@ -758,7 +805,21 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // against the freshest preset and a consistent mapping state
     cv.wait(lk, [this]() { return !is_reloading; });
 
-    auto meta = opts.custom_meta.has_value() ? *opts.custom_meta : mapping[name].meta;
+    server_model_meta meta;
+    if (opts.custom_meta.has_value()) {
+        meta = *opts.custom_meta;
+    } else {
+        // Use find() instead of operator[]: a concurrent reload between has_model()
+        // (above, lock-released) and this point can erase the entry. operator[]
+        // would silently default-insert (status = UNLOADED) and we'd spawn a child
+        // with empty preset args. Treat missing as "model was removed", bail out.
+        auto map_it = mapping.find(name);
+        if (map_it == mapping.end()) {
+            SRV_INF("model %s was removed by a concurrent reload, aborting load\n", name.c_str());
+            return;
+        }
+        meta = map_it->second.meta;
+    }
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model %s is not ready\n", name.c_str());
         return;
@@ -795,6 +856,58 @@ void server_models::load(const std::string & name, const load_options & opts) {
     inst.subproc = std::make_shared<server_subproc>();
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
+
+        // inject discovered LoRA adapters matching the model's architecture
+        if (!discovered_adapters.empty()) {
+            std::string model_path;
+            if (inst.meta.preset.get_option("LLAMA_ARG_MODEL", model_path) && !model_path.empty()) {
+                // read model architecture from GGUF metadata
+                struct gguf_init_params gguf_params = {
+                    /*.no_alloc = */ true,
+                    /*.ctx      = */ nullptr,
+                };
+                struct gguf_context * gguf_ctx = gguf_init_from_file(model_path.c_str(), gguf_params);
+                if (gguf_ctx) {
+                    std::string model_arch;
+                    int64_t arch_key = gguf_find_key(gguf_ctx, "general.architecture");
+                    if (arch_key >= 0) {
+                        const char * arch_val = gguf_get_val_str(gguf_ctx, arch_key);
+                        if (arch_val) {
+                            model_arch = arch_val;
+                        }
+                    }
+                    gguf_free(gguf_ctx);
+
+                    if (!model_arch.empty()) {
+                        // collect matching adapters and add as lora options
+                        std::vector<std::string> matching_lora_paths;
+                        for (const auto & adapter : discovered_adapters) {
+                            if (adapter.architecture == model_arch) {
+                                matching_lora_paths.push_back(adapter.path);
+                                SRV_INF("matching LoRA adapter '%s' with model '%s' (arch: %s)\n",
+                                    adapter.name.c_str(), name.c_str(), model_arch.c_str());
+                            }
+                        }
+                        if (!matching_lora_paths.empty()) {
+                            // set lora-init-without-apply so adapters are loaded but not applied by default
+                            inst.meta.preset.set_option(ctx_preset, "lora-init-without-apply", "true");
+                            // set lora paths as comma-separated value
+                            std::string lora_csv;
+                            for (const auto & p : matching_lora_paths) {
+                                if (!lora_csv.empty()) {
+                                    lora_csv += ",";
+                                }
+                                lora_csv += p;
+                            }
+                            inst.meta.preset.set_option(ctx_preset, "lora", lora_csv);
+                        }
+                    }
+                } else {
+                    SRV_WRN("failed to read GGUF metadata from model '%s', skipping LoRA adapter matching\n",
+                        model_path.c_str());
+                }
+            }
+        }
 
         inst.meta.update_args(ctx_preset, bin_path); // render args
 
@@ -1027,6 +1140,26 @@ void server_models::update_status(const std::string & name, const update_status_
     cv.notify_all();
 }
 
+void server_models::wait_until_ready(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this, &name]() {
+        auto it = mapping.find(name);
+        if (it == mapping.end()) return true;
+        auto status = it->second.meta.status;
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_UNLOADED;
+    });
+}
+
+void server_models::wait_until_unloaded(const std::string & name) {
+    std::unique_lock<std::mutex> lk(mutex);
+    cv.wait(lk, [this, &name]() {
+        auto it = mapping.find(name);
+        if (it == mapping.end()) return true;
+        auto status = it->second.meta.status;
+        return status == SERVER_MODEL_STATUS_UNLOADED;
+    });
+}
+
 void server_models::update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok) {
     json curr;
     {
@@ -1141,7 +1274,8 @@ void server_models::wait(std::unique_lock<std::mutex> & lk, const std::string & 
 bool server_models::ensure_model_ready(const std::string & name) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
+        // Model name not in /v1/models — client error (400).
+        throw std::invalid_argument("model name=" + name + " is not found");
     }
     if (meta->is_ready()) {
         return false; // ready for taking requests
@@ -1166,7 +1300,10 @@ bool server_models::ensure_model_ready(const std::string & name) {
 
     // check final status
     if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
+        // Model exists in /v1/models but the load attempt didn't succeed —
+        // transient capability gap (memory pressure, eviction, contention).
+        // Maps to 503 Service Unavailable so clients can retry.
+        throw model_unavailable_error("model name=" + name + " failed to load");
     }
 
     return true;
@@ -1175,7 +1312,8 @@ bool server_models::ensure_model_ready(const std::string & name) {
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
+        // Model name not in /v1/models — client error (400).
+        throw std::invalid_argument("model name=" + name + " is not found");
     }
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
@@ -1465,6 +1603,15 @@ static bool router_validate_model(std::string & name, server_models & models, bo
         res_err(res, format_error_response("model name is missing from the request", ERROR_TYPE_INVALID_REQUEST));
         return false;
     }
+    if (name == "any") {
+        // route to whichever model is currently resident in VRAM/RAM
+        std::string picked = models.pick_any_resident();
+        if (picked.empty()) {
+            res_err(res, format_error_response("no model is currently resident in memory", ERROR_TYPE_INVALID_REQUEST));
+            return false;
+        }
+        name = picked;
+    }
     auto meta = models.get_meta(name);
     if (!meta.has_value()) {
         res_err(res, format_error_response(string_format("model '%s' not found", name.c_str()), ERROR_TYPE_INVALID_REQUEST));
@@ -1576,7 +1723,15 @@ void server_models_routes::init_routes() {
     this->proxy_post = [this](const server_http_req & req) {
         std::string method = "POST";
         json body = json::parse(req.body);
-        std::string name = json_value(body, "model", std::string());
+        std::string name;
+        // try to get model from JSON body (object with "model" field)
+        if (body.is_object()) {
+            name = json_value(body, "model", std::string());
+        }
+        // fallback to query parameter (needed for endpoints like POST /lora-adapters where body is an array)
+        if (name.empty()) {
+            name = req.get_param("model");
+        }
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
         if (!router_validate_model(name, models, autoload, error_res)) {
@@ -1615,7 +1770,24 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already running", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(meta->name);
+        try {
+            models.load(meta->name);
+        } catch (const model_unavailable_error & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_UNAVAILABLE));
+            return res;
+        } catch (const std::exception & e) {
+            res_err(res, format_error_response(e.what(), ERROR_TYPE_SERVER));
+            return res;
+        }
+
+        models.wait_until_ready(meta->name);
+
+        auto post_meta = models.get_meta(meta->name);
+        if (!post_meta.has_value() || !post_meta->is_ready()) {
+            res_err(res, format_error_response("model failed to load", ERROR_TYPE_SERVER));
+            return res;
+        }
+
         res_ok(res, {{"success", true}});
         return res;
     };
@@ -1672,7 +1844,10 @@ void server_models_routes::init_routes() {
                 {"architecture",  architecture},
                 {"source",        server_model_source_to_string(meta.source)},
                 {"can_remove",    meta.source == SERVER_MODEL_SOURCE_CACHE},
-                // {"need_download", meta.need_download},
+                {"need_download", meta.need_download},
+                // Process-monotonic last-used time in ms. 0 means never used since router started.
+                // Lets clients sort by MRU when picking among resident models (e.g. heierchat's pickLoadedModel).
+                {"last_used_ms",  meta.last_used},
                 // TODO: add other fields, may require reading GGUF metadata
             };
 
@@ -1686,9 +1861,21 @@ void server_models_routes::init_routes() {
             }
             models_json.push_back(model_info);
         }
+        // include discovered LoRA adapters
+        json adapters_json = json::array();
+        auto all_adapters = models.get_discovered_adapters();
+        for (const auto & adapter : all_adapters) {
+            adapters_json.push_back(json {
+                {"name",         adapter.name},
+                {"path",         adapter.path},
+                {"architecture", adapter.architecture},
+            });
+        }
+
         res_ok(res, {
             {"data", models_json},
             {"object", "list"},
+            {"lora_adapters", adapters_json},
         });
         return res;
     };
@@ -1707,6 +1894,7 @@ void server_models_routes::init_routes() {
             return res;
         }
         models.unload(model->name);
+        models.wait_until_unloaded(model->name);
         res_ok(res, {{"success", true}});
         return res;
     };

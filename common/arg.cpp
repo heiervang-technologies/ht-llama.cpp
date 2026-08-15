@@ -1625,6 +1625,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--ctx-checkpoints-max-mib"}, "N",
+        string_format("max host-RAM budget per slot for context checkpoints in MiB (default: %d, 0 = no byte cap)", params.ctx_checkpoints_max_mib),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("ctx-checkpoints-max-mib must be non-negative");
+            }
+            params.ctx_checkpoints_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CTX_CHECKPOINTS_MAX_MIB").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
@@ -2754,6 +2764,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_ESTIMATE"));
     add_opt(common_arg(
+        { "--fit-print-plan" },
+        "print the resolved per-device byte plan as JSON, then exit",
+        [](common_params & params) {
+            params.fit_params_print_plan = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FIT_PARAMS}).set_env("LLAMA_ARG_FIT_PRINT_PLAN"));
+    add_opt(common_arg(
         { "-fitt", "--fit-target" }, "MiB0,MiB1,MiB2,...",
         string_format("target margin per device for --fit, comma-separated list of values, "
             "single value is broadcast across all devices, default: %zu", params.fit_params_target[0]/(1024*1024)),
@@ -3526,6 +3543,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.use_jinja = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_JINJA"));
+    add_opt(common_arg(
+        {"--remap-developer-role"},
+        "remap the OpenAI \"developer\" role to \"system\" before applying chat templates",
+        [](common_params & params) {
+            params.remap_developer_role = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_REMAP_DEVELOPER_ROLE"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"

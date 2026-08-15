@@ -205,14 +205,26 @@ bool server_http_context::init(const common_params & params) {
         return endpoints;
     }();
 
-    auto middleware_validate_api_key = [api_keys = params.api_keys](const httplib::Request & req, httplib::Response & res) {
+    auto middleware_validate_api_key = [api_keys = params.api_keys, api_prefix = path_prefix](const httplib::Request & req, httplib::Response & res) {
         // If API key is not set, skip validation
         if (api_keys.empty()) {
             return true;
         }
-
-        // If path is public or a UI asset, skip validation
-        if (get_public_endpoints.count(req.path)) {
+        // If path is public or static file, skip validation. When --api-prefix
+        // is set, handlers are registered at prefix+path (see post/get below)
+        // so req.path arrives as e.g. "/llama/health" — strip the prefix
+        // before checking the allowlist so /llama/health is still public.
+        std::string check_path = req.path;
+        if (!api_prefix.empty() && check_path.size() >= api_prefix.size() &&
+            check_path.compare(0, api_prefix.size(), api_prefix) == 0) {
+            check_path.erase(0, api_prefix.size());
+        }
+        if (get_public_endpoints.find(check_path) != get_public_endpoints.end()) {
+            return true;
+        }
+        // Static assets (_app/ files, workbox runtime). These are embedded at build time
+        // so no API key is needed — browsers fetch them directly.
+        if (check_path.find("/_app/") == 0 || check_path.find("/workbox-") == 0) {
             return true;
         }
 

@@ -30,6 +30,38 @@ int llama_fit_params(int argc, char ** argv) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
+    if (params.fit_params_print_plan) {
+        // Router admit-side dry-run (#66). Run common_fit_params with the per-device
+        // byte plan output, then emit single-line JSON on stdout:
+        //   {"per_device_bytes":[N0,N1,...],"n_devices":K,"total_bytes":T}
+        // Entries are GPU/accelerator devices in tensor_split order; host memory
+        // is intentionally excluded. Caller subprocesses can parse this without
+        // depending on llama internals.
+        std::vector<int64_t> plan;
+        const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+                params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
+                params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR,
+                &plan);
+        if (status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+            LOG_ERR("%s: failed to fit CLI arguments to free memory, exiting...\n", __func__);
+            // Emit a clean JSON failure marker on stdout so subprocess callers can
+            // distinguish fit-failure from parse-failure.
+            printf("{\"error\":\"fit_failed\",\"status\":%d}\n", int(status));
+            return 1;
+        }
+        common_log_flush(common_log_main());
+
+        int64_t total = 0;
+        for (int64_t b : plan) total += b;
+
+        printf("{\"per_device_bytes\":[");
+        for (size_t i = 0; i < plan.size(); ++i) {
+            printf("%s%" PRId64, i == 0 ? "" : ",", plan[i]);
+        }
+        printf("],\"n_devices\":%zu,\"total_bytes\":%" PRId64 "}\n", plan.size(), total);
+        return 0;
+    }
+
     if (!params.fit_params_print) {
         const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
                 params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,

@@ -11,6 +11,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1130,8 +1131,19 @@ private:
                             has_draft ? "draft model" : "MTP context",
                             total / (1024.0 * 1024.0));
                 } catch (const std::exception & e) {
-                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
-                            has_draft ? "draft model" : "MTP context", e.what());
+                    // Some arches (e.g. Gemma4Assistant) self-identify as "normal during
+                    // memory fitting" because their init requires ctx_other which can't
+                    // exist before the target is loaded. Downgrade those to DBG to avoid
+                    // a misleading "failed" warning on every load. See upstream TODO at
+                    // src/llama-context.cpp around the GEMMA4_ASSISTANT ctx_other check.
+                    const std::string msg = e.what();
+                    if (msg.find("normal during memory fitting") != std::string::npos) {
+                        SRV_DBG("[spec] skipping memory measurement of %s (benign): %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    } else {
+                        SRV_WRN("[spec] failed to measure %s memory: %s\n",
+                                has_draft ? "draft model" : "MTP context", e.what());
+                    }
                 }
             }
         }
@@ -1469,6 +1481,7 @@ private:
             //            as they may be invalidated after sleeping
             chat_params = {
                 /* use_jinja             */ params_base.use_jinja,
+                /* remap_developer_role  */ params_base.remap_developer_role,
                 /* prefill_assistant     */ params_base.prefill_assistant,
                 /* reasoning_format      */ params_base.reasoning_format,
                 /* chat_template_kwargs  */ params_base.default_template_kwargs,
@@ -1966,26 +1979,21 @@ private:
                 });
             }
         } else {
-            std::vector<llama_token_data> cur = get_token_probabilities(ctx_tgt, idx, n_probs_request);
-            const size_t max_probs = cur.size();
-            const size_t n_probs = std::min(max_probs, n_probs_request);
+            // TODO: optimize this with min-p optimization
+            const server_token_probs cur = get_token_probabilities(ctx_tgt, idx, result.tok, n_probs_request);
 
             // set probability for sampled token
-            for (size_t i = 0; i < max_probs; i++) {
-                // set probability for sampled token
-                if (cur[i].id == result.tok) {
-                    result.prob = cur[i].p;
-                    break;
-                }
+            if (cur.sampled_found) {
+                result.prob = cur.sampled_p;
             }
 
             // set probability for top n_probs tokens
-            result.probs.reserve(n_probs);
-            for (size_t i = 0; i < n_probs; i++) {
+            result.probs.reserve(cur.top.size());
+            for (const auto & td : cur.top) {
                 result.probs.push_back({
-                    cur[i].id,
-                    common_token_to_piece(ctx_tgt, cur[i].id, special),
-                    cur[i].p
+                    td.id,
+                    common_token_to_piece(ctx_tgt, td.id, special),
+                    td.p
                 });
             }
         }
@@ -2292,6 +2300,10 @@ private:
 
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
+        if (params_base.n_ctx_checkpoints <= 0) {
+            return;
+        }
+
         const int id_task = slot.task->id;
 
         // evict checkpoints within min-step of a previous checkpoint, unless they were
@@ -2310,12 +2322,33 @@ private:
             ++it;
         }
 
-        while (slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints) {
-            // make room for the new checkpoint, if needed
-            const auto & cur = slot.prompt.checkpoints.front();
+        // Bound both checkpoint count and per-slot host-memory use.
+        auto total_bytes = [&]() {
+            size_t b = 0;
+            for (const auto & ckpt : slot.prompt.checkpoints) {
+                b += ckpt.size();
+            }
+            return b;
+        };
 
-            SLT_WRN(slot, "erasing old context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
-                    cur.pos_min, cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+        const size_t byte_cap =
+            (params_base.ctx_checkpoints_max_mib > 0)
+                ? (size_t) params_base.ctx_checkpoints_max_mib * 1024 * 1024
+                : 0; // 0 → byte cap disabled, count-only behavior
+
+        auto over_count = [&]() {
+            return slot.prompt.checkpoints.size() >= (size_t) params_base.n_ctx_checkpoints;
+        };
+        auto over_bytes = [&]() {
+            return byte_cap > 0 && !slot.prompt.checkpoints.empty() && total_bytes() >= byte_cap;
+        };
+
+        while (over_count() || over_bytes()) {
+            const auto & front = slot.prompt.checkpoints.front();
+            const char * reason = (over_bytes() && !over_count()) ? "bytes" : "count";
+
+            SLT_WRN(slot, "erasing old context checkpoint (reason=%s, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    reason, front.pos_min, front.pos_max, front.n_tokens, (float) front.size() / 1024 / 1024);
 
             slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
         }
@@ -2334,10 +2367,22 @@ private:
         // stash the draft's speculative state with the checkpoint
         common_speculative_get_state(spec.get(), slot.id, cur.data_spec);
 
+        // The incoming checkpoint size is only known after capture. Evict older
+        // entries if adding it crossed the byte budget. Keep one newest checkpoint
+        // even when it alone exceeds the cap; there is no smaller useful state to keep.
+        while (byte_cap > 0 && slot.prompt.checkpoints.size() > 1 && total_bytes() > byte_cap) {
+            const auto & front = slot.prompt.checkpoints.front();
+            SLT_WRN(slot, "erasing old context checkpoint (reason=bytes, pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                    front.pos_min, front.pos_max, front.n_tokens, (float) front.size() / 1024 / 1024);
+            slot.prompt.checkpoints.erase(slot.prompt.checkpoints.begin());
+        }
+
         SLT_TRC(slot,
-                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB, slot total = %.3f MiB / %d MiB cap)\n",
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
-                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
+                cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024,
+                (float) total_bytes() / 1024 / 1024,
+                params_base.ctx_checkpoints_max_mib);
     }
 
     void process_single_task(server_task && task) {
@@ -3433,6 +3478,17 @@ private:
                             send_error(slot, "failed to process image", ERROR_TYPE_SERVER);
                             slot.release();
                             continue;
+                        }
+
+                        if (ctx_dft && llama_get_ctx_other(ctx_dft) != ctx_tgt) {
+                            // TODO: in the future, figure out how to infuse target embeddings to the images
+                            //       for now, we skip this for simplicity
+                            //       maybe we simply need to call `common_speculative_process()` on the mtmd batches in the `process_chunk` above?
+                            //       [TAG_MTMD_DRAFT_PROCESSING]
+                            res = input_tokens.process_chunk(ctx_dft, mctx, slot.prompt.n_tokens(), slot.prompt.tokens.pos_next(), slot.id, n_tokens_out);
+                            if (res != 0) {
+                                GGML_ABORT("failed to process multi-modal data on draft context\n");
+                            }
                         }
 
                         slot.n_prompt_tokens_processed += n_tokens_out;
