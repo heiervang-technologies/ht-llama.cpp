@@ -1,0 +1,63 @@
+{
+  "label": "qwen3.6-27B-IQ3",
+  "issue_100_bullet": "8 - qwen3.6 27b",
+  "date_iso": "2026-06-09",
+  "host": "crystal",
+  "gpu": "Quadro P5200 (sm_61, 16257 MiB)",
+  "model": {
+    "path": "Qwen3.6-27B-UD-IQ3_XXS.gguf",
+    "sha256": "5d591dd11918e196a7b7c9d2f02e4390e7264960eb354c72d65e81a9331978f5",
+    "size_gib": 11.17
+  },
+  "config": {
+    "ngl": "99",
+    "ctx": 4096,
+    "flash_attention": "on"
+  },
+  "server_ready_seconds": 13,
+  "residency": {
+    "mode": "full-gpu",
+    "offload_kind": "none (embedding-on-host is the normal pattern)",
+    "gpu_residency_pct": "95.45",
+    "layers": {
+      "gpu_count": 65,
+      "cpu_count": 0,
+      "total": 65,
+      "source": "load_tensors: layer N assigned to device — primary dense-residency signal (deduped by layer index)"
+    },
+    "gpu": {
+      "model_mib": "10907",
+      "context_mib": "854",
+      "compute_mib": "126",
+      "self_total_mib": "11888",
+      "free_mib": "15274",
+      "card_total_mib": "16257"
+    },
+    "host": {
+      "model_mib": "520",
+      "context_mib": "0",
+      "compute_mib": "24"
+    },
+    "classification_rule": "PRIMARY: layers.cpu_count > 0 -> partial-offload (dense-layer). SECONDARY: host.model_mib > 600 -> partial-offload (expert / MoE). TERTIARY (advisory): host.context_mib > 0 or host.compute_mib > 100 corroborates. Big-vocab boundary compute can false-positive on compute>100 alone, which is why the compute-only signal is tertiary.",
+    "source": "common_memory_breakdown_print + load_tensors layer assignment (both -v emit)"
+  },
+  "vram_mib_used_total": {
+    "pre_inference": "12287, 16384",
+    "peak": "12297, 16384"
+  },
+  "smoke_completion": {
+    "surface": "/completion (raw text)",
+    "tokens_predicted": 13,
+    "predicted_per_second": 11.268650700433323,
+    "content_sample": "\n\n<think>\n\n</think>\n\nThe capital of France is Paris."
+  },
+  "smoke_chat": {
+    "surface": "/v1/chat/completions",
+    "completion_tokens": 48,
+    "predicted_per_second": 10.437253515016925,
+    "finish_reason": "length",
+    "content_length": 0,
+    "content_length_note": "Empty content per documented Gemma4-it chat-template quirk — engagement validated via completion_tokens"
+  },
+  "verdict": "PASS"
+}

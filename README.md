@@ -1,4 +1,96 @@
-# llama.cpp
+![ht-llama.cpp](media/ht-llama-banner.png)
+
+# ht-llama.cpp
+
+_Heiervang Technologies fork of [llama.cpp](https://github.com/ggml-org/llama.cpp)_
+
+[HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) | [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3) | [Upstream: llama.cpp](https://github.com/ggml-org/llama.cpp)
+
+---
+
+## HT Fork Changes
+
+This is the [Heiervang Technologies](https://github.com/heiervang-technologies) fork of [llama.cpp](https://github.com/ggml-org/llama.cpp). The `ht` branch contains the following changes on top of upstream `master`.
+
+This fork carries HT product work downstream, while generally useful fixes are split into clean `UPSTREAM-CANDIDATE` branches for review. Actual upstream submission is dispatcher-gated; workers never submit directly. The "Tracked upstream" column records existing upstream work or that candidate status.
+
+Unlike upstream, we accept contributions from AI agents and assistants. We judge code by its quality, not its authorship — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Every entry below carries a **Why** — the reason it exists downstream. That is the bar for staying in the fork: a change we can no longer justify gets dropped at the next upstream sync, not carried out of inertia.
+
+### Backend & quantization
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| TurboQuant KV cache | New `TBQ3_0` / `TBQ4_0` quantized KV cache types with rotated-domain attention; CPU backend plus fused CUDA kernels (`SET_ROWS`, rotation, flash-attention) | In-house research direction for sub-4-bit KV at long context on consumer GPUs. **Experimental** — no fleet deployment uses it yet (`--cache-type-*` warns); kept on `ht` so the work stays rebased against live upstream instead of rotting on a side branch. | No |
+| DFlash sizing compatibility | Shared, validated access to the drafter's trained `dflash.block_size`, used by both context sizing and upstream's `draft-dflash` speculative engine. | Malformed or missing metadata must fall back safely, while valid trained block sizes must reserve enough outputs. | Upstream DFlash exists; downstream sizing fix |
+| D=512 FA vec kernels | CUDA flash-attention vec-kernel instances for head size 512 with matched quantized KV (`q4_0`/`q8_0`), dispatch-gated to `gqa_ratio <= 4`; deployment-shape (Gemma4 MQA-16) correctness + perf cases in `test-backend-ops`. | Low-GQA D=512 shapes skip the per-step F16 dequant staging (up to 2× per-op). The gate keeps Gemma4's MQA-16 global layers on the faster TILE/MMA path — measured on both sm_61 and sm_86. | No |
+| Router-mode robustness | `llama-server` router detects worker crashes via `subprocess_alive` polling; fixes hardcoded proxy timeout | Router mode is the fleet's deployment shape (multi-model boxes); a hung worker must surface as an error, not a stuck request. | [#22003](https://github.com/ggml-org/llama.cpp/pull/22003) |
+| Tool-calling resilience | Fallback tool-call parser and skip non-`function` tool types so non-conforming models still work | heierchat exposes tools to arbitrary local models; strict parsing turned every malformed call into a hard failure. | No |
+| Developer-role remap | `--remap-developer-role` flag merges `developer` messages into the system prompt for templates that reject duplicates | OpenAI-client compatibility: clients that emit `developer` roles hit template errors on Gemma-family chat templates. | No |
+| LCO-Embedding-Omni GGUF | Conversion script support for the LCO-Embedding-Omni multi-modal embedding family, including audio tensors routed to the base class in the Qwen2.5 Omni mmproj path. | Embedding family used by HT retrieval deployments; conversion support has no upstream owner. | No |
+| MLA LoRA conversion | `convert_lora_to_gguf.py` understands MLA (`kv_b_proj`) so adapters trained on MLA-style attention convert without manual surgery. | Needed for adapters trained against DeepSeek/Kimi-style MLA checkpoints. | **UPSTREAM-CANDIDATE** (dispatcher-gated) |
+| Scheduler split-input cap | `GGML_SCHED_MAX_SPLIT_INPUTS` raised 30 → 256 (CMake cache var) so wide multi-modal graphs no longer trip the scheduler's per-split input limit. | LCO-Embedding-Omni graphs exceed the upstream limit; without this the model aborts at load. | No |
+
+### Server
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| heierchat / router integration | Downstream router glue and server args (incl. LoRA adapter auto-discovery) for multi-model boxes serving [heierchat](https://github.com/heiervang-technologies/heierchat). | The product front-end drives model selection/swapping through the router; these args are its contract. | No |
+| Context-checkpoint byte cap | `--ctx-checkpoints-max-mib` (default 4096): per-slot FIFO byte cap on SWA context checkpoints. | Unbounded checkpoints OOM-killed titan pods under long-context load (fork issue #67). | No |
+| `--api-prefix` public endpoints | Public-endpoint allowlist (`/health`, `/props`, …) is checked after stripping the prefix, so prefixed deployments keep unauthenticated health checks. | Fleet servers sit behind path-prefix ingress on k8s; probes broke with a prefix set. | No |
+| Responses API truncation status | Responses API emits `status: incomplete` + `incomplete_details` (and the `response.incomplete` SSE event) when generation stops on a limit. | heierchat consumes the Responses API and must distinguish truncation from completion programmatically. | No |
+| Logprobs partial-sort | `get_token_probabilities` uses max+sum softmax normalization and `std::partial_sort` for top-k instead of a full-vocab `std::sort` per emitted token. | O(V log V) → O(V + k log k) per token; measurable at Gemma's 262k vocab with logprobs-consuming clients. | No |
+| Fit-params byte plan | `common_fit_params` exposes the per-device byte plan; `llama-fit-params --fit-print-plan` emits it as JSON (+ smoke tests). | The router must predict whether a model fits *before* spawning a worker (fork issue #66); the plan is the data it needs. | No |
+| Router hardening | Guarded `mapping[]` accesses (no silent default-insert), orphaned-result cleanup on batch task removal, portable subprocess exit-code reads. | Long-lived router processes accumulated state corruption/leaks from these paths. | No |
+| termd | `tools/termd/` — sandboxed terminal daemon for tool execution. | Server-side execution backend for heierchat's sandboxed terminals; not a UI component, so it lives here. | No |
+| Log-noise fixes | Benign Gemma4-Assistant memory-probe warning downgraded to debug. | Deploy logs were dominated by a warning that fires by design once per load. | No |
+
+### WebUI + desktop shell
+
+The web UI, Tauri desktop shell, and Android APK are no longer in this
+repo — they live at
+[**heiervang-technologies/heierchat**](https://github.com/heiervang-technologies/heierchat).
+Feature list (voice / images / docs / sandbox terminals / artifacts /
+Nextcloud sync / chat polish / desktop shell) is documented there.
+
+The embedded `llama-server` web UI is the upstream default — fetched as
+a prebuilt bundle from the `llama-ui` HF bucket at build time via
+`LLAMA_USE_PREBUILT_UI=ON` (default) and embedded into the binary via
+the `llama-ui` static library. heierchat is the product-facing UI and
+talks to `llama-server` over its OpenAI-compatible API.
+
+`tools/termd/` (sandboxed terminal daemon) stays in this repo — it's a
+server-side service, not part of the UI.
+
+### Scripts & validation
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| DFlash bench & parity suite | `scripts/bench-dflash*.sh`, `scripts/dflash-*`, and `scripts/gguf-meta.py` — deployment-parity prompts, target/drafter sweeps, validation, and Round-12 scaffolds. Model paths are explicit or rooted in `$GGUFS`/`$MODELS`. | The DFlash acceptance-rate program needs reproducible, deployment-shaped measurements; ad-hoc benches kept diverging. | No |
+| Pascal P5200 build recipe | `scripts/` — CUDA 12.9 runfile + gcc-14 cross-build recipe and primer for sm_61 boxes. | CUDA 13 dropped Pascal; without a documented recipe the crystal/amethyst P5200 boxes silently fall back to Vulkan (≈half the prompt speed). | No |
+| Downstream test coverage | `test-dflash` unit tests; TBQ cases in `test-quantize-fns`/`-perf`; deployment-shape FA cases in `test-backend-ops`. | Downstream features get the same regression bar as upstream code — these tests have already caught real breakage (hparams-getter refactor, TBQ block-size migration, FA dispatch regressions). | No |
+
+### Build / CI
+
+| Change | Description | Why | Tracked upstream |
+|--------|-------------|-----|------------------|
+| Workflow trigger strips | SYCL and CANN workflows: auto-triggers removed (zero-job upstream workflows), `workflow_dispatch` kept; schema-valid placeholder job in the SYCL file. | Upstream disabled these jobs but kept the triggers — every fork push produced a spurious "failure" run. | [#23705](https://github.com/ggml-org/llama.cpp/pull/23705) |
+| Runner re-targeting | `build-cmake-pkg` and flake8 lint moved from upstream's self-hosted runner labels to `ubuntu-latest`. | Upstream's labels target ggml-org's private runner fleet; on this fork those jobs queued forever and CI could never conclude. | No |
+| Fork meta | Branding, CONTRIBUTING, this inventory, branch-strategy docs. | A fork that accepts agent contributions needs its policy and delta written down — this section is that contract. | No |
+
+### Branch Strategy
+
+| Branch | Purpose |
+|--------|---------|
+| `master` | Clean fast-forward mirror of upstream `master` — never commit directly |
+| `ht` | HT-specific changes on top of `master` — **default branch** |
+
+Feature branches are created from `ht` and squash-merged back via PR.
+
+For questions or inquiries, use the [HT Discussions](https://github.com/orgs/heiervang-technologies/discussions) page. For details on fork workflow and sync procedures, see the [Fork Management Guide](https://github.com/orgs/heiervang-technologies/discussions/3).
+
+---
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 

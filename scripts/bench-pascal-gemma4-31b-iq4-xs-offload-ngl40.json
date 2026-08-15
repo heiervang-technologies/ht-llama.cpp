@@ -1,0 +1,63 @@
+{
+  "label": "gemma4-31B-iq4xs-ngl40",
+  "issue_100_bullet": "",
+  "date_iso": "2026-06-09",
+  "host": "crystal",
+  "gpu": "Quadro P5200 (sm_61, 16257 MiB)",
+  "model": {
+    "path": "gemma-4-31B-it-IQ4_XS.gguf",
+    "sha256": "784c3ba62a4e22e2080be72d3aefc587b830c337ba4b993cbb798cd83348b2fc",
+    "size_gib": 15.25
+  },
+  "config": {
+    "ngl": "40",
+    "ctx": 4096,
+    "flash_attention": "on"
+  },
+  "server_ready_seconds": 19,
+  "residency": {
+    "mode": "partial-offload",
+    "offload_kind": "dense-layer",
+    "gpu_residency_pct": "63.70",
+    "layers": {
+      "gpu_count": 41,
+      "cpu_count": 21,
+      "total": 62,
+      "source": "load_tensors: layer N assigned to device — primary dense-residency signal (deduped by layer index)"
+    },
+    "gpu": {
+      "model_mib": "10417",
+      "context_mib": "2272",
+      "compute_mib": "212",
+      "self_total_mib": "12902",
+      "free_mib": "2954",
+      "card_total_mib": "16257"
+    },
+    "host": {
+      "model_mib": "5937",
+      "context_mib": "1248",
+      "compute_mib": "34"
+    },
+    "classification_rule": "PRIMARY: layers.cpu_count > 0 -> partial-offload (dense-layer). SECONDARY: host.model_mib > 600 -> partial-offload (expert / MoE). TERTIARY (advisory): host.context_mib > 0 or host.compute_mib > 100 corroborates. Big-vocab boundary compute can false-positive on compute>100 alone, which is why the compute-only signal is tertiary.",
+    "source": "common_memory_breakdown_print + load_tensors layer assignment (both -v emit)"
+  },
+  "vram_mib_used_total": {
+    "pre_inference": "13299, 16384",
+    "peak": "13301, 16384"
+  },
+  "smoke_completion": {
+    "surface": "/completion (raw text)",
+    "tokens_predicted": 8,
+    "predicted_per_second": 4.17550699788876,
+    "content_sample": " The capital of France is Paris."
+  },
+  "smoke_chat": {
+    "surface": "/v1/chat/completions",
+    "completion_tokens": 48,
+    "predicted_per_second": 3.741860284549766,
+    "finish_reason": "length",
+    "content_length": 0,
+    "content_length_note": "Empty content per documented Gemma4-it chat-template quirk — engagement validated via completion_tokens"
+  },
+  "verdict": "PASS"
+}
