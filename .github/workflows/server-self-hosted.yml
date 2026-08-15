@@ -11,22 +11,11 @@ on:
         description: 'Run slow tests'
         required: true
         type: boolean
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/server-self-hosted.yml',
-      '**/CMakeLists.txt',
-      '**/Makefile',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.swift',
-      '**/*.m',
-      'tools/server/**.*'
-    ]
+  # Auto-trigger (push) stripped on the ht fork: this workflow needs
+  # [self-hosted, llama-server, macOS, ARM64] runners that don't exist in this
+  # fork's runner pool, so triggered runs sit QUEUED forever and pollute PR
+  # status (UNSTABLE). workflow_dispatch remains for manual runs. See #84; same
+  # fix as build-sycl (#74) / build-cann (#80). Re-add when runners are provisioned.
 
 env:
   # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)

@@ -2,46 +2,12 @@ name: CI (self-hosted)
 
 on:
   workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-self-hosted.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-self-hosted.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl',
-      '**/*.wgsl'
-    ]
+  # Auto-triggers (push/pull_request) stripped on the ht fork: this workflow needs
+  # [self-hosted, Linux, NVIDIA] runners that don't exist in this fork's runner
+  # pool, so every triggered run sits QUEUED forever, polluting PR status (UNSTABLE)
+  # and the Actions dashboard. workflow_dispatch remains for manual runs. See #84;
+  # same fix as build-sycl (#74) / build-cann (#80). Re-add the upstream trigger
+  # block when self-hosted runners are provisioned.
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

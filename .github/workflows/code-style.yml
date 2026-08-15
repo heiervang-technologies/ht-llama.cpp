@@ -18,6 +18,10 @@ jobs:
     runs-on: [self-hosted, fast]
     steps:
       - uses: actions/checkout@v6
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Check model naming conventions
         run: |
           python3 - << 'EOF'
