@@ -2,9 +2,13 @@
 
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "../ggml/src/ggml-quants.h"
+#include "../ggml/src/ggml-turboq.h"
+#include "../ggml/src/ggml-turboq-tables.h"
 
 #undef NDEBUG
 #include <assert.h>
+#include <cstring>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -21,12 +25,17 @@ constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TERNARY = 0.01f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_2BITS = 0.0075f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS = 0.0040f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS = 0.0050f;
+// TBQ thresholds bumped post-PR #52 (128-block migration); the smaller blocks
+// produce slightly higher per-bucket quantization noise on uniform random data.
+constexpr float MAX_QUANTIZATION_TOTAL_ERROR_TBQ4 = 0.0035f;
 constexpr float MAX_QUANTIZATION_TOTAL_ERROR_FP4 = 0.0030f;
 constexpr float MAX_DOT_PRODUCT_ERROR = 0.02f;
 constexpr float MAX_DOT_PRODUCT_ERROR_LOWBIT = 0.04f;
 constexpr float MAX_DOT_PRODUCT_ERROR_FP4 = 0.03f;
 constexpr float MAX_DOT_PRODUCT_ERROR_BINARY = 0.40f;
 constexpr float MAX_DOT_PRODUCT_ERROR_TERNARY = 0.15f;
+constexpr float MAX_DOT_PRODUCT_ERROR_TBQ3 = 0.06f;
+constexpr float MAX_DOT_PRODUCT_ERROR_TBQ4 = 0.03f;
 
 static const char* RESULT_STR[] = {"ok", "FAILED"};
 
@@ -126,6 +135,41 @@ static int test_vec_dot_f32(bool verbose) {
     return num_failed;
 }
 
+static bool test_turboq_vec_dot_dispatch() {
+    for (ggml_type type : { GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ4_0 }) {
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
+        if (qfns_cpu->vec_dot == nullptr || qfns_cpu->vec_dot_type != GGML_TYPE_Q8_0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool test_tbq3_codebook() {
+    static const float expected[8] = {
+        -2.1520f, -1.3440f, -0.7560f, -0.2451f,
+         0.2451f,  0.7560f,  1.3440f,  2.1520f,
+    };
+
+    for (int i = 0; i < 8; ++i) {
+        if (fabsf(turboq_codebook_3bit[i] - expected[i]) > 1e-4f) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+static bool test_tbq3_norm_scaling() {
+    std::vector<float> x(TBQ_BLK_SIZE, 1.0f);
+    block_tbq3_0 block = {};
+
+    quantize_row_tbq3_0_ref(x.data(), &block, TBQ_BLK_SIZE);
+
+    return fabsf(ggml_fp16_to_fp32(block.d) - sqrtf((float) TBQ_BLK_SIZE)) < 1e-2f;
+}
+
 static int test_vec_dot_q(bool verbose) {
     int num_failed = 0;
 
@@ -136,6 +180,43 @@ static int test_vec_dot_q(bool verbose) {
 
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
+
+    bool failed = false;
+
+    failed = !test_turboq_vec_dot_dispatch();
+    num_failed += failed;
+    if (failed || verbose) {
+        printf("%5s vec_dot dispatch:               %s\n", "tbq*", RESULT_STR[failed]);
+    }
+
+    failed = !test_tbq3_codebook();
+    num_failed += failed;
+    if (failed || verbose) {
+        printf("%5s codebook values:               %s\n", "tbq3", RESULT_STR[failed]);
+    }
+
+    failed = !test_tbq3_norm_scaling();
+    num_failed += failed;
+    if (failed || verbose) {
+        printf("%5s norm scaling:                  %s\n", "tbq3", RESULT_STR[failed]);
+    }
+
+    // A single TBQ block is 128 values, so its dot partner must not require
+    // Q8_K's 256-value super-block. Exercise the minimum valid row directly.
+    for (ggml_type type : { GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ4_0 }) {
+        const auto * qfns = ggml_get_type_traits(type);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
+        const float error = dot_product_error(
+            qfns, qfns_cpu, TBQ_BLK_SIZE, test_data.data(), test_data2.data());
+        const float max_error = type == GGML_TYPE_TBQ3_0 ?
+            MAX_DOT_PRODUCT_ERROR_TBQ3 : MAX_DOT_PRODUCT_ERROR_TBQ4;
+        failed = !(error < max_error);
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("%5s 128-value dot product:        %s (%f)\n",
+                   ggml_type_name(type), RESULT_STR[failed], error);
+        }
+    }
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
@@ -164,6 +245,8 @@ static int test_vec_dot_q(bool verbose) {
                 type == GGML_TYPE_Q3_K    ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
                 type == GGML_TYPE_IQ3_S   ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS :
                 type == GGML_TYPE_IQ3_XXS ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
+                type == GGML_TYPE_TBQ3_0  ? MAX_QUANTIZATION_TOTAL_ERROR_3BITS_XXS :
+                type == GGML_TYPE_TBQ4_0  ? MAX_QUANTIZATION_TOTAL_ERROR_TBQ4 :
                 type == GGML_TYPE_NVFP4   ? MAX_QUANTIZATION_TOTAL_ERROR_FP4 : MAX_QUANTIZATION_TOTAL_ERROR;
             bool failed = !(total_error < max_quantization_error);
             num_failed += failed;
@@ -186,6 +269,10 @@ static int test_vec_dot_q(bool verbose) {
                 ? MAX_DOT_PRODUCT_ERROR_BINARY
                 : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 || type == GGML_TYPE_Q2_0
                 ? MAX_DOT_PRODUCT_ERROR_TERNARY
+                : type == GGML_TYPE_TBQ3_0
+                ? MAX_DOT_PRODUCT_ERROR_TBQ3
+                : type == GGML_TYPE_TBQ4_0
+                ? MAX_DOT_PRODUCT_ERROR_TBQ4
                 : type == GGML_TYPE_NVFP4
                 ? MAX_DOT_PRODUCT_ERROR_FP4
                 : MAX_DOT_PRODUCT_ERROR;

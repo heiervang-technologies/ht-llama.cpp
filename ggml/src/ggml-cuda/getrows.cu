@@ -2,6 +2,41 @@
 #include "dequantize.cuh"
 #include "convert.cuh"
 
+static __device__ __forceinline__ int unpack_tbq3_index(const uint8_t * qs, int elem) {
+    const int group = elem / 8;
+    const int shift = elem % 8 * 3;
+    const uint8_t * src = qs + group * 3;
+    const uint32_t bits = (uint32_t) src[0] | ((uint32_t) src[1] << 8) | ((uint32_t) src[2] << 16);
+    return bits >> shift & 0x7;
+}
+
+static __device__ __forceinline__ void dequantize_tbq3_0(
+        const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_tbq3_0 * x = (const block_tbq3_0 *) vx;
+    const float codebook[8] = {
+        -2.1520f, -1.3440f, -0.7560f, -0.2451f,
+         0.2451f,  0.7560f,  1.3440f,  2.1520f,
+    };
+    const float d = __half2float(x[ib].d) * 0.08838834764f;
+    v.x = codebook[unpack_tbq3_index(x[ib].qs, iqs + 0)] * d;
+    v.y = codebook[unpack_tbq3_index(x[ib].qs, iqs + 1)] * d;
+}
+
+static __device__ __forceinline__ void dequantize_tbq4_0(
+        const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_tbq4_0 * x = (const block_tbq4_0 *) vx;
+    const float codebook[16] = {
+        -2.7326f, -2.0690f, -1.6180f, -1.2562f,
+        -0.9424f, -0.6568f, -0.3881f, -0.1284f,
+         0.1284f,  0.3881f,  0.6568f,  0.9424f,
+         1.2562f,  1.6180f,  2.0690f,  2.7326f,
+    };
+    const float d = __half2float(x[ib].d) * 0.08838834764f;
+    const uint8_t packed = x[ib].qs[iqs / 2];
+    v.x = codebook[packed & 0x0f] * d;
+    v.y = codebook[packed >> 4] * d;
+}
+
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
         const void * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
@@ -398,6 +433,14 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_MXFP4:
             get_rows_cuda_kq<32, dst_t, dequantize_mxfp4<dst_t>>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TBQ3_0:
+            get_rows_cuda_q<TBQ_BLK_SIZE, 1, dequantize_tbq3_0>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_TBQ4_0:
+            get_rows_cuda_q<TBQ_BLK_SIZE, 1, dequantize_tbq4_0>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         default:

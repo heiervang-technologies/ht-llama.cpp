@@ -617,6 +617,186 @@ static __device__ __forceinline__ void dequantize_V_q8_0(const void * __restrict
     }
 }
 
+
+// 3-bit unpacking helper for TBQ3_0
+static __device__ __forceinline__ int unpack_3bit_index(const uint8_t * qs, int elem) {
+    const int group = elem / 8;
+    const int bit_offset = (elem % 8) * 3;
+    const uint8_t * src = qs + group * 3;
+    uint32_t bits = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16);
+    return (bits >> bit_offset) & 0x7;
+}
+
+template<int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tbq3_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_tbq3_0 * K_tbq3_0 = (const block_tbq3_0 *) K_c;
+    GGML_UNUSED(Q_v);
+
+    const float cb[8] = {
+        -2.1520f, -1.3440f, -0.7560f, -0.2451f,
+         0.2451f,  0.7560f,  1.3440f,  2.1520f,
+    };
+    const float scale_down = 0.08838834764f;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
+        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int elem = k_KQ * sizeof(int);
+        const int ib = elem / 128;
+        const int ie = elem % 128;
+        const float d = __half2float(K_tbq3_0[ib].d) * scale_down;
+        const int q32 = Q_q8[k_KQ_0/nthreads];
+        const int8_t * q8 = (const int8_t *) &q32;
+        const float qd = ((const float2 *) Q_ds_v)[k_KQ_0/nthreads].x;
+#pragma unroll
+        for (int l = 0; l < int(sizeof(int)); ++l) {
+            sum += cb[unpack_3bit_index(K_tbq3_0[ib].qs, ie + l)] * d * q8[l] * qd;
+        }
+    }
+
+    return sum;
+}
+
+template<int D, int nthreads>
+static __device__ __forceinline__ float vec_dot_fattn_vec_KQ_tbq4_0(
+    const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8, const void * __restrict__ Q_ds_v) {
+
+    const block_tbq4_0 * K_tbq4_0 = (const block_tbq4_0 *) K_c;
+    GGML_UNUSED(Q_v);
+
+    const float cb[16] = {
+        -2.7326f, -2.0690f, -1.6180f, -1.2562f,
+        -0.9424f, -0.6568f, -0.3881f, -0.1284f,
+         0.1284f,  0.3881f,  0.6568f,  0.9424f,
+         1.2562f,  1.6180f,  2.0690f,  2.7326f,
+    };
+    const float scale_down = 0.08838834764f;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < int(D/sizeof(int)); k_KQ_0 += nthreads) {
+        const int k_KQ = k_KQ_0 + (nthreads == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads);
+        const int elem = k_KQ * sizeof(int);
+        const int ib = elem / 128;
+        const int ie = elem % 128;
+        const float d = __half2float(K_tbq4_0[ib].d) * scale_down;
+        const int q32 = Q_q8[k_KQ_0/nthreads];
+        const int8_t * q8 = (const int8_t *) &q32;
+        const float qd = ((const float2 *) Q_ds_v)[k_KQ_0/nthreads].x;
+#pragma unroll
+        for (int l = 0; l < int(sizeof(int)); ++l) {
+            const int i = ie + l;
+            const uint8_t packed = K_tbq4_0[ib].qs[i / 2];
+            const int idx = i % 2 == 0 ? packed & 0x0f : packed >> 4;
+            sum += cb[idx] * d * q8[l] * qd;
+        }
+    }
+
+    return sum;
+}
+
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_tbq3_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_tbq3_0 * x = (const block_tbq3_0 *) vx;
+
+    const int64_t ib = i0 / 128;
+    const int elem_start = i0 % 128;
+
+    const float cb[8] = {
+        -2.1520f, -1.3440f, -0.7560f, -0.2451f,
+         0.2451f,  0.7560f,  1.3440f,  2.1520f,
+    };
+    const float scale_down = 0.08838834764f;
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    float vals[4];
+#pragma unroll
+    for (int l = 0; l < ne; ++l) {
+        int elem = elem_start + l;
+        int group = elem / 8;
+        int bit_offset = (elem % 8) * 3;
+        const uint8_t * src = x[ib].qs + group * 3;
+        uint32_t bits = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16);
+        int idx = (bits >> bit_offset) & 0x7;
+        vals[l] = cb[idx] * scale_down;
+    }
+
+#ifdef FP16_AVAILABLE
+    if constexpr (std::is_same_v<T, half>) {
+        const half2 d = __half2half2(x[ib].d);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = d * make_half2(vals[l0 + 0], vals[l0 + 1]);
+        }
+    } else
+#endif // FP16_AVAILABLE
+    if constexpr (std::is_same_v<T, float>) {
+        const float d = __half2float(x[ib].d);
+
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((float *) dst)[l] = d * vals[l];
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
+    }
+}
+
+template <typename T, int ne>
+static __device__ __forceinline__ void dequantize_V_tbq4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_tbq4_0 * x = (const block_tbq4_0 *) vx;
+
+    const int64_t ib = i0 / 128;
+    const int elem_start = i0 % 128;
+
+    const float cb[16] = {
+        -2.7326f, -2.0690f, -1.6180f, -1.2562f,
+        -0.9424f, -0.6568f, -0.3881f, -0.1284f,
+         0.1284f,  0.3881f,  0.6568f,  0.9424f,
+         1.2562f,  1.6180f,  2.0690f,  2.7326f,
+    };
+    const float scale_down = 0.08838834764f;
+
+    static_assert(ne == 2 || ne == 4, "bad ne");
+
+    float vals[4];
+#pragma unroll
+    for (int l = 0; l < ne; ++l) {
+        int elem = elem_start + l;
+        uint8_t byte = x[ib].qs[elem / 2];
+        int idx = (elem % 2 == 0) ? (byte & 0x0F) : (byte >> 4);
+        vals[l] = cb[idx] * scale_down;
+    }
+
+#ifdef FP16_AVAILABLE
+    if constexpr (std::is_same_v<T, half>) {
+        const half2 d = __half2half2(x[ib].d);
+
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((half2 *) dst)[l0/2] = d * make_half2(vals[l0 + 0], vals[l0 + 1]);
+        }
+    } else
+#endif // FP16_AVAILABLE
+    if constexpr (std::is_same_v<T, float>) {
+        const float d = __half2float(x[ib].d);
+
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((float *) dst)[l] = d * vals[l];
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
+    }
+}
+
 template <ggml_type type_K, int D, int nthreads>
 constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -633,6 +813,10 @@ constexpr __device__ vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads>;
     } else if constexpr (type_K == GGML_TYPE_BF16) {
         return vec_dot_fattn_vec_KQ_bf16<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TBQ3_0) {
+        return vec_dot_fattn_vec_KQ_tbq3_0<D, nthreads>;
+    } else if constexpr (type_K == GGML_TYPE_TBQ4_0) {
+        return vec_dot_fattn_vec_KQ_tbq4_0<D, nthreads>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -655,6 +839,10 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
         return dequantize_V_q8_0<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_BF16) {
         return dequantize_V_bf16<float, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TBQ3_0) {
+        return dequantize_V_tbq3_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TBQ4_0) {
+        return dequantize_V_tbq4_0<T, ne>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;

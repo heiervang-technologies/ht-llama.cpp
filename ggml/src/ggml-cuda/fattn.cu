@@ -269,6 +269,8 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ4_0, GGML_TYPE_F16)
 
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
@@ -317,12 +319,46 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ4_0, GGML_TYPE_TBQ3_0)
+
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_1, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_0, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ4_0, GGML_TYPE_TBQ4_0)
+
 #else
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
 #endif // GGML_CUDA_FA_ALL_QUANTS
+
+    // Matched TurboQuant KV caches are supported regardless of whether the
+    // optional all-quant cross-product matrix is compiled.
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ3_0, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ4_0, GGML_TYPE_TBQ4_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_TBQ4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_TBQ3_0)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16, GGML_TYPE_TBQ4_0)
+
+    // D == 512 (Gemma 4 global attention layers) has vec instances only for matched quantized KV types,
+    // see ggml_cuda_get_best_fattn_kernel for the dispatch conditions.
+    FATTN_VEC_CASE(512, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
+    FATTN_VEC_CASE(512, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0)
 
     GGML_ABORT("fatal error");
 }
@@ -349,6 +385,8 @@ static bool ggml_cuda_fattn_kv_type_supported(ggml_type type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_BF16:
+        case GGML_TYPE_TBQ3_0:
+        case GGML_TYPE_TBQ4_0:
             return true;
         default:
             return false;
@@ -440,7 +478,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
 #ifndef GGML_CUDA_FA_ALL_QUANTS
-    if (K->type != V->type) {
+    const bool has_tbq = K->type == GGML_TYPE_TBQ3_0 || K->type == GGML_TYPE_TBQ4_0 ||
+                         V->type == GGML_TYPE_TBQ3_0 || V->type == GGML_TYPE_TBQ4_0;
+    if (K->type != V->type && !has_tbq) {
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_CUDA_FA_ALL_QUANTS
@@ -455,7 +495,37 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // For D == 512 vec instances exist only for matched quantized KV types:
+    // the tile/MMA kernels need K/V dequantized to F16 on every call, so the vec kernel saves that staging pass.
+    // However, the vec kernel re-reads K/V once per Q head while tile/MMA amortize K/V reads across Q heads
+    // via the GQA optimization. Measured on sm_61 (TILE baseline) and sm_86 (MMA baseline): vec wins ~1.4-2.0x
+    // at gqa_ratio <= 4 but loses badly at gqa_ratio == 16 (e.g. Gemma 4 global MQA layers, up to 2.5x slower),
+    // so only allow it for small GQA ratios where the redundant K/V traffic stays below the dequant staging cost.
+    // The vec kernel only compiles logit_softcap variants for D == 128/256 (see fattn-vec.cuh).
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+    const bool vec_has_head_size = Q->ne[0] <= 256 ?
+        Q->ne[0] % 64 == 0 && Q->ne[0] != 192 :
+        Q->ne[0] == 512 && K->type == V->type && (K->type == GGML_TYPE_Q4_0 || K->type == GGML_TYPE_Q8_0) &&
+            logit_softcap == 0.0f && gqa_ratio <= 4;
+    const bool can_use_vector_kernel = vec_has_head_size && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // TBQ has codebook-domain vector kernels only. The tile/MMA dispatch tables
+    // do not contain TBQ entries, so selecting them would call a null kernel.
+    const bool K_is_tbq = K->type == GGML_TYPE_TBQ3_0 || K->type == GGML_TYPE_TBQ4_0;
+    const bool V_is_tbq = V->type == GGML_TYPE_TBQ3_0 || V->type == GGML_TYPE_TBQ4_0;
+    if (K_is_tbq || V_is_tbq) {
+#ifdef GGML_CUDA_FA_ALL_QUANTS
+        const bool tbq_pair_instantiated = true;
+#else
+        const bool K_is_float = K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_F32;
+        const bool V_is_float = V->type == GGML_TYPE_F16 || V->type == GGML_TYPE_F32;
+        const bool tbq_pair_instantiated =
+            (K->type == V->type && K_is_tbq) || (K_is_tbq && V_is_float) || (K_is_float && V_is_tbq);
+#endif // GGML_CUDA_FA_ALL_QUANTS
+        return can_use_vector_kernel && tbq_pair_instantiated ?
+            BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
+    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
