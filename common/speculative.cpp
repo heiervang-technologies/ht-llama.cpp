@@ -953,14 +953,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         n_embd_dec    = llama_model_n_embd(model_dft);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
 
-        // read the trained block size from the dflash.block_size metadata key
-        block_size = 16;
-        {
-            char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
-                block_size = std::atoi(buf);
-            }
-        }
+        block_size = llama_model_dflash_block_size(model_dft);
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
 
         LOG_INF("%s: adding speculative implementation 'draft-dflash'\n", __func__);

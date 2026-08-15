@@ -26,6 +26,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -2817,4 +2818,23 @@ const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
 
 uint32_t llama_model_target_layer_ids_n(const struct llama_model * model) {
     return (uint32_t) model->target_layer_ids.size();
+}
+
+int32_t llama_model_dflash_block_size(const struct llama_model * model) {
+    constexpr int32_t default_block_size = 16;
+
+    char buf[32] = {};
+    if (llama_model_meta_val_str(model, "dflash.block_size", buf, sizeof(buf)) < 0) {
+        return default_block_size;
+    }
+
+    char * end = nullptr;
+    const long value = std::strtol(buf, &end, 10);
+    if (end == buf || *end != '\0' || value < 2 || value > INT32_MAX) {
+        LLAMA_LOG_WARN("%s: invalid dflash.block_size '%s'; using default %d\n",
+                __func__, buf, default_block_size);
+        return default_block_size;
+    }
+
+    return (int32_t) value;
 }

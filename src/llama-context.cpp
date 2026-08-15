@@ -265,6 +265,10 @@ llama_context::llama_context(
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
+    if (model.arch == LLM_ARCH_DFLASH) {
+        cparams.n_outputs_max = std::max<uint32_t>(cparams.n_outputs_max, llama_model_dflash_block_size(&model));
+    }
+
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
