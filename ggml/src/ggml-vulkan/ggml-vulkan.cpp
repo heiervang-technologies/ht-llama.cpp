@@ -8803,7 +8803,10 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         }
     case VK_VENDOR_ID_INTEL:
         if (device->architecture == vk_device_architecture::INTEL_XE2) {
-            if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K) {
+            // Lunar Lake Xe2 benefits from integer-dot MMVQ for Q4_0 decode as
+            // well.  The generic Intel exclusion below was tuned on Alchemist.
+            if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K ||
+                src0_type == GGML_TYPE_Q4_0 || src0_type == GGML_TYPE_Q6_K) {
                 return true;
             }
         }
