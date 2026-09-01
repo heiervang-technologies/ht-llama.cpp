@@ -633,6 +633,25 @@ void server_models::load_models() {
                 if (!conflict) inst.meta.aliases.insert(alias);
             }
 
+            // Keep the global alias_to_name map in sync with this model's re-parsed aliases (#150).
+            // Without this, an alias removed from (or moved off) a still-existing model leaves a
+            // stale alias_to_name entry, and get_meta() — which consults alias_to_name before the
+            // authoritative meta.aliases scan — mis-resolves the alias to the old model.
+            // Scoped to the (non-running) model being re-parsed: erase only its own entries, then
+            // register its current aliases. Running models' entries (which #135 deliberately keeps
+            // when a loaded instance's meta.aliases are shadowed/lost) are left untouched. Correct
+            // for add/remove/move regardless of the iteration order over models.
+            for (auto ait = alias_to_name.begin(); ait != alias_to_name.end(); ) {
+                if (ait->second == name) {
+                    ait = alias_to_name.erase(ait);
+                } else {
+                    ++ait;
+                }
+            }
+            for (const auto & alias : inst.meta.aliases) {
+                alias_to_name[alias] = name;
+            }
+
             // re-parse tags
             inst.meta.tags.clear();
             std::string tags_str;
