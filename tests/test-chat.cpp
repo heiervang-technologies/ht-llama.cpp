@@ -1900,6 +1900,54 @@ static void test_convert_responses_to_chatcmpl() {
     }
 }
 
+static void test_compat_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    {
+        const json input = json::parse(R"({
+            "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "call_1", "name": "lookup", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Use this result."},
+                    {"type": "tool_result", "tool_use_id": "call_1", "content": "done"}
+                ]}
+            ]
+        })");
+
+        const json result = server_chat_convert_anthropic_to_oai(input);
+        const auto & messages = result.at("messages");
+        assert_equals((size_t) 3, messages.size());
+        assert_equals(std::string("assistant"), messages[0].at("role").get<std::string>());
+        assert_equals(std::string("tool"), messages[1].at("role").get<std::string>());
+        assert_equals(std::string("call_1"), messages[1].at("tool_call_id").get<std::string>());
+        assert_equals(std::string("user"), messages[2].at("role").get<std::string>());
+    }
+
+    {
+        const json input = json::parse(R"({
+            "contents": [
+                {"role": "model", "parts": [
+                    {"functionCall": {"name": "lookup", "args": {}}}
+                ]},
+                {"role": "user", "parts": [
+                    {"text": "Use this result."},
+                    {"functionResponse": {"name": "lookup", "response": {"value": "done"}}}
+                ]}
+            ]
+        })");
+
+        const json result = server_chat_convert_gemini_to_oai(input);
+        const auto & messages = result.at("messages");
+        assert_equals((size_t) 3, messages.size());
+        assert_equals(std::string("assistant"), messages[0].at("role").get<std::string>());
+        assert_equals(std::string("tool"), messages[1].at("role").get<std::string>());
+        assert_equals(std::string("lookup"), messages[1].at("tool_call_id").get<std::string>());
+        assert_equals(std::string("user"), messages[2].at("role").get<std::string>());
+    }
+}
+
 // Shared LFM2 parser cases - all variants use one output format and parser
 static void test_lfm2_parser(const std::string & template_path, bool detailed_debug) {
     auto tst = peg_tester(template_path, detailed_debug);
@@ -5935,6 +5983,7 @@ int main(int argc, char ** argv) {
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
+        test_compat_tool_result_ordering();
         test_developer_role_to_system_workaround();
         test_template_generation_prompt();
         test_template_output_peg_parsers(detailed_debug);
