@@ -1,0 +1,147 @@
+## Summary
+
+Implement **steering hints** — the ability to inject user input into an active inference pass at a given context position, creating overlapping activations that steer model output without interrupting ongoing reasoning. This can be thought of as "telepathy": the model receives a fully-formed user message mid-generation without the usual turn-taking interruption.
+
+## Background & Prior Art
+
+### What agentic CLIs call "steering"
+
+Several agentic CLI tools have introduced "steering hints" as a UX concept:
+
+- **Gemini CLI** ([issue #18782](https://github.com/google-gemini/gemini-cli/issues/18782), [PR #19307](https://github.com/google-gemini/gemini-cli/pull/19307)): "experimental in-progress steering hints" — user types while the model is thinking, text is injected into continuation turns as a hidden instruction. Explicitly prompt-level: *"inject a hidden steering instruction into continuation/follow-up turns"*.
+- **Gemini CLI** ([issue #17197](https://github.com/google-gemini/gemini-cli/issues/17197)): Proposed `/inject` command — *"the string is pushed to the conversation history as a 'User' message or 'System' hint"*.
+- **OpenAI Codex CLI**: Removed the `steer` feature flag and standardized on always-on steer path in TUI. Interactive mode (`--interactive`) allows mid-turn guidance. Again, text-level context manipulation.
+
+All of these operate at the **prompt/context level** — they queue text and inject it into the next reasoning step. None modify model activations directly.
+
+### Real activation-level steering in llama.cpp
+
+llama.cpp already supports **control vectors** ([PR #5970](https://github.com/ggml-org/llama.cpp/pull/5970), [issue #1460](https://github.com/ggml-org/llama.cpp/issues/1460)):
+
+- `llama_set_adapter_cvec()` applies per-layer vectors to activations during forward pass
+- `llama_adapter_cvec::apply_to()` adds steering tensor via `ggml_add(ctx, cur, layer_dir)`
+- Layer range `[il_start, il_end]` scopes which layers receive the vector
+- Vectors generated via PCA on positive/negative prompt pair activations (`tools/cvector-generator/`)
+
+### Research context
+
+- **Contrastive Activation Addition (CAA)**: Steering vectors computed from residual stream activation differences ([Rimsky et al., 2023](https://arxiv.org/abs/2312.06681))
+- **Steering Vector Fields** (Feb 2026): Learn differentiable scoring functions whose gradient defines steering direction per activation — context-aware rather than static
+- **SADI / FASB / CAST**: Adaptive per-input steering methods that determine intervention strength on-the-fly during inference
+- **EasySteer**: Unified framework with pluggable steering methods and pre-computed vectors for 8 domains
+- **AI Steerability 360**: IBM toolkit for systematic LLM steering ([arxiv 2603.07837](https://arxiv.org/html/2603.07837))
+
+## Proposal
+
+### Core idea
+
+During active token generation, accept user text input and:
+
+1. **Tokenize** it as a complete, properly-wrapped user message (with full chat template tags — see caveats)
+2. **Encode** these tokens into the KV cache at a target context position offset (overlapping with the current generation window)
+3. The model's attention mechanism naturally picks up these new KV entries, steering subsequent token generation
+
+This differs from both prompt injection (waits for next turn) and static control vectors (pre-computed, fixed direction). It's **dynamic, text-derived, position-targeted context steering**.
+
+### How it works mechanically
+
+llama.cpp's `llama_batch` already supports arbitrary position assignment:
+
+```c
+typedef struct llama_batch {
+    llama_token  *  token;    // token ids
+    llama_pos    *  pos;      // positions in sequence
+    llama_seq_id ** seq_id;   // sequence membership
+    // ...
+} llama_batch;
+```
+
+The KV cache stores activations keyed by `(seq_id, pos)`. By constructing a batch with the steering hint tokens at specific positions and calling `llama_decode()`, we write new KV entries that the model will attend to for all subsequent tokens.
+
+### Sequence of operations
+
+```
+1. Model is generating token at position N
+2. User types steering hint: "focus on error handling"
+3. System tokenizes hint with chat template wrapping:
+   <|im_start|>user\nfocus on error handling<|im_end|>
+4. Construct batch with hint tokens at positions [N+1, N+k]
+   (or on a parallel sequence that shares KV attention)
+5. llama_decode() the hint batch — writes to KV cache
+6. Model continues generating from position N+1 onward,
+   now attending to both its own prior context AND the hint
+```
+
+## Caveats & Open Questions
+
+### Chat template handling
+
+This is the trickiest part. User steering inputs must be **fully wrapped with proper chat template tags** so the model interprets them correctly:
+
+- Must use the model's actual chat template (Jinja or built-in)
+- The hint needs complete open+close tags (e.g., `<|im_start|>user\n...<|im_end|>` for ChatML)
+- Cannot leave tags unclosed — the model will treat unclosed tags as continuation of the current assistant turn
+- `llama_chat_apply_template()` can be used to wrap the hint as a single-message conversation with `add_ass=false`
+- Special tokens must be properly tokenized (not as text literals)
+
+### Position collision & attention masking
+
+- If hint tokens occupy positions that overlap with tokens the model is actively generating, we get activation interference
+- Options: (a) place hints at positions *ahead* of current generation, (b) use a separate sequence ID with shared KV attention, (c) use position offsets that the model hasn't reached yet
+- Need to understand RoPE position encoding implications — positions that are "future" relative to current generation may cause attention pattern issues
+
+### KV cache capacity
+
+- Each hint consumes KV cache slots proportional to its token count
+- For long-running generations, repeated hints could exhaust cache
+- May need a eviction/compaction strategy for expired hints
+
+### Causality
+
+- Standard causal attention means tokens only attend to previous positions
+- Hints placed at future positions won't be seen until generation reaches them
+- Hints placed at current/past positions create "retroactive" steering — the model hasn't seen them before but now attends to them
+- This is the "telepathy" effect: existing KV entries are unchanged, but new entries appear that influence future attention computations
+
+### Alternative: parallel sequence steering
+
+Instead of overlapping positions, use `llama_memory_seq_cp()` to branch the sequence:
+
+```
+seq 0: [system prompt] [user msg] [assistant generating...]
+seq 1: [copy of seq 0] + [steering hint tokens]
+```
+
+Then switch generation to seq 1. This avoids position collision but costs more KV memory.
+
+### Performance considerations
+
+- `llama_decode()` of the hint batch is a forward pass — compute cost proportional to hint length
+- For short hints ("focus on errors", "be more concise"), this is negligible
+- Could batch hint processing with the next token generation step
+
+## Scope
+
+### In scope
+- API for injecting steering hint text at a given context position during active generation
+- Proper chat template wrapping of hint text
+- Integration with existing KV cache and batch infrastructure
+- Server endpoint for submitting steering hints to active completions
+- Basic CLI support (type-while-generating)
+
+### Out of scope (for now)
+- Activation-level steering vector computation from hint text (future enhancement)
+- Automatic position selection heuristics
+- Multi-modal steering hints
+- Hint persistence across context shifts
+
+## References
+
+- llama.cpp control vectors: [PR #5970](https://github.com/ggml-org/llama.cpp/pull/5970), [issue #1460](https://github.com/ggml-org/llama.cpp/issues/1460)
+- Gemini CLI steering hints: [issue #18782](https://github.com/google-gemini/gemini-cli/issues/18782), [PR #19307](https://github.com/google-gemini/gemini-cli/pull/19307)
+- Gemini CLI /inject proposal: [issue #17197](https://github.com/google-gemini/gemini-cli/issues/17197)
+- Contrastive Activation Addition: [arxiv 2312.06681](https://arxiv.org/abs/2312.06681)
+- AI Steerability 360: [arxiv 2603.07837](https://arxiv.org/html/2603.07837)
+- EasySteer framework: [arxiv 2509.25175](https://arxiv.org/html/2509.25175v1)
+- Steering vectors for agents: [bassrehab/steering-vectors-agents](https://github.com/bassrehab/steering-vectors-agents)
+- llm_steer library: [Mihaiii/llm_steer](https://github.com/Mihaiii/llm_steer)

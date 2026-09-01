@@ -1,0 +1,28 @@
+Idle-cycle maintenance sprint (per `/home/me/IDLE.md` — don't hold off; keep active). One active epoch; tick items off and append newly-found work.
+
+- [x] **PR triage + squash-merge passing PRs** — ✅ merged #109, #110, #111. Janitored #95 (→ closed; re-filed as #113).
+- [x] **CI hygiene (#84)** — ✅ forced-A subset landed in #115. Lint subset (option-B) deferred (noted in #84).
+- [x] **#108 DFlash first-decode crash** — ✅ fix staged as draft PR #114; un-draft pending a cluster DFlash smoke. Bug-hunt cross-confirmed the crash is *deterministic*.
+- [ ] **HPC optimization (IDLE.md clause)** — **blocked on hardware**: the only GPU I can reach (centurion) is a production fleet node, so a multi-GB / multi-min benchmark would disrupt live serving. Needs a *dedicated* bench box. The known high-value target (GQA-packed quantized-KV FA kernel, ~4× headroom on the MQA deployment shape — see PR #102 history) is a focused CUDA-kernel project, not a safe idle-cycle self-merge.
+- [x] **Bug hunt** — ✅ DFlash multi-seq path: NOT a bug (guarded by `--parallel 1`). #19 Part-1 status:incomplete: already tested (`test_responses_truncation_emits_incomplete_status`).
+
+### Newly found this epoch
+- [x] #5 — Add Native Gemini API Compatibility to Server
+- [x] #17 — Steering hints: mid-inference context injection
+- [x] #113 — AGENTS.md webui section stale/self-contradictory post-sync (needs webui-owner intent)
+- [x] #84 lint subset — python-lint already on ubuntu-latest; 6 remaining need per-tool VERIFY-then-convert (blind conversion risks adding failing checks) — see #84 comment
+- [x] #11 — Analytical fit for large MoE models (PR #145)
+
+### Done this epoch (janitor)
+- [x] #92 — stale sync-conflict (2026-06-06) → closed (files gone post-sync; fork-sync green daily)
+- [x] #142 — rebase conflict (2026-06-22) → closed (resolved build errors after CMake migration)
+- [x] Bug hunt — fixed missing field initializer warnings for `need_download` in `server-models.cpp`
+- [x] Tech debt — fixed `int` vs `uint32_t` sign-compare warnings in `fit.cpp` and deprecated enum bitwise operations in `clip-graph.h` and tests.
+
+### Saved for later / needs input or dedicated hardware
+- HPC optimization — needs a dedicated (non-production) bench box + focused session
+- #90 stale branches — bulk deletion is surface-don't-act (risk of clobbering a live agent's WIP)
+- Fold gem pool-peer into committed `llm-pool.yaml` (cloud repo; Markus WIP)
+
+
+
