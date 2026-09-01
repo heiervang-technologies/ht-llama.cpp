@@ -1,0 +1,6 @@
+A	distinct=2/5	mtp_active=True
+B	distinct=2/5	mtp_active=True
+C	distinct=2/5	mtp_active=False
+D	distinct=2/5	mtp_active=False
+E	distinct=1/5
+F	distinct=1/5

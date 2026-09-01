@@ -1,0 +1,22 @@
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 16266 MiB):
+  Device 0: Quadro P5200, compute capability 6.1, VMM: yes, VRAM: 16266 MiB
+llama-bench: benchmark 1/4: starting
+llama-bench: benchmark 1/4: warmup prompt run
+llama-bench: benchmark 1/4: prompt run 1/3
+llama-bench: benchmark 1/4: prompt run 2/3
+llama-bench: benchmark 1/4: prompt run 3/3
+llama-bench: benchmark 2/4: starting
+llama-bench: benchmark 2/4: warmup prompt run
+llama-bench: benchmark 2/4: prompt run 1/3
+llama-bench: benchmark 2/4: prompt run 2/3
+llama-bench: benchmark 2/4: prompt run 3/3
+llama-bench: benchmark 3/4: starting
+llama-bench: benchmark 3/4: warmup generation run
+llama-bench: benchmark 3/4: generation run 1/3
+llama-bench: benchmark 3/4: generation run 2/3
+llama-bench: benchmark 3/4: generation run 3/3
+llama-bench: benchmark 4/4: starting
+llama-bench: benchmark 4/4: warmup generation run
+llama-bench: benchmark 4/4: generation run 1/3
+llama-bench: benchmark 4/4: generation run 2/3
+llama-bench: benchmark 4/4: generation run 3/3
