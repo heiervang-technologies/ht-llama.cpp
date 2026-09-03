@@ -360,6 +360,8 @@ json server_task_result_cmpl_final::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return stream ? to_json_gemini_stream() : to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1150,6 +1152,8 @@ json server_task_result_cmpl_partial::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1925,4 +1929,123 @@ void server_prompt_cache::update() {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
+}
+
+json server_task_result_cmpl_final::to_json_gemini() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = oaicompat_msg.tool_calls.empty() ? "STOP" : "STOP";
+    }
+
+    json parts = json::array();
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "model";
+        msg.content = content;
+    }
+
+    if (!msg.reasoning_content.empty()) {
+        parts.push_back({
+            {"text", "```thinking\n" + msg.reasoning_content + "\n```\n"}
+        });
+    }
+
+    if (!msg.content.empty()) {
+        parts.push_back({
+            {"text", msg.content}
+        });
+    }
+
+    for (const auto & tool_call : msg.tool_calls) {
+        json tool_use_block = {
+            {"functionCall", {
+                {"name", tool_call.name}
+            }}
+        };
+
+        try {
+            tool_use_block["functionCall"]["args"] = json::parse(tool_call.arguments);
+        } catch (const std::exception &) {
+            tool_use_block["functionCall"]["args"] = json::object();
+        }
+
+        parts.push_back(tool_use_block);
+    }
+
+    json candidate = {
+        {"content", {
+            {"parts", parts},
+            {"role", "model"}
+        }},
+        {"finishReason", finish_reason},
+        {"index", 0}
+    };
+
+    json res = {
+        {"candidates", json::array({candidate})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_gemini_stream() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = "STOP";
+    }
+
+    return json::array({{
+        {"candidates", json::array({{
+            {"finishReason", finish_reason},
+            {"index", 0}
+        }})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    }});
+}
+
+json server_task_result_cmpl_partial::to_json_gemini() {
+    json chunks = json::array();
+    
+    for (const auto & diff : oaicompat_msg_diffs) {
+        json parts = json::array();
+        
+        if (!diff.reasoning_content_delta.empty()) {
+            parts.push_back({{"text", diff.reasoning_content_delta}});
+        }
+        if (!diff.content_delta.empty()) {
+            parts.push_back({{"text", diff.content_delta}});
+        }
+        if (diff.tool_call_index != std::string::npos) {
+            json fc = {{"name", diff.tool_call_delta.name}};
+            if (!diff.tool_call_delta.arguments.empty()) {
+                fc["args"] = diff.tool_call_delta.arguments; 
+            }
+            parts.push_back({{"functionCall", fc}});
+        }
+        
+        if (!parts.empty()) {
+            chunks.push_back({
+                {"candidates", json::array({{
+                    {"content", {
+                        {"parts", parts}, 
+                        {"role", "model"}
+                    }},
+                    {"index", 0}
+                }})}
+            });
+        }
+    }
+    
+    return chunks;
 }
