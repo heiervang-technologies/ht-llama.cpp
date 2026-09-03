@@ -211,6 +211,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_transcriptions_oai     = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
+        routes.post_gemini_generate_content = models_routes->proxy_post;
+        routes.post_gemini_count_tokens    = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
         routes.post_embeddings             = models_routes->proxy_post;
         routes.post_embeddings_oai         = models_routes->proxy_post;
@@ -254,6 +256,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/v1/audio/transcriptions",  ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/audio/transcriptions",     ex_wrapper(routes.post_transcriptions_oai));
     ctx_http.post("/v1/messages",              ex_wrapper(routes.post_anthropic_messages)); // anthropic messages API
+    ctx_http.post(R"(/v1beta/models/([^:/]+):generateContent)", ex_wrapper(routes.post_gemini_generate_content), {"model"}); // gemini generate content
+    ctx_http.post(R"(/v1beta/models/([^:/]+):streamGenerateContent)", ex_wrapper(routes.post_gemini_generate_content), {"model"}); // gemini stream
     ctx_http.post("/infill",                   ex_wrapper(routes.post_infill));
     ctx_http.post("/embedding",                ex_wrapper(routes.post_embeddings)); // legacy
     ctx_http.post("/embeddings",               ex_wrapper(routes.post_embeddings));
@@ -271,6 +275,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/responses/input_tokens",           ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/responses/input_tokens",        ex_wrapper(routes.post_responses_tok_oai));
     ctx_http.post("/v1/messages/count_tokens",         ex_wrapper(routes.post_anthropic_count_tokens)); // anthropic token counting
+    ctx_http.post(R"(/v1beta/models/([^:/]+):countTokens)", ex_wrapper(routes.post_gemini_count_tokens), {"model"}); // gemini token counting
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",            ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",            ex_wrapper(routes.post_lora_adapters));

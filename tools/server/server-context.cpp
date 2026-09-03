@@ -4256,6 +4256,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             res->data = ""; // simply send HTTP headers and status code
         } else if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
+        } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+            res->data = format_gemini_sse(first_result_json);
         } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
             res->data = format_oai_resp_sse(first_result_json);
         } else {
@@ -4269,6 +4271,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     return format_anthropic_sse({
                         {"event", "error"},
                         {"data", res_json},
+                    });
+                } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                    return format_gemini_sse({
+                        {"error", res_json}
                     });
                 } else {
                     return format_oai_sse(json {{ "error", res_json }});
@@ -4300,6 +4306,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         case TASK_RESPONSE_TYPE_NONE:
                         case TASK_RESPONSE_TYPE_OAI_RESP:
                         case TASK_RESPONSE_TYPE_ANTHROPIC:
+                        case TASK_RESPONSE_TYPE_GEMINI:
                             output = "";
                             break;
 
@@ -4351,6 +4358,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
+                    } else if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+                        output = format_gemini_sse(res_json);
                     } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
                         output = format_oai_resp_sse(res_json);
                     } else {
@@ -4879,6 +4888,34 @@ void server_routes::init_routes() {
         return handle_count_tokens(ctx_server.vocab, ctx_server.mctx, req, TASK_RESPONSE_TYPE_ANTHROPIC);
     };
 
+    this->post_gemini_generate_content = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = server_chat_convert_gemini_to_oai(json::parse(req.body));
+        
+        // Handle Gemini stream endpoint convention
+        if (req.path.find("streamGenerateContent") != std::string::npos) {
+            body["stream"] = true;
+        }
+
+        SRV_DBG("%s\n", "Request converted: Gemini -> OpenAI Chat Completions");
+        SRV_DBG("converted request: %s\n", body.dump().c_str());
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            meta->chat_params,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_GEMINI);
+    };
+
+    this->post_gemini_count_tokens = [this](const server_http_req & req) {
+        return handle_count_tokens(ctx_server.vocab, ctx_server.mctx, req, TASK_RESPONSE_TYPE_GEMINI);
+    };
+
     // same with handle_chat_completions, but without inference part
     this->post_apply_template = [this](const server_http_req & req) {
         auto res = create_response();
@@ -5396,6 +5433,20 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
             {
                 body = server_chat_convert_anthropic_to_oai(body);
             } break;
+        case TASK_RESPONSE_TYPE_GEMINI:
+            {
+                if (body.contains("generateContentRequest")) {
+                    if (body.contains("contents")) {
+                        throw std::invalid_argument(
+                            "Gemini countTokens accepts either 'contents' or 'generateContentRequest', not both");
+                    }
+                    if (!body.at("generateContentRequest").is_object()) {
+                        throw std::invalid_argument("'generateContentRequest' must be an object");
+                    }
+                    body = body.at("generateContentRequest");
+                }
+                body = server_chat_convert_gemini_to_oai(body);
+            } break;
         default:
             res->error(format_error_response("invalid res_type", ERROR_TYPE_INVALID_REQUEST));
             return res;
@@ -5419,7 +5470,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
         n_tokens = tokenize_mixed(vocab, prompt, true, true).size();
     }
 
-    json response = {{"input_tokens", static_cast<int64_t>(n_tokens)}};
+    json response;
+    if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+        response = {{"totalTokens", static_cast<int64_t>(n_tokens)}};
+    } else {
+        response = {{"input_tokens", static_cast<int64_t>(n_tokens)}};
+    }
     if (is_oai) {
         response["object"] = "response.input_tokens";
     }

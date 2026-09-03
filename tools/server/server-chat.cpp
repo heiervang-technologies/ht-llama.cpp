@@ -1,7 +1,10 @@
 #include "server-chat.h"
 #include "server-common.h"
 
+#include <deque>
+#include <map>
 #include <sstream>
+#include <unordered_set>
 
 json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (!response_body.contains("input")) {
@@ -691,4 +694,262 @@ json convert_transcriptions_to_chatcmpl(
     }
 
     return chatcmpl_body;
+}
+
+json server_chat_convert_gemini_to_oai(const json & body) {
+    if (!body.is_object()) {
+        throw std::invalid_argument("Gemini request body must be an object");
+    }
+    if (!body.contains("contents") || !body.at("contents").is_array() || body.at("contents").empty()) {
+        throw std::invalid_argument("'contents' must be a non-empty array");
+    }
+
+    json oai_body;
+    json oai_messages = json::array();
+    std::map<std::string, std::deque<std::string>> pending_tool_calls;
+    size_t generated_tool_call_id = 0;
+
+    if (body.contains("systemInstruction")) {
+        const json & sys = body.at("systemInstruction");
+        if (!sys.is_object() || !sys.contains("parts") || !sys.at("parts").is_array()) {
+            throw std::invalid_argument("'systemInstruction.parts' must be an array");
+        }
+        std::string sys_content;
+        for (const auto & part : sys.at("parts")) {
+            if (!part.is_object() || !part.contains("text") || !part.at("text").is_string()) {
+                throw std::invalid_argument("Gemini system instruction parts must contain string 'text'");
+            }
+            if (!sys_content.empty()) {
+                sys_content += '\n';
+            }
+            sys_content += part.at("text").get<std::string>();
+        }
+        if (!sys_content.empty()) {
+            oai_messages.push_back({
+                {"role", "system"},
+                {"content", sys_content}
+            });
+        }
+    }
+
+    for (const auto & content_item : body.at("contents")) {
+        if (!content_item.is_object() || !content_item.contains("parts") ||
+                !content_item.at("parts").is_array() || content_item.at("parts").empty()) {
+            throw std::invalid_argument("Gemini content items must contain a non-empty 'parts' array");
+        }
+
+        std::string role = json_value(content_item, "role", std::string("user"));
+        if (role == "model") {
+            role = "assistant";
+        } else if (role != "user") {
+            throw std::invalid_argument("Gemini content role must be 'user' or 'model'");
+        }
+
+        json converted_content = json::array();
+        json tool_calls = json::array();
+        json tool_results = json::array();
+
+        for (const auto & part : content_item.at("parts")) {
+            if (!part.is_object()) {
+                throw std::invalid_argument("Gemini content parts must be objects");
+            }
+            if (part.contains("text")) {
+                if (!part.at("text").is_string()) {
+                    throw std::invalid_argument("Gemini text parts require string 'text'");
+                }
+                converted_content.push_back({
+                    {"type", "text"},
+                    {"text", part.at("text")}
+                });
+            } else if (part.contains("inlineData")) {
+                const json & inline_data = part.at("inlineData");
+                if (!inline_data.is_object() || !inline_data.contains("mimeType") ||
+                        !inline_data.at("mimeType").is_string() || !inline_data.contains("data") ||
+                        !inline_data.at("data").is_string()) {
+                    throw std::invalid_argument("Gemini inlineData requires string 'mimeType' and 'data'");
+                }
+                const std::string mime_type = inline_data.at("mimeType").get<std::string>();
+                if (mime_type.rfind("image/", 0) != 0) {
+                    throw std::invalid_argument("Only Gemini image inlineData is supported");
+                }
+                converted_content.push_back({
+                    {"type", "image_url"},
+                    {"image_url", {
+                        {"url", "data:" + mime_type + ";base64," + inline_data.at("data").get<std::string>()}
+                    }}
+                });
+            } else if (part.contains("functionCall")) {
+                if (role != "assistant") {
+                    throw std::invalid_argument("Gemini functionCall parts require role 'model'");
+                }
+                const json & fc = part.at("functionCall");
+                if (!fc.is_object() || !fc.contains("name") || !fc.at("name").is_string() ||
+                        fc.at("name").get<std::string>().empty()) {
+                    throw std::invalid_argument("Gemini functionCall requires non-empty string 'name'");
+                }
+                if (fc.contains("args") && !fc.at("args").is_object()) {
+                    throw std::invalid_argument("Gemini functionCall 'args' must be an object");
+                }
+                const std::string name = fc.at("name").get<std::string>();
+                std::string id;
+                if (fc.contains("id") && fc.at("id").is_string() && !fc.at("id").get<std::string>().empty()) {
+                    id = fc.at("id").get<std::string>();
+                } else {
+                    id = "gemini_call_" + std::to_string(generated_tool_call_id++);
+                }
+                pending_tool_calls[name].push_back(id);
+                tool_calls.push_back({
+                    {"id", id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", name},
+                        {"arguments", fc.contains("args") ? fc.at("args").dump() : "{}"}
+                    }}
+                });
+            } else if (part.contains("functionResponse")) {
+                if (role != "user") {
+                    throw std::invalid_argument("Gemini functionResponse parts require role 'user'");
+                }
+                const json & fr = part.at("functionResponse");
+                if (!fr.is_object() || !fr.contains("name") || !fr.at("name").is_string() ||
+                        fr.at("name").get<std::string>().empty() || !fr.contains("response") ||
+                        !fr.at("response").is_object()) {
+                    throw std::invalid_argument("Gemini functionResponse requires string 'name' and object 'response'");
+                }
+                const std::string name = fr.at("name").get<std::string>();
+                std::string id;
+                if (fr.contains("id") && fr.at("id").is_string() && !fr.at("id").get<std::string>().empty()) {
+                    id = fr.at("id").get<std::string>();
+                } else {
+                    auto & ids = pending_tool_calls[name];
+                    if (ids.empty()) {
+                        throw std::invalid_argument("Gemini functionResponse has no matching functionCall: " + name);
+                    }
+                    id = ids.front();
+                    ids.pop_front();
+                }
+                tool_results.push_back({
+                    {"role", "tool"},
+                    {"tool_call_id", id},
+                    {"content", fr.at("response").dump()}
+                });
+            } else {
+                throw std::invalid_argument("Unsupported Gemini content part");
+            }
+        }
+
+        if (!converted_content.empty() || !tool_calls.empty()) {
+            json new_msg = {{"role", role}};
+            if (converted_content.size() == 1 && converted_content[0].at("type") == "text") {
+                new_msg["content"] = converted_content[0].at("text");
+            } else if (!converted_content.empty()) {
+                new_msg["content"] = converted_content;
+            } else {
+                new_msg["content"] = "";
+            }
+            if (!tool_calls.empty()) {
+                new_msg["tool_calls"] = tool_calls;
+            }
+            oai_messages.push_back(std::move(new_msg));
+        }
+
+        for (const auto & tool_msg : tool_results) {
+            oai_messages.push_back(tool_msg);
+        }
+    }
+    
+    oai_body["messages"] = oai_messages;
+
+    if (body.contains("tools")) {
+        if (!body.at("tools").is_array()) {
+            throw std::invalid_argument("'tools' must be an array");
+        }
+        json oai_tools = json::array();
+        for (const auto & tool : body.at("tools")) {
+            if (!tool.is_object() || !tool.contains("functionDeclarations") ||
+                    !tool.at("functionDeclarations").is_array()) {
+                throw std::invalid_argument("Gemini tools must contain a 'functionDeclarations' array");
+            }
+            for (const auto & fd : tool.at("functionDeclarations")) {
+                if (!fd.is_object() || !fd.contains("name") || !fd.at("name").is_string() ||
+                        fd.at("name").get<std::string>().empty()) {
+                    throw std::invalid_argument("Gemini function declarations require non-empty string 'name'");
+                }
+                if (fd.contains("parameters") && !fd.at("parameters").is_object()) {
+                    throw std::invalid_argument("Gemini function declaration 'parameters' must be an object");
+                }
+                oai_tools.push_back({
+                    {"type", "function"},
+                    {"function", {
+                        {"name", fd.at("name")},
+                        {"description", json_value(fd, "description", std::string())},
+                        {"parameters", fd.contains("parameters") ? fd.at("parameters") : json::object()}
+                    }}
+                });
+            }
+        }
+        if (!oai_tools.empty()) {
+            oai_body["tools"] = oai_tools;
+        }
+    }
+
+    if (body.contains("toolConfig")) {
+        const json & tool_config = body.at("toolConfig");
+        if (!tool_config.is_object() || !tool_config.contains("functionCallingConfig") ||
+                !tool_config.at("functionCallingConfig").is_object()) {
+            throw std::invalid_argument("'toolConfig.functionCallingConfig' must be an object");
+        }
+        const json & fc_config = tool_config.at("functionCallingConfig");
+        const std::string mode = json_value(fc_config, "mode", std::string("AUTO"));
+        if (mode == "AUTO" || mode == "VALIDATED") {
+            oai_body["tool_choice"] = "auto";
+        } else if (mode == "ANY") {
+            oai_body["tool_choice"] = "required";
+        } else if (mode == "NONE") {
+            oai_body["tool_choice"] = "none";
+        } else {
+            throw std::invalid_argument("Unsupported Gemini function calling mode: " + mode);
+        }
+
+        if (fc_config.contains("allowedFunctionNames")) {
+            if (!fc_config.at("allowedFunctionNames").is_array()) {
+                throw std::invalid_argument("'allowedFunctionNames' must be an array");
+            }
+            std::unordered_set<std::string> allowed_names;
+            for (const auto & name : fc_config.at("allowedFunctionNames")) {
+                if (!name.is_string()) {
+                    throw std::invalid_argument("'allowedFunctionNames' entries must be strings");
+                }
+                allowed_names.insert(name.get<std::string>());
+            }
+            if (!allowed_names.empty()) {
+                json filtered_tools = json::array();
+                for (const auto & tool : json_value(oai_body, "tools", json::array())) {
+                    if (allowed_names.count(tool.at("function").at("name").get<std::string>())) {
+                        filtered_tools.push_back(tool);
+                    }
+                }
+                if (filtered_tools.empty()) {
+                    throw std::invalid_argument("'allowedFunctionNames' did not match any declared function");
+                }
+                oai_body["tools"] = std::move(filtered_tools);
+            }
+        }
+    }
+
+    if (body.contains("generationConfig")) {
+        if (!body.at("generationConfig").is_object()) {
+            throw std::invalid_argument("'generationConfig' must be an object");
+        }
+        const json & gc = body.at("generationConfig");
+        if (gc.contains("temperature")) oai_body["temperature"] = gc.at("temperature");
+        if (gc.contains("topP")) oai_body["top_p"] = gc.at("topP");
+        if (gc.contains("topK")) oai_body["top_k"] = gc.at("topK");
+        if (gc.contains("maxOutputTokens")) oai_body["max_tokens"] = gc.at("maxOutputTokens");
+        if (gc.contains("stopSequences")) oai_body["stop"] = gc.at("stopSequences");
+        if (gc.contains("presencePenalty")) oai_body["presence_penalty"] = gc.at("presencePenalty");
+        if (gc.contains("frequencyPenalty")) oai_body["frequency_penalty"] = gc.at("frequencyPenalty");
+    }
+
+    return oai_body;
 }

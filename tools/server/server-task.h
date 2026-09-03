@@ -38,6 +38,7 @@ enum task_response_type {
     TASK_RESPONSE_TYPE_OAI_ASR, // transcriptions API
     TASK_RESPONSE_TYPE_OAI_EMBD,
     TASK_RESPONSE_TYPE_ANTHROPIC,
+    TASK_RESPONSE_TYPE_GEMINI,
 };
 
 enum stop_type {
@@ -110,6 +111,7 @@ struct task_result_state {
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
+    std::unordered_set<size_t> gemini_tool_calls_emitted;
 
     // for OpenAI Responses and Anthropic streaming API:
     // track output item / content block state across chunks
@@ -369,6 +371,7 @@ struct server_task_result_cmpl_final : server_task_result {
     common_chat_msg    oaicompat_msg; // to be populated by update()
 
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
+    std::vector<common_chat_tool_call> gemini_tool_calls_ready;
     bool is_updated = false;
 
     // for OpenAI Responses API
@@ -385,6 +388,23 @@ struct server_task_result_cmpl_final : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+
+        if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+            for (size_t i = 0; i < oaicompat_msg.tool_calls.size(); ++i) {
+                if (state.gemini_tool_calls_emitted.count(i)) {
+                    continue;
+                }
+                try {
+                    const json args = json::parse(oaicompat_msg.tool_calls[i].arguments);
+                    if (args.is_object()) {
+                        gemini_tool_calls_ready.push_back(oaicompat_msg.tool_calls[i]);
+                        state.gemini_tool_calls_emitted.insert(i);
+                    }
+                } catch (const std::exception &) {
+                    // Report malformed calls in the final Gemini finish reason.
+                }
+            }
+        }
 
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
@@ -408,8 +428,10 @@ struct server_task_result_cmpl_final : server_task_result {
     json to_json_oaicompat_asr();
 
     json to_json_anthropic();
+    json to_json_gemini();
 
     json to_json_anthropic_stream();
+    json to_json_gemini_stream();
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
@@ -434,6 +456,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string        oaicompat_model;
     std::string        oaicompat_cmpl_id;
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
+    std::vector<common_chat_tool_call> gemini_tool_calls_ready;
     bool is_updated = false;
 
     // Streaming state copied from task_result_state for this chunk
@@ -469,6 +492,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     json to_json_oaicompat_asr();
 
     json to_json_anthropic();
+    json to_json_gemini();
 };
 
 struct server_task_result_embd : server_task_result {

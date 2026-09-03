@@ -16,6 +16,9 @@ json server_chat_convert_responses_to_chatcmpl(const json & body);
 // Convert Anthropic Messages API format to OpenAI Chat Completions API format
 json server_chat_convert_anthropic_to_oai(const json & body);
 
+// Convert Gemini GenerateContent API format to OpenAI Chat Completions API format
+json server_chat_convert_gemini_to_oai(const json & body);
+
 // convert OpenAI transcriptions API format to OpenAI Chat Completions API format
 json convert_transcriptions_to_chatcmpl(
     const json & body,

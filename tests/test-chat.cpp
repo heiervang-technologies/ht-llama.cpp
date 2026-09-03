@@ -1911,6 +1911,82 @@ static void test_convert_responses_to_chatcmpl() {
     }
 }
 
+static void test_convert_gemini_to_chatcmpl() {
+    LOG_DBG("%s\n", __func__);
+
+    const json input = json::parse(R"({
+        "systemInstruction": {
+            "parts": [{"text": "Be concise."}, {"text": "Use tools."}]
+        },
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "Weather in Oslo and Bergen?"}]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    {"functionCall": {"name": "weather", "args": {"city": "Oslo"}}},
+                    {"functionCall": {"name": "weather", "args": {"city": "Bergen"}}}
+                ]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    {"functionResponse": {"name": "weather", "response": {"temp": 18}}},
+                    {"functionResponse": {"name": "weather", "response": {"temp": 16}}}
+                ]
+            }
+        ],
+        "tools": [{
+            "functionDeclarations": [{
+                "name": "weather",
+                "description": "Get weather",
+                "parameters": {"type": "object"}
+            }]
+        }],
+        "toolConfig": {"functionCallingConfig": {"mode": "ANY"}},
+        "generationConfig": {"maxOutputTokens": 32, "topP": 0.8}
+    })");
+
+    const json result = server_chat_convert_gemini_to_oai(input);
+    const json & messages = result.at("messages");
+    assert_equals((size_t) 5, messages.size());
+    assert_equals(std::string("Be concise.\nUse tools."), messages[0].at("content").get<std::string>());
+    assert_equals(std::string("assistant"), messages[2].at("role").get<std::string>());
+    assert_equals((size_t) 2, messages[2].at("tool_calls").size());
+
+    const std::string first_id = messages[2].at("tool_calls")[0].at("id").get<std::string>();
+    const std::string second_id = messages[2].at("tool_calls")[1].at("id").get<std::string>();
+    assert_equals(false, first_id == second_id);
+    assert_equals(first_id, messages[3].at("tool_call_id").get<std::string>());
+    assert_equals(second_id, messages[4].at("tool_call_id").get<std::string>());
+    assert_equals(std::string("required"), result.at("tool_choice").get<std::string>());
+    assert_equals(32, result.at("max_tokens").get<int>());
+    assert_equals(0.8, result.at("top_p").get<double>());
+
+    bool rejected_missing_contents = false;
+    try {
+        server_chat_convert_gemini_to_oai(json::object());
+    } catch (const std::invalid_argument &) {
+        rejected_missing_contents = true;
+    }
+    assert_equals(true, rejected_missing_contents);
+
+    bool rejected_unmatched_response = false;
+    try {
+        server_chat_convert_gemini_to_oai(json::parse(R"({
+            "contents": [{
+                "role": "user",
+                "parts": [{"functionResponse": {"name": "missing", "response": {}}}]
+            }]
+        })"));
+    } catch (const std::invalid_argument &) {
+        rejected_unmatched_response = true;
+    }
+    assert_equals(true, rejected_unmatched_response);
+}
+
 // Shared LFM2 parser cases - all variants use one output format and parser
 static void test_lfm2_parser(const std::string & template_path, bool detailed_debug) {
     auto tst = peg_tester(template_path, detailed_debug);
@@ -6424,6 +6500,7 @@ int main(int argc, char ** argv) {
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
+        test_convert_gemini_to_chatcmpl();
         test_developer_role_to_system_workaround();
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();

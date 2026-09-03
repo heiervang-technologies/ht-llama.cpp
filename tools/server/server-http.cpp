@@ -606,9 +606,12 @@ void server_http_context::get(const std::string & path, const server_http_contex
     });
 }
 
-void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
+void server_http_context::post(
+        const std::string & path,
+        const server_http_context::handler_t & handler,
+        const std::vector<std::string> & regex_param_names) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    pimpl->srv->Post(path_prefix + path, [handler, regex_param_names](const httplib::Request & req, httplib::Response & res) {
         std::string body = req.body;
         std::map<std::string, uploaded_file> files;
 
@@ -639,8 +642,18 @@ void server_http_context::post(const std::string & path, const server_http_conte
             }
         }
 
+        auto params = get_params(req);
+        if (!regex_param_names.empty()) {
+            if (req.matches.size() != regex_param_names.size() + 1) {
+                throw std::runtime_error("HTTP regex route capture count mismatch");
+            }
+            for (size_t i = 0; i < regex_param_names.size(); ++i) {
+                params[regex_param_names[i]] = decode_path_component(req.matches[i + 1].str());
+            }
+        }
+
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
-            get_params(req),
+            std::move(params),
             get_headers(req),
             req.path,
             build_query_string(req),

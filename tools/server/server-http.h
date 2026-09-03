@@ -88,7 +88,10 @@ struct server_http_context {
     void stop() const;
 
     void get(const std::string & path, const handler_t & handler) const;
-    void post(const std::string & path, const handler_t & handler) const;
+    void post(
+        const std::string & path,
+        const handler_t & handler,
+        const std::vector<std::string> & regex_param_names = {}) const;
     void del(const std::string & path, const handler_t & handler) const;
 
     // Register the Google Cloud Platform (Vertex AI) compat (AIP_PREDICT_ROUTE env var, or /predict)

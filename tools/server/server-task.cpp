@@ -360,6 +360,8 @@ json server_task_result_cmpl_final::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return stream ? to_json_anthropic_stream() : to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return stream ? to_json_gemini_stream() : to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1101,6 +1103,23 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
 
+    if (res_type == TASK_RESPONSE_TYPE_GEMINI) {
+        for (size_t i = 0; i < state.chat_msg.tool_calls.size(); ++i) {
+            if (state.gemini_tool_calls_emitted.count(i)) {
+                continue;
+            }
+            try {
+                const json args = json::parse(state.chat_msg.tool_calls[i].arguments);
+                if (args.is_object()) {
+                    gemini_tool_calls_ready.push_back(state.chat_msg.tool_calls[i]);
+                    state.gemini_tool_calls_emitted.insert(i);
+                }
+            } catch (const std::exception &) {
+                // A Gemini functionCall is emitted only after its args form an object.
+            }
+        }
+    }
+
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;
     text_block_started     = state.text_block_started;
@@ -1150,6 +1169,8 @@ json server_task_result_cmpl_partial::to_json() {
             return to_json_oaicompat_asr();
         case TASK_RESPONSE_TYPE_ANTHROPIC:
             return to_json_anthropic();
+        case TASK_RESPONSE_TYPE_GEMINI:
+            return to_json_gemini();
         default:
             GGML_ASSERT(false && "Invalid task_response_type");
     }
@@ -1925,4 +1946,169 @@ void server_prompt_cache::update() {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
+}
+
+json server_task_result_cmpl_final::to_json_gemini() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = "STOP";
+    }
+
+    json parts = json::array();
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "model";
+        msg.content = content;
+    }
+
+    if (!msg.content.empty()) {
+        parts.push_back({
+            {"text", msg.content}
+        });
+    }
+
+    for (const auto & tool_call : msg.tool_calls) {
+        json tool_use_block = {
+            {"functionCall", {
+                {"name", tool_call.name}
+            }}
+        };
+
+        try {
+            json args = json::parse(tool_call.arguments);
+            if (!args.is_object()) {
+                throw std::invalid_argument("function arguments are not an object");
+            }
+            tool_use_block["functionCall"]["args"] = std::move(args);
+        } catch (const std::exception &) {
+            finish_reason = "MALFORMED_FUNCTION_CALL";
+            continue;
+        }
+
+        parts.push_back(tool_use_block);
+    }
+
+    json candidate = {
+        {"content", {
+            {"parts", parts},
+            {"role", "model"}
+        }},
+        {"finishReason", finish_reason},
+        {"index", 0}
+    };
+
+    json res = {
+        {"candidates", json::array({candidate})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_gemini_stream() {
+    std::string finish_reason = "MAX_TOKENS";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        finish_reason = "STOP";
+    }
+
+    for (const auto & tool_call : oaicompat_msg.tool_calls) {
+        try {
+            if (!json::parse(tool_call.arguments).is_object()) {
+                finish_reason = "MALFORMED_FUNCTION_CALL";
+                break;
+            }
+        } catch (const std::exception &) {
+            finish_reason = "MALFORMED_FUNCTION_CALL";
+            break;
+        }
+    }
+
+    json parts = json::array();
+    for (const auto & tool_call : gemini_tool_calls_ready) {
+        try {
+            json args = json::parse(tool_call.arguments);
+            if (!args.is_object()) {
+                throw std::invalid_argument("function arguments are not an object");
+            }
+            parts.push_back({
+                {"functionCall", {
+                    {"name", tool_call.name},
+                    {"args", std::move(args)}
+                }}
+            });
+        } catch (const std::exception &) {
+            finish_reason = "MALFORMED_FUNCTION_CALL";
+        }
+    }
+
+    json candidate = {
+        {"finishReason", finish_reason},
+        {"index", 0}
+    };
+    if (!parts.empty()) {
+        candidate["content"] = {
+            {"parts", std::move(parts)},
+            {"role", "model"}
+        };
+    }
+
+    return json::array({{
+        {"candidates", json::array({std::move(candidate)})},
+        {"usageMetadata", {
+            {"promptTokenCount", n_prompt_tokens},
+            {"candidatesTokenCount", n_decoded},
+            {"totalTokenCount", n_prompt_tokens + n_decoded}
+        }}
+    }});
+}
+
+json server_task_result_cmpl_partial::to_json_gemini() {
+    json chunks = json::array();
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        json parts = json::array();
+
+        if (!diff.content_delta.empty()) {
+            parts.push_back({{"text", diff.content_delta}});
+        }
+
+        if (!parts.empty()) {
+            chunks.push_back({
+                {"candidates", json::array({{
+                    {"content", {
+                        {"parts", parts}, 
+                        {"role", "model"}
+                    }},
+                    {"index", 0}
+                }})}
+            });
+        }
+    }
+
+    for (const auto & tool_call : gemini_tool_calls_ready) {
+        json args = json::parse(tool_call.arguments);
+        GGML_ASSERT(args.is_object());
+        chunks.push_back({
+            {"candidates", json::array({{
+                {"content", {
+                    {"parts", json::array({{
+                        {"functionCall", {
+                            {"name", tool_call.name},
+                            {"args", std::move(args)}
+                        }}
+                    }})},
+                    {"role", "model"}
+                }},
+                {"index", 0}
+            }})}
+        });
+    }
+
+    return chunks;
 }
