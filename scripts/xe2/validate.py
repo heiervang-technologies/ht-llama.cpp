@@ -39,57 +39,82 @@ def environment(mode):
 
 def snapshot(pid=None):
     data = {"time": time.time()}
+    errors = {}
+
+    def read(path):
+        try:
+            return path.read_text().strip()
+        except OSError as error:
+            errors[str(path)] = str(error)
+            return None
+
     for path in (Path("/sys/class/power_supply/AC/online"), Path("/sys/firmware/acpi/platform_profile")):
         if path.exists():
-            data[str(path)] = path.read_text().strip()
-    data["temperatures"] = {str(p): p.read_text().strip() for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")}
+            data[str(path)] = read(path)
+    data["temperatures"] = {str(p): read(p) for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")}
     memory_info = Path("/proc/meminfo")
     if memory_info.exists():
         data["system_memory"] = {line.split(":", 1)[0]: line.split(":", 1)[1].strip()
-                                 for line in memory_info.read_text().splitlines()
+                                 for line in (read(memory_info) or "").splitlines()
                                  if line.startswith(("MemAvailable:", "SwapFree:"))}
     if pid:
+        for line in (read(Path(f"/proc/{pid}/status")) or "").splitlines():
+            if line.startswith(("VmRSS:", "VmHWM:")):
+                key, value = line.split(":", 1)
+                data[key] = value.strip()
+        # Xe buffers are not all reflected in RSS. Deduplicate duplicated fds
+        # by DRM client id, and tolerate descriptors closing during sampling.
+        clients = {}
+        directory = Path(f"/proc/{pid}/fdinfo")
         try:
-            for line in Path(f"/proc/{pid}/status").read_text().splitlines():
-                if line.startswith(("VmRSS:", "VmHWM:")):
-                    key, value = line.split(":", 1)
-                    data[key] = value.strip()
-            # Xe allocates GPU buffers outside the process RSS on this UMA
-            # device. Keep per-client DRM accounting and deduplicate dup fds.
-            clients = {}
-            for path in Path(f"/proc/{pid}/fdinfo").iterdir():
-                try:
-                    fields = dict(line.split(":", 1) for line in path.read_text().splitlines()
-                                  if line.startswith("drm-"))
-                except FileNotFoundError:
-                    continue
+            for path in directory.iterdir():
+                fields = dict(line.split(":", 1) for line in (read(path) or "").splitlines()
+                              if line.startswith("drm-"))
                 if "drm-client-id" in fields:
                     clients[fields["drm-client-id"].strip()] = {k: v.strip() for k, v in fields.items()}
-            data["drm_clients"] = clients
-        except FileNotFoundError:
-            pass
+        except OSError as error:
+            errors[str(directory)] = str(error)
+        data["drm_clients"] = clients
+    if errors:
+        data["read_errors"] = errors
     return data
 
 
 def run(args, command, name, env=None):
     print(name, flush=True)
     start = snapshot()
+    timeout = getattr(args, "timeout_seconds", 1800)
+    deadline = time.monotonic() + timeout
     with (args.output / f"{name}.stdout").open("w") as out, (args.output / f"{name}.stderr").open("w") as err:
         process = subprocess.Popen([str(x) for x in command], stdout=out, stderr=err, env=env)
         samples = []
+        runner_error = None
         try:
             while process.poll() is None:
+                if time.monotonic() > deadline:
+                    raise TimeoutError(f"{name} exceeded {timeout} seconds")
                 samples.append(snapshot(process.pid))
                 time.sleep(1)
+        except BaseException as error:
+            runner_error = f"{type(error).__name__}: {error}"
+            raise
         finally:
-            if process.poll() is None:
-                process.terminate()
-                process.wait(timeout=30)
-    write_json(args.output / f"{name}.run.json", {
-        "command": [str(x) for x in command], "start": start, "end": snapshot(),
-        "returncode": process.returncode, "samples": samples,
-        "tuning_environment": {k: v for k, v in (env or os.environ).items() if k.startswith(("LLAMA_VK_", "GGML_VK_"))},
-    })
+            try:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=30)
+            finally:
+                write_json(args.output / f"{name}.run.json", {
+                    "command": [str(x) for x in command], "start": start, "end": snapshot(),
+                    "returncode": process.returncode, "samples": samples, "runner_error": runner_error,
+                    "timeout_seconds": timeout,
+                    "tuning_environment": {k: v for k, v in (env or os.environ).items()
+                                           if k.startswith(("LLAMA_VK_", "GGML_VK_"))},
+                })
     if process.returncode:
         raise RuntimeError(f"{name} failed; inspect {args.output / (name + '.stderr')}")
 
@@ -350,9 +375,10 @@ def main():
     parser.add_argument("--repetitions", type=int, default=5)
     parser.add_argument("--smoke-configs", nargs="+", choices=["on", "zero", "hybrid", "q8", "q4", "mtp"],
                         default=["on", "zero", "hybrid", "q8", "q4", "mtp"])
+    parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--soak-seconds", type=int, default=3600)
     args = parser.parse_args()
-    if args.models_dir is None or min(args.depths) < 576 or args.repetitions < 1 or args.soak_seconds < 1:
+    if args.models_dir is None or min(args.depths) < 576 or args.repetitions < 1 or args.soak_seconds < 1 or args.timeout_seconds < 1:
         parser.error("Set GGUFS or --models-dir; depths >=576 and counts positive")
     if args.stage == "smoke" and (("zero" in args.smoke_configs and "on" not in args.smoke_configs) or
                                   ("mtp" in args.smoke_configs and "hybrid" not in args.smoke_configs)):
@@ -370,7 +396,7 @@ def main():
     write_json(args.output / f"{args.stage}-{'-'.join(args.model_ids)}.metadata.json", {
         "platform": platform.platform(), "packages": packages, "models": MANIFEST,
         "settings": {"model_ids": args.model_ids, "depths": args.depths, "repetitions": args.repetitions,
-                     "soak_seconds": args.soak_seconds, "smoke_configs": args.smoke_configs, "models_dir": str(args.models_dir)},
+                     "soak_seconds": args.soak_seconds, "timeout_seconds": args.timeout_seconds, "smoke_configs": args.smoke_configs, "models_dir": str(args.models_dir)},
         "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
         "diff": subprocess.check_output(["git", "diff"], cwd=REPO, text=True), "environment": snapshot(),
         "server_version": subprocess.check_output([str(args.bin / "llama-server"), "--version"], text=True, stderr=subprocess.STDOUT),

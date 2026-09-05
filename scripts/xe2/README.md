@@ -29,6 +29,7 @@ accepts `--ctx-size` up to 32768; hybrid rejects sizes above 2048. The presets
 remain candidates until the acceptance runs below have passed.
 
 ```bash
+python scripts/xe2/test_validate.py
 python scripts/xe2/fetch-models.py --models-dir "$GGUFS"
 cmake --build build-vulkan -j 4 --target llama-server llama-bench \
   test-backend-ops test-cpu-quantized-copy test-gemma4-attention-policy test-gemma4-device
@@ -90,10 +91,13 @@ Inspect warm RSS trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.
 
-`--model-ids`, `--smoke-configs`, `--depths`, `--repetitions`, and `--soak-seconds` permit targeted
+`--model-ids`, `--smoke-configs`, `--depths`, `--repetitions`, `--timeout-seconds`, and `--soak-seconds` permit targeted
 debugging. Shortened runs are not the full acceptance suite. Outputs include
 commands, model hashes, Git revision/diff, device descriptions, and subprocess
 logs. Failed smoke comparisons retain their response evidence with `passed: false`.
+Optional telemetry read failures are recorded rather than aborting the model.
+Native/benchmark subprocesses have a configurable 30-minute deadline and retain
+run metadata on failure or interruption.
 Any missing model, checksum mismatch, failed assertion, invalid response,
 or subprocess failure stops the relevant stage with a nonzero exit.
 
