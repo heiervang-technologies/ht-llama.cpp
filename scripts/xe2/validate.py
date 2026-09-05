@@ -146,7 +146,7 @@ def server(args, model, mode, name, mtp=False, slots=1, cache="f16", context=204
     command = [str(args.bin / "llama-server"), "-m", str(model), "-ngl", "999", "-c", str(context * slots),
                "-np", str(slots), "-b", "2048", "-ub", "512", "-t", "4", "-tb", "4",
                "-fa", "off" if mode == "off" else "on", "-ctk", cache, "-ctv", cache,
-               "--cache-ram", "1024", "--host", "127.0.0.1", "--port", str(port), "--jinja"]
+               "--cache-ram", "1024", "--ctx-checkpoints-max-mib", "512", "--host", "127.0.0.1", "--port", str(port), "--jinja"]
     if mtp:
         command += ["--spec-draft-model", str(args.models["12b-mtp"]), "--spec-type", "draft-mtp",
                     "--spec-draft-n-max", "16", "--spec-draft-p-min", "0.9", "--n-gpu-layers-draft", "999"]

@@ -14,8 +14,11 @@ GGUFs remain outside the repository under `$GGUFS` or `--models-dir`.
 
 Serving presets make context and cache choices explicit. The baseline uses
 FA-off, F16 K/V, one slot, and 8K context; the hybrid experiment uses FA-on and
-2K context. Both cap the RAM prompt cache at 1 GiB and verify model hashes
-at startup. MTP is optional and limited
+2K context. Both set a 1 GiB RAM prompt-cache budget and a 512 MiB checkpoint budget
+per slot, and verify model hashes at startup. These are cache-policy budgets,
+not strict process-memory caps: the prompt cache retains at least one state,
+and checkpoint eviction runs before a new state is appended. Measure actual
+RSS and GPU memory, including any budget overshoot. MTP is optional and limited
 to the matching 12B assistant. No service is installed or deployed by these scripts.
 
 ```bash
@@ -44,6 +47,7 @@ python scripts/xe2/validate.py smoke --output /tmp/xe2-validation
 python scripts/xe2/validate.py bench --output /tmp/xe2-validation
 python scripts/xe2/summarize.py /tmp/xe2-validation
 python scripts/xe2/validate.py soak --output /tmp/xe2-validation
+python scripts/xe2/summarize-soak.py /tmp/xe2-validation
 ```
 
 Run GPU stages sequentially, on AC, with the same power profile and desktop

@@ -15,7 +15,9 @@ These establish a fresh baseline; historical Xe2 artifact hashes were absent.
 Use the [validation commands](../../scripts/xe2/README.md) to reproduce the
 checks. Raw outputs include commands, Git revision/diff, binary version,
 model hashes, device information, power/temperature samples, and process/DRM
-memory accounting. Server presets cap the RAM prompt cache at 1 GiB.
+memory accounting. Server presets set a 1 GiB prompt-cache budget and a 512 MiB checkpoint
+budget per slot. Cache policies can exceed those nominal budgets by a retained
+or newly appended state; measured memory use is reported separately.
 
 ## Safety and local tests
 
@@ -66,7 +68,7 @@ but the original long, repetitive raw prompt remained numerically sensitive.
 |---|---|---|
 | FA-off/hybrid distributions and KV reuse | Pass | Pass |
 | Plain-FA-on comparison | Pass | **Fail**: KL at 16 tokens |
-| Templated lifecycle, fallback, tools, cancellation | Pending | Pending |
+| Templated lifecycle, fallback, tools, cancellation | Pass; rechecking final budgets | Pass; rechecking final budgets |
 | Baseline and hybrid soak, 15 minutes each | Pending | Pending |
 | Five interleaved runs per mode at 2K/8K/16K/32K | Pending | Pending |
 
