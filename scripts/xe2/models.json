@@ -1,0 +1,29 @@
+{
+  "provenance": "Fresh validation baseline. Matches documented filenames; original Xe2 artifact hashes were not recorded.",
+  "models": [
+    {
+      "id": "12b",
+      "repo": "unsloth/gemma-4-12B-it-qat-GGUF",
+      "revision": "980b060c40a8539ac159e0501a3e0f66a6365af3",
+      "file": "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+      "sha256": "90fd44e29e0d7cffeb0fd00dc73cfdab9ed0b0e95306ecf7821ea634c940c370",
+      "size": 6716356800
+    },
+    {
+      "id": "12b-mtp",
+      "repo": "unsloth/gemma-4-12B-it-qat-GGUF",
+      "revision": "980b060c40a8539ac159e0501a3e0f66a6365af3",
+      "file": "MTP/mtp-gemma-4-12B-it-Q4_0.gguf",
+      "sha256": "fcb35dea42c71333db904cee11baac525c9ef872818ee3753f6cb156f3c6f4f6",
+      "size": 253708800
+    },
+    {
+      "id": "26b",
+      "repo": "unsloth/gemma-4-26B-A4B-it-GGUF",
+      "revision": "c099eb48e663fd284577b04978a94ffccb261841",
+      "file": "gemma-4-26B-A4B-it-UD-IQ4_XS.gguf",
+      "sha256": "babd1e389d386352f71600765d37390f7dc993fbfad6725caccf996ffe34aecf",
+      "size": 13597177568
+    }
+  ]
+}
