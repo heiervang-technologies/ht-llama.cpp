@@ -38,7 +38,7 @@ def main():
     command = [str(binary), "-m", str(models[args.model]), "-ngl", "999", "-np", "1", "-c", str(context),
                "-b", "2048", "-ub", "512", "-t", "4", "-tb", "4", "-ctk", "f16", "-ctv", "f16",
                "-fa", "on" if args.profile == "hybrid" else "off", "--jinja",
-               "--host", args.host, "--port", str(args.port)]
+               "--cache-ram", "1024", "--host", args.host, "--port", str(args.port)]
     if args.mtp:
         command += ["--spec-draft-model", str(models["12b-mtp"]), "--spec-type", "draft-mtp",
                     "--spec-draft-n-max", "16", "--spec-draft-p-min", "0.9", "--n-gpu-layers-draft", "999"]
