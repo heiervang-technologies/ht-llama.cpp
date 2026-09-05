@@ -33,7 +33,7 @@ python scripts/xe2/fetch-models.py --models-dir "$GGUFS"
 cmake --build build-vulkan -j 4 --target llama-server llama-bench \
   test-backend-ops test-cpu-quantized-copy test-gemma4-attention-policy test-gemma4-device
 ctest --test-dir build-vulkan --output-on-failure \
-  -R 'test-(cpu-quantized-copy|gemma4-attention-policy)$'
+  -R 'test-(cpu-quantized-copy|gemma4-attention-policy|gemma4-logit-metrics)$'
 ./build-vulkan/bin/test-backend-ops test -b Vulkan0 -o CPY,CONT
 ./build-vulkan/bin/test-backend-ops test -b Vulkan0 -o MUL_MAT -p 'type_a=q4_0'
 ./build-vulkan/bin/test-backend-ops test -b Vulkan0 -o FLASH_ATTN_EXT \
@@ -56,7 +56,13 @@ standalone pp/tg finish slightly earlier. Raw JSON records the actual sizes.
 
 Parity uses full CPU logits after continuation batches of 1/2/16, 31/32,
 63/64, 128, and 1152 tokens following a GGUF-templated chat prefix;
-F16 GPU paths must satisfy the backend FA test tolerance (NMSE < 5e-4).
+F16 GPU paths must stay below 0.005 nats KL divergence and 0.05 total variation
+against the CPU token distribution. A single-operation NMSE threshold is not
+an appropriate full-model sampling bound: logits have an arbitrary common
+offset, and vocabulary tails with negligible probability can dominate NMSE.
+Raw NMSE is still reported for every comparison. KV reuse retains NMSE < 5e-4
+in addition to the distribution checks. The metrics have model-free tests for
+shift invariance, changed predictions, near ties, and non-finite rejection.
 Declared suppressed tokens must retain their intentional negative-infinity
 logits; all other logits must be finite. Suppressed entries are excluded from NMSE.
 Top-token agreement, KL divergence, and total variation of token probabilities

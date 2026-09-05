@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -44,11 +45,17 @@ static std::vector<float> logits(llama_context * ctx, const std::vector<bool> & 
     return result;
 }
 
-static bool compare(const std::vector<float> & actual, const std::vector<float> & reference, const char * label) {
+static bool compare(const std::vector<float> & actual, const std::vector<float> & reference, const char * label, bool strict = false) {
     GGML_ASSERT(actual.size() == reference.size());
+    if (actual.empty()) { return false; }
+    for (size_t i = 0; i < actual.size(); ++i) {
+        if (std::isinf(reference[i]) && reference[i] < 0 && actual[i] == reference[i]) { continue; }
+        if (!std::isfinite(actual[i]) || !std::isfinite(reference[i])) { return false; }
+    }
     double error = 0, scale = 0;
     const double max_actual = *std::max_element(actual.begin(), actual.end());
     const double max_reference = *std::max_element(reference.begin(), reference.end());
+    if (!std::isfinite(max_actual) || !std::isfinite(max_reference)) { return false; }
     double sum_actual = 0, sum_reference = 0;
     for (size_t i = 0; i < actual.size(); ++i) {
         sum_actual += std::exp(actual[i] - max_actual);
@@ -75,12 +82,32 @@ static bool compare(const std::vector<float> & actual, const std::vector<float> 
                           std::max_element(reference.begin(), reference.end()) - reference.begin();
     std::printf("%s: nmse=%.9g kl=%.9g tv=%.9g top1_equal=%d\n", label, nmse, kl, tv, same_top);
     std::fflush(stdout);
-    // Same tolerance as the FLASH_ATTN_EXT backend comparisons. Record top-1
-    // separately because nearly tied logits may swap under FP16 arithmetic.
-    return nmse < 5e-4;
+    // Full-model logits have an arbitrary common offset, and low-probability
+    // vocabulary tails must not dominate the sampling comparison. Bound the
+    // distribution change to 0.005 nats KL and 5% total variation. Keep raw
+    // NMSE in every report and retain the operator tolerance for KV reuse.
+    return std::isfinite(kl) && std::isfinite(tv) && kl < 0.005 && tv < 0.05 &&
+           (!strict || nmse < 5e-4);
 }
 
 int main(int argc, char ** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--self-test") {
+        const float inf = std::numeric_limits<float>::infinity();
+        const float nan = std::numeric_limits<float>::quiet_NaN();
+        GGML_ASSERT(compare({99, 100, 101}, {-1, 0, 1}, "common offset"));
+        GGML_ASSERT(!compare({99, 100, 101}, {-1, 0, 1}, "strict offset", true));
+        GGML_ASSERT(compare({0, 0}, {0, 0}, "identical zero logits", true));
+        GGML_ASSERT(compare({-inf, 5, 6}, {-inf, 0, 1}, "declared suppression"));
+        GGML_ASSERT(!compare({0, 1}, {1, 0}, "changed prediction"));
+        GGML_ASSERT(!compare({-4, 4}, {4, -4}, "opposite peaked prediction"));
+        GGML_ASSERT(compare({0, 0.001f}, {0.001f, 0}, "near tie"));
+        GGML_ASSERT(!compare({nan, 1}, {0, 1}, "NaN"));
+        GGML_ASSERT(!compare({inf, 1}, {0, 1}, "positive infinity"));
+        GGML_ASSERT(!compare({-inf, 1}, {0, 1}, "unexpected suppression"));
+        GGML_ASSERT(!compare({-inf}, {-inf}, "empty distribution"));
+        std::puts("Logit comparison invariants: PASS");
+        return 0;
+    }
     if ((argc != 4 && argc != 5) || (std::string(argv[3]) != "cpu" && std::string(argv[3]) != "gpu")) {
         std::fprintf(stderr, "usage: %s MODEL CPU_LOGITS_FILE cpu|gpu [CONFIG]\n", argv[0]);
         return 1;
@@ -198,7 +225,7 @@ int main(int argc, char ** argv) {
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + 20, lengths[i] - start)) == 0);
                 GGML_ASSERT(llama_memory_seq_rm(memory, 0, prefix.size() + start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + start, lengths[i] - start)) == 0);
-                passed &= compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str());
+                passed &= compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str(), true);
             }
         }
         llama_free(ctx);
