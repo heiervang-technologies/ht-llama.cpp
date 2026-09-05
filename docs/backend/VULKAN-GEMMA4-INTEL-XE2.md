@@ -29,8 +29,9 @@ The benchmark tables below are historical, not fresh acceptance evidence.
 Their original Xe2 model hashes were not recorded. The pinned, checksummed
 artifacts and repeatable validation commands in [`scripts/xe2`](../../scripts/xe2/README.md)
 establish a new baseline without claiming byte-identical reproduction.
-Keep hybrid opt-in until model parity, lifecycle tests, depth benchmarks, and
-the one-hour soak pass. Do not infer long-context gains from the short runs.
+The [acceptance record](VULKAN-GEMMA4-INTEL-XE2-VALIDATION.md) separates passing
+preset checks from failed controls and unfinished measurements. Keep hybrid
+opt-in until its parity, lifecycle tests, depth benchmarks, and soak pass. Do not infer long-context gains from the short runs.
 
 This document is about making each usable Gemma 4 member perform well.  It does
 not recommend replacing one family member with another: the dense, unified,
