@@ -1,6 +1,7 @@
 #include "common.h"
 #include "ggml-backend.h"
 #include "llama.h"
+#include "../src/llama-vocab.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,11 +13,22 @@
 
 static const std::vector<int> lengths = {1, 2, 16, 31, 32, 63, 64, 128, 1152};
 
-static std::vector<float> logits(llama_context * ctx, int n_vocab) {
+static std::vector<float> logits(llama_context * ctx, const llama_vocab * vocab) {
+    const int n_vocab = llama_vocab_n_tokens(vocab);
     const float * data = llama_get_logits_ith(ctx, -1);
     GGML_ASSERT(data);
     std::vector<float> result(data, data + n_vocab);
-    for (float x : result) { GGML_ASSERT(std::isfinite(x)); }
+    std::vector<bool> suppressed(n_vocab, false);
+    for (llama_token token : vocab->get_suppress_tokens()) {
+        if (token >= 0 && token < n_vocab) { suppressed[token] = true; }
+    }
+    for (int i = 0; i < n_vocab; ++i) {
+        if (suppressed[i]) {
+            GGML_ASSERT(std::isinf(result[i]) && result[i] < 0);
+        } else {
+            GGML_ASSERT(std::isfinite(result[i]));
+        }
+    }
     return result;
 }
 
@@ -24,6 +36,10 @@ static void compare(const std::vector<float> & actual, const std::vector<float> 
     GGML_ASSERT(actual.size() == reference.size());
     double error = 0, scale = 0;
     for (size_t i = 0; i < actual.size(); ++i) {
+        if (std::isinf(reference[i]) && reference[i] < 0) {
+            GGML_ASSERT(actual[i] == reference[i]);
+            continue;
+        }
         error += std::pow(double(actual[i]) - reference[i], 2);
         scale += double(reference[i])*reference[i];
     }
@@ -100,7 +116,7 @@ int main(int argc, char ** argv) {
         for (size_t i = 0; i < lengths.size(); ++i) {
             llama_memory_clear(llama_get_memory(ctx), true);
             GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data(), lengths[i])) == 0);
-            auto result = logits(ctx, n_vocab);
+            auto result = logits(ctx, vocab);
             if (cpu) {
                 reference[i] = result;
             } else if (config.cache == GGML_TYPE_F16) {
@@ -115,7 +131,7 @@ int main(int argc, char ** argv) {
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + 20, lengths[i] - start)) == 0);
                 GGML_ASSERT(llama_memory_seq_rm(memory, 0, start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + start, lengths[i] - start)) == 0);
-                compare(logits(ctx, n_vocab), result, (std::string(config.name) + " reused KV").c_str());
+                compare(logits(ctx, vocab), result, (std::string(config.name) + " reused KV").c_str());
             }
         }
         llama_free(ctx);

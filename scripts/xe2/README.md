@@ -55,6 +55,8 @@ standalone pp/tg finish slightly earlier. Raw JSON records the actual sizes.
 
 Parity uses full CPU logits at 1/2/16, 31/32, 63/64, 128, and 1152 prompt tokens;
 F16 GPU paths must satisfy the backend FA test tolerance (NMSE < 5e-4).
+Declared suppressed tokens must retain their intentional negative-infinity
+logits; all other logits must be finite. Suppressed entries are excluded from NMSE.
 Top-token agreement is recorded separately for review. F16/Q8_0/Q4_0 caches
 must remain finite and reproduce logits after dirtying, freeing, and reusing
 a suffix beyond the sliding window. CPU reference files belong to the exact
