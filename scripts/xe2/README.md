@@ -92,7 +92,8 @@ Both 12B phases use MTP. Logs retain responses, timing, temperature, power profi
 DRM memory accounting. GPU allocations on this UMA device are not all reflected
 in process RSS. Each MTP soak phase must actually draft and accept tokens. The soak also
 checks the capital answer each time that prompt recurs.
-Inspect warm RSS trends and MTP engagement/acceptance in server logs before
+The soak summary reports warm memory ranges and complete-cycle RSS peak trends.
+Inspect these trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.
 

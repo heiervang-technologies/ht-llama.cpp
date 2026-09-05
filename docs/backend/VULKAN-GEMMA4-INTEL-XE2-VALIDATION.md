@@ -30,7 +30,8 @@ or newly appended state; measured memory use is reported separately.
 - Local CPU CI passed Debug 45/45 and Release 47/47 using `GG_BUILD_LOW_PERF=1`.
   This selection excludes the large-model/high-performance jobs.
   `LLAMA_FATAL_WARNINGS=OFF` was required for a GCC 16 warning in unchanged
-  vocabulary construction code. The later model-free logit-metric test also passes.
+  vocabulary construction code. The later model-free logit-metric test passes in Debug and Release, and all
+  three telemetry/process infrastructure regression tests pass.
 
 ## Corrections to the validation method
 
@@ -68,7 +69,7 @@ but the original long, repetitive raw prompt remained numerically sensitive.
 |---|---|---|
 | FA-off/hybrid distributions and KV reuse | Pass | Pass |
 | Plain-FA-on comparison | Pass | **Fail**: KL at 16 tokens |
-| Templated lifecycle, fallback, tools, cancellation | Pass; rechecking final budgets | Pass; rechecking final budgets |
+| Templated lifecycle, fallback, tools, cancellation | Pass (6 profiles) | Pass (5 profiles) |
 | Baseline and hybrid soak, 15 minutes each | Pending | Pending |
 | Five interleaved runs per mode at 2K/8K/16K/32K | Pending | Pending |
 

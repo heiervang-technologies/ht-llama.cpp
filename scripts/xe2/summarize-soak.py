@@ -33,7 +33,7 @@ def main():
     parser.add_argument("results", type=Path)
     parser.add_argument("--warmup-seconds", type=float, default=300)
     args = parser.parse_args()
-    print("| Model | Profile | State | Minutes | Requests | Warm RSS MiB; slope | Warm GPU resident GTT MiB; slope | MTP accepted/drafted | Telemetry errors |")
+    print("| Model | Profile | State | Minutes | Requests | Warm RSS MiB; cycle-peak trend | Warm GPU resident GTT MiB; slope | MTP accepted/drafted | Telemetry errors |")
     print("|---|---|---|---:|---:|---|---|---:|---:|")
     complete = True
     for model in ("12b", "26b"):
@@ -53,22 +53,29 @@ def main():
                         and (model != "12b" or accepted > 0))
             complete &= done
             rss, gpu = [], []
-            for sample in samples:
+            cycles = {}
+            for index, sample in enumerate(samples):
                 if sample["elapsed"] < args.warmup_seconds:
                     continue
                 memory = sample["memory"]
                 resident = mib(memory.get("VmRSS"))
                 if resident is not None:
                     rss.append((sample["elapsed"], resident))
+                    cycles.setdefault(index // 3, []).append((sample["elapsed"], resident))
                 clients = memory.get("drm_clients", {})
                 amounts = [mib(client["drm-resident-gtt"]) for client in clients.values() if "drm-resident-gtt" in client]
                 if amounts:
                     gpu.append((sample["elapsed"], sum(amounts)))
+            peaks = [(statistics.mean(t for t, _ in points), max(v for _, v in points))
+                     for points in cycles.values() if len(points) == 3]
+            rss_report = (f"{min(v for _, v in rss):.1f}–{max(v for _, v in rss):.1f}; peaks {trend(peaks)}"
+                          if rss else "insufficient samples")
             errors = sum(bool(sample["memory"].get("read_errors")) for sample in samples)
             print(f"| {model} | {profile} | {'complete' if done else 'incomplete'} | {elapsed / 60:.2f} | {requests} | "
-                  f"{trend(rss)} | {trend(gpu)} | {accepted}/{drafted} | {errors} |")
+                  f"{rss_report} | {trend(gpu)} | {accepted}/{drafted} | {errors} |")
     print(f"\nFull four-phase hour completed: {'yes' if complete else 'no'}.")
     print(f"Memory trends exclude the first {args.warmup_seconds:g} seconds of each phase. "
+          "RSS peak trends use complete three-round workload cycles to distinguish cache churn from growth. "
           "CPU RSS and DRM GTT are separate measurements and must not be added as disjoint pools. "
           "A finite soak can reveal growth; it cannot prove the absence of every leak.")
 
