@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import shutil
 import socket
 import subprocess
 import time
@@ -202,6 +203,9 @@ def bench(args):
                         "-p", "512", "-n", "64", "-pg", "512,64", "-d", str(depth - 576),
                         "-fa", "off" if mode == "off" else "on", "-ctk", "f16", "-ctv", "f16",
                         "-ub", "512", "-b", "2048", "-t", "4", "-r", "1", "-o", "json"], name, environment(mode))
+                    rows = json.loads((args.output / f"{name}.stdout").read_text())
+                    if len(rows) != 3 or any(not math.isfinite(row["avg_ts"]) or row["avg_ts"] <= 0 for row in rows):
+                        raise RuntimeError(f"Invalid benchmark metrics: {name}")
 
 
 def smoke(args):
@@ -275,9 +279,14 @@ def main():
         with args.models[m["id"]].open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != m["sha256"]:
                 raise RuntimeError(f"Model checksum mismatch: {m['id']}")
-    write_json(args.output / f"{args.stage}.metadata.json", {"platform": platform.platform(), "models": MANIFEST,
+    packages = subprocess.run(["pacman", "-Q", "mesa", "vulkan-intel", "gcc"], capture_output=True, text=True).stdout if shutil.which("pacman") else ""
+    write_json(args.output / f"{args.stage}-{'-'.join(args.model_ids)}.metadata.json", {
+        "platform": platform.platform(), "packages": packages, "models": MANIFEST,
+        "settings": {"model_ids": args.model_ids, "depths": args.depths, "repetitions": args.repetitions,
+                     "soak_seconds": args.soak_seconds, "models_dir": str(args.models_dir)},
         "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
         "diff": subprocess.check_output(["git", "diff"], cwd=REPO, text=True), "environment": snapshot(),
+        "server_version": subprocess.check_output([str(args.bin / "llama-server"), "--version"], text=True, stderr=subprocess.STDOUT),
         "devices": subprocess.check_output([str(args.bin / "llama-bench"), "--list-devices"], text=True, stderr=subprocess.STDOUT)})
     globals()[args.stage](args)
 
