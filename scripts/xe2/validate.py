@@ -229,6 +229,7 @@ def smoke(args):
     prompt = "The capital of Norway is"
     for key in args.model_ids:
         baseline = None
+        hybrid_target = None
         for mode, mtp, cache in [("on", False, "f16"), ("zero", False, "f16"), ("hybrid", False, "f16"),
                                  ("hybrid", False, "q8_0"), ("hybrid", False, "q4_0")] + (
                                  [("hybrid", True, "f16")] if key == "12b" else []):
@@ -242,6 +243,13 @@ def smoke(args):
                     baseline = first["tokens"]
                 if mode == "zero" and first["tokens"] != baseline:
                     raise RuntimeError("Hybrid=0 differs from unset")
+                if mode == "hybrid" and cache == "f16" and not mtp:
+                    hybrid_target = first["tokens"]
+                if mtp:
+                    if first["tokens"] != hybrid_target:
+                        raise RuntimeError("MTP differs from target-only greedy tokens")
+                    if first.get("timings", {}).get("draft_n_accepted", 0) <= 0:
+                        raise RuntimeError("MTP smoke test accepted no draft tokens")
                 chat = chat_lifecycle(port)
                 cancel_completion(port)
                 after_cancel = completion(port, prompt)
