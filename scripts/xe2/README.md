@@ -57,7 +57,12 @@ Parity uses full CPU logits at 1/2/16, 31/32, 63/64, 128, and 1152 prompt tokens
 F16 GPU paths must satisfy the backend FA test tolerance (NMSE < 5e-4).
 Declared suppressed tokens must retain their intentional negative-infinity
 logits; all other logits must be finite. Suppressed entries are excluded from NMSE.
-Top-token agreement is recorded separately for review. F16/Q8_0/Q4_0 caches
+Top-token agreement, KL divergence, and total variation of token probabilities
+are recorded separately for review. The test reports all numerical comparisons
+before returning failure; it also compares F16 paths against GPU FA-off and
+saves raw GPU logits beside the CPU reference. An optional final configuration
+argument to `test-gemma4-device` (for example `off`) selects a diagnostic run;
+it does not replace the full suite. F16/Q8_0/Q4_0 caches
 must remain finite and reproduce logits after dirtying, freeing, and reusing
 a suffix beyond the sliding window. CPU reference files belong to the exact
 manifest model and are generated afresh by the runner.

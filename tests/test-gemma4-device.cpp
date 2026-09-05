@@ -43,30 +43,45 @@ static std::vector<float> logits(llama_context * ctx, const std::vector<bool> & 
     return result;
 }
 
-static void compare(const std::vector<float> & actual, const std::vector<float> & reference, const char * label) {
+static bool compare(const std::vector<float> & actual, const std::vector<float> & reference, const char * label) {
     GGML_ASSERT(actual.size() == reference.size());
     double error = 0, scale = 0;
+    const double max_actual = *std::max_element(actual.begin(), actual.end());
+    const double max_reference = *std::max_element(reference.begin(), reference.end());
+    double sum_actual = 0, sum_reference = 0;
+    for (size_t i = 0; i < actual.size(); ++i) {
+        sum_actual += std::exp(actual[i] - max_actual);
+        sum_reference += std::exp(reference[i] - max_reference);
+    }
+    const double log_z_actual = max_actual + std::log(sum_actual);
+    const double log_z_reference = max_reference + std::log(sum_reference);
+    double kl = 0, tv = 0;
     for (size_t i = 0; i < actual.size(); ++i) {
         if (std::isinf(reference[i]) && reference[i] < 0) {
             GGML_ASSERT(actual[i] == reference[i]);
             continue;
         }
+        const double log_p = reference[i] - log_z_reference;
+        const double log_q = actual[i] - log_z_actual;
+        const double p = std::exp(log_p), q = std::exp(log_q);
+        kl += p * (log_p - log_q);
+        tv += std::abs(p - q) / 2;
         error += std::pow(double(actual[i]) - reference[i], 2);
         scale += double(reference[i])*reference[i];
     }
     const double nmse = error / std::max(scale, 1e-30);
     const bool same_top = std::max_element(actual.begin(), actual.end()) - actual.begin() ==
                           std::max_element(reference.begin(), reference.end()) - reference.begin();
-    std::printf("%s: nmse=%.9g top1_equal=%d\n", label, nmse, same_top);
+    std::printf("%s: nmse=%.9g kl=%.9g tv=%.9g top1_equal=%d\n", label, nmse, kl, tv, same_top);
     std::fflush(stdout);
     // Same tolerance as the FLASH_ATTN_EXT backend comparisons. Record top-1
     // separately because nearly tied logits may swap under FP16 arithmetic.
-    GGML_ASSERT(nmse < 5e-4);
+    return nmse < 5e-4;
 }
 
 int main(int argc, char ** argv) {
-    if (argc != 4 || (std::string(argv[3]) != "cpu" && std::string(argv[3]) != "gpu")) {
-        std::fprintf(stderr, "usage: %s MODEL CPU_LOGITS_FILE cpu|gpu\n", argv[0]);
+    if ((argc != 4 && argc != 5) || (std::string(argv[3]) != "cpu" && std::string(argv[3]) != "gpu")) {
+        std::fprintf(stderr, "usage: %s MODEL CPU_LOGITS_FILE cpu|gpu [CONFIG]\n", argv[0]);
         return 1;
     }
     const bool cpu = std::string(argv[3]) == "cpu";
@@ -107,7 +122,13 @@ int main(int argc, char ** argv) {
         {"hybrid-q8", "1", LLAMA_FLASH_ATTN_TYPE_ENABLED, GGML_TYPE_Q8_0},
         {"hybrid-q4", "1", LLAMA_FLASH_ATTN_TYPE_ENABLED, GGML_TYPE_Q4_0},
     };
+    bool passed = true;
+    auto gpu_reference = reference;
+    bool have_gpu_reference = false;
+    int ran = 0;
     for (const auto & config : configs) {
+        if (argc == 5 && std::string(argv[4]) != config.name) { continue; }
+        ++ran;
 #ifdef _WIN32
         _putenv_s("LLAMA_VK_GEMMA4_HYBRID_FA", config.gate);
 #else
@@ -125,14 +146,32 @@ int main(int argc, char ** argv) {
         cp.type_k = cp.type_v = config.cache;
         auto * ctx = llama_init_from_model(model, cp);
         GGML_ASSERT(ctx);
+        std::ofstream dump;
+        if (!cpu) {
+            dump.open(std::string(argv[2]) + "." + config.name, std::ios::binary);
+            GGML_ASSERT(dump);
+        }
         for (size_t i = 0; i < lengths.size(); ++i) {
             llama_memory_clear(llama_get_memory(ctx), true);
             GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data(), lengths[i])) == 0);
             auto result = logits(ctx, suppressed);
+            if (!cpu) {
+                dump.write(reinterpret_cast<const char *>(result.data()), result.size()*sizeof(float));
+                GGML_ASSERT(dump);
+            }
             if (cpu) {
                 reference[i] = result;
             } else if (config.cache == GGML_TYPE_F16) {
-                compare(result, reference[i], (std::string(config.name) + " n=" + std::to_string(lengths[i])).c_str());
+                passed &= compare(result, reference[i], (std::string(config.name) + " n=" + std::to_string(lengths[i])).c_str());
+            }
+            if (!cpu && config.cache == GGML_TYPE_F16) {
+                if (std::string(config.name) == "off") {
+                    gpu_reference[i] = result;
+                    have_gpu_reference = true;
+                } else if (have_gpu_reference) {
+                    passed &= compare(result, gpu_reference[i],
+                        (std::string(config.name) + " vs GPU-off n=" + std::to_string(lengths[i])).c_str());
+                }
             }
             // Dirty then free/reuse cells after SWA has wrapped, simulating a
             // rejected speculative suffix while keeping the prefix resident.
@@ -143,11 +182,12 @@ int main(int argc, char ** argv) {
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + 20, lengths[i] - start)) == 0);
                 GGML_ASSERT(llama_memory_seq_rm(memory, 0, start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + start, lengths[i] - start)) == 0);
-                compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str());
+                passed &= compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str());
             }
         }
         llama_free(ctx);
     }
+    GGML_ASSERT(ran > 0);
     if (cpu) {
         std::ofstream output(argv[2], std::ios::binary);
         for (const auto & row : reference) {
@@ -157,5 +197,6 @@ int main(int argc, char ** argv) {
     }
     llama_model_free(model);
     llama_backend_free();
-    std::puts("Gemma 4 device validation: PASS");
+    std::puts(passed ? "Gemma 4 device validation: PASS" : "Gemma 4 device validation: FAIL");
+    return passed ? 0 : 1;
 }
