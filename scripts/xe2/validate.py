@@ -245,6 +245,7 @@ def smoke(args):
     for key in args.model_ids:
         baseline = None
         hybrid_target = None
+        hybrid_verification = None
         configs = [("on", "on", False, "f16"), ("zero", "zero", False, "f16"),
                    ("hybrid", "hybrid", False, "f16"), ("q8", "hybrid", False, "q8_0"),
                    ("q4", "hybrid", False, "q4_0")]
@@ -270,10 +271,18 @@ def smoke(args):
                     raise RuntimeError("Hybrid=0 differs from unset")
                 if mode == "hybrid" and cache == "f16" and not mtp:
                     hybrid_target = first["tokens"]
+                if mode == "hybrid" and cache == "f16":
+                    verification = completion(port, formatted_prompt(port,
+                        "Write a Python function called add_numbers that returns a + b. Return only the function."), False)
+                    evidence["verification"] = verification
+                    write_json(args.output / f"{name}.json", evidence)
+                    if not mtp:
+                        hybrid_verification = verification["tokens"]
                 if mtp:
-                    if first["tokens"] != hybrid_target:
+                    if first["tokens"] != hybrid_target or verification["tokens"] != hybrid_verification:
                         raise RuntimeError("MTP differs from target-only greedy tokens")
-                    if first.get("timings", {}).get("draft_n_accepted", 0) <= 0:
+                    if sum(r.get("timings", {}).get("draft_n_accepted", 0)
+                           for r in (first, second, verification)) <= 0:
                         raise RuntimeError("MTP smoke test accepted no draft tokens")
                 chat = chat_lifecycle(port)
                 cancel_completion(port)
