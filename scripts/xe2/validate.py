@@ -173,10 +173,20 @@ def cancel_completion(port):
     req = urllib.request.Request(f"http://127.0.0.1:{port}/completion", data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=600) as response:
-        if not response.readline():
-            raise RuntimeError("Stream closed before cancellation test")
+        while True:
+            line = response.readline()
+            if not line:
+                raise RuntimeError("Stream closed before cancellation test")
+            if not line.startswith(b"data: "):
+                continue
+            event = json.loads(line[6:])
+            if event.get("content"):
+                break
+            if event.get("stop"):
+                raise RuntimeError("Generation ended before a token could be cancelled")
     # Closing the response cancels this request. The next completion proves the
     # slot can be reused; no process restart masks lifecycle failures.
+    return event
 
 
 def chat_lifecycle(port):
@@ -285,9 +295,9 @@ def smoke(args):
                            for r in (first, second, verification)) <= 0:
                         raise RuntimeError("MTP smoke test accepted no draft tokens")
                 chat = chat_lifecycle(port)
-                cancel_completion(port)
+                cancelled_after = cancel_completion(port)
                 after_cancel = completion(port, prompt)
-                evidence.update(chat=chat, after_cancel=after_cancel, memory=snapshot(process.pid))
+                evidence.update(chat=chat, cancelled_after=cancelled_after, after_cancel=after_cancel, memory=snapshot(process.pid))
                 write_json(args.output / f"{name}.json", evidence)
                 if after_cancel["tokens"] != first["tokens"]:
                     raise RuntimeError(f"Cancellation/reuse changed greedy tokens: {name}")
