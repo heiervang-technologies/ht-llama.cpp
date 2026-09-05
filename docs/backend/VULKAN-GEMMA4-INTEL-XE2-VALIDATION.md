@@ -70,7 +70,7 @@ but the original long, repetitive raw prompt remained numerically sensitive.
 | FA-off/hybrid distributions and KV reuse | Pass | Pass |
 | Plain-FA-on comparison | Pass | **Fail**: KL at 16 tokens |
 | Templated lifecycle, fallback, tools, cancellation | Pass (6 profiles) | Pass (5 profiles) |
-| Baseline and hybrid soak, 15 minutes each | Pending | Pending |
+| Baseline and hybrid soak, 15 minutes each | Pass | Pass (hybrid switch with four-slot fallback) |
 | Five interleaved runs per mode at 2K/8K/16K/32K | Pending | Pending |
 
 The complete 26B parity sweep returns failure: plain FA-on at 16 continuation
@@ -97,3 +97,24 @@ Above 2K, and with multiple configured sequences or quantized caches, the hybrid
 switch intentionally retains stock attention. Benchmarks at those settings
 measure fallback behavior. The four-slot 26B soak likewise exercises fallback,
 not eligibility for hybrid attention.
+
+## Sustained-load results
+
+All four phases completed on the final serving cache budgets, totaling 60.47
+minutes and 887 requests. No answer, process, finite-output, or telemetry check
+failed. Both 12B phases used MTP; the 26B hybrid-switch phase used four slots.
+
+| Model/profile | Minutes | Requests | MTP accepted/drafted | Warm GPU resident GTT (MiB) | Warm CPU RSS cycle peaks (MiB) |
+|---|---:|---:|---:|---:|---:|
+| 12B baseline | 15.21 | 21 | 448/728 | 8304.6 | 1830.1–2105.6 |
+| 12B hybrid | 15.01 | 270 | 5670/8561 | 7548.9 | 1756.5–1761.5 |
+| 26B baseline | 15.07 | 84 | — | 13985.1 | 1549.2–1578.9 |
+| 26B four-slot fallback | 15.18 | 512 | — | 14653.9 | 1700.0–1714.5 |
+
+Warm measurements exclude the first five minutes of each phase. GPU residency
+was flat to the displayed precision; CPU cycle-peak slopes ranged from -38.89
+to +0.95 MiB/min. CPU peaks use complete three-round prompt cycles to account
+for cache churn. RSS and DRM GTT are separate views of UMA memory and must not
+be added as disjoint allocations. This finite soak does not prove the absence
+of every leak. Request counts are not comparable throughput benchmarks: context
+lengths, prompt lengths, and slot counts differ across profiles.
