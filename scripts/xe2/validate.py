@@ -42,12 +42,29 @@ def snapshot(pid=None):
         if path.exists():
             data[str(path)] = path.read_text().strip()
     data["temperatures"] = {str(p): p.read_text().strip() for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")}
+    memory_info = Path("/proc/meminfo")
+    if memory_info.exists():
+        data["system_memory"] = {line.split(":", 1)[0]: line.split(":", 1)[1].strip()
+                                 for line in memory_info.read_text().splitlines()
+                                 if line.startswith(("MemAvailable:", "SwapFree:"))}
     if pid:
         try:
             for line in Path(f"/proc/{pid}/status").read_text().splitlines():
                 if line.startswith(("VmRSS:", "VmHWM:")):
                     key, value = line.split(":", 1)
                     data[key] = value.strip()
+            # Xe allocates GPU buffers outside the process RSS on this UMA
+            # device. Keep per-client DRM accounting and deduplicate dup fds.
+            clients = {}
+            for path in Path(f"/proc/{pid}/fdinfo").iterdir():
+                try:
+                    fields = dict(line.split(":", 1) for line in path.read_text().splitlines()
+                                  if line.startswith("drm-"))
+                except FileNotFoundError:
+                    continue
+                if "drm-client-id" in fields:
+                    clients[fields["drm-client-id"].strip()] = {k: v.strip() for k, v in fields.items()}
+            data["drm_clients"] = clients
         except FileNotFoundError:
             pass
     return data
@@ -244,6 +261,7 @@ def soak(args):
             with server(args, args.models[key], mode, name, mtp=key == "12b", slots=slots, context=context) as (port, process):
                 started = time.monotonic()
                 count = 0
+                drafted = accepted = 0
                 prompts = ["The capital of Norway is", "Write a Python function that adds two integers.\n",
                            "An observatory studies stars. " * (900 if profile == "baseline" else 180) + "\nSummarize in one sentence:"]
                 with (args.output / f"{name}.jsonl").open("w") as output:
@@ -251,13 +269,19 @@ def soak(args):
                         while time.monotonic() - started < args.soak_seconds / len(args.model_ids) / 2:
                             results = list(pool.map(lambda p: completion(port, p),
                                            [prompts[(count + i) % len(prompts)] for i in range(slots)]))
+                            for result in results:
+                                drafted += result.get("timings", {}).get("draft_n", 0)
+                                accepted += result.get("timings", {}).get("draft_n_accepted", 0)
                             output.write(json.dumps({"elapsed": time.monotonic() - started, "memory": snapshot(process.pid),
                                         "results": results}, allow_nan=False) + "\n")
                             output.flush()
                             count += slots
                             if process.poll() is not None:
                                 raise RuntimeError("Server died during soak")
-                write_json(args.output / f"{name}.summary.json", {"requests": count, "elapsed": time.monotonic() - started})
+                write_json(args.output / f"{name}.summary.json", {"requests": count, "elapsed": time.monotonic() - started,
+                           "drafted": drafted, "accepted": accepted})
+                if key == "12b" and (drafted == 0 or accepted == 0):
+                    raise RuntimeError(f"MTP did not draft and accept tokens: {name}")
 
 
 def main():

@@ -73,7 +73,9 @@ cancellation and slot reuse, and the matching 12B MTP assistant. The default
 soak lasts a total hour: 15 minutes per target/profile combination. Baseline
 uses 8K context and one slot, with long prompts spanning multiple prefill batches;
 hybrid uses 2K per slot, one slot for 12B and four concurrent slots for 26B.
-Both 12B phases use MTP. Logs retain responses, timing, temperature, power profile, and RSS.
+Both 12B phases use MTP. Logs retain responses, timing, temperature, power profile, RSS, and per-client
+DRM memory accounting. GPU allocations on this UMA device are not all reflected
+in process RSS. Each MTP soak phase must actually draft and accept tokens.
 Inspect warm RSS trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.
