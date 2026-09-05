@@ -12,6 +12,21 @@ These match filenames in the historical notes, whose original Xe2 hashes were
 not recorded. Do not compare new results to those tables as identical artifacts.
 GGUFs remain outside the repository under `$GGUFS` or `--models-dir`.
 
+Serving presets make context and cache choices explicit. The baseline uses
+FA-off, F16 K/V, one slot, and 8K context; the hybrid experiment uses FA-on and
+2K context. Both verify model hashes at startup. MTP is optional and limited
+to the matching 12B assistant. No service is installed or deployed by these scripts.
+
+```bash
+python scripts/xe2/serve.py 12b --mtp
+python scripts/xe2/serve.py 26b
+python scripts/xe2/serve.py 26b --profile hybrid
+```
+
+Switch back to `--profile baseline` to disable hybrid selection. The baseline
+accepts `--ctx-size` up to 32768; hybrid rejects sizes above 2048. The presets
+remain candidates until the acceptance runs below have passed.
+
 ```bash
 python scripts/xe2/fetch-models.py --models-dir "$GGUFS"
 cmake --build build-vulkan -j 4 --target llama-server llama-bench \
@@ -48,8 +63,10 @@ manifest model and are generated afresh by the runner.
 Smoke checks repeated-prefix greedy tokens, the unset/zero switch, quantized
 cache fallback, thinking modes, a complete tool-call/result cycle, stream
 cancellation and slot reuse, and the matching 12B MTP assistant. The default
-soak lasts a total hour: 12B with MTP and one slot, then 26B with four concurrent
-slots. Logs retain responses, timing, temperature, power profile, and RSS.
+soak lasts a total hour: 15 minutes per target/profile combination. Baseline
+uses 8K context and one slot, with long prompts spanning multiple prefill batches;
+hybrid uses 2K per slot, one slot for 12B and four concurrent slots for 26B.
+Both 12B phases use MTP. Logs retain responses, timing, temperature, power profile, and RSS.
 Inspect warm RSS trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.

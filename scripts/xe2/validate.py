@@ -236,25 +236,28 @@ def smoke(args):
 
 def soak(args):
     for key in args.model_ids:
-        name = f"{key}-soak"
-        slots = 1 if key == "12b" else 4
-        with server(args, args.models[key], "hybrid", name, mtp=key == "12b", slots=slots) as (port, process):
-            started = time.monotonic()
-            count = 0
-            prompts = ["The capital of Norway is", "Write a Python function that adds two integers.\n",
-                       "An observatory studies stars. " * 180 + "\nSummarize in one sentence:"]
-            with (args.output / f"{name}.jsonl").open("w") as output:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=slots) as pool:
-                    while time.monotonic() - started < args.soak_seconds / len(args.model_ids):
-                        results = list(pool.map(lambda p: completion(port, p),
-                                       [prompts[(count + i) % len(prompts)] for i in range(slots)]))
-                        output.write(json.dumps({"elapsed": time.monotonic() - started, "memory": snapshot(process.pid),
-                                    "results": results}, allow_nan=False) + "\n")
-                        output.flush()
-                        count += slots
-                        if process.poll() is not None:
-                            raise RuntimeError("Server died during soak")
-            write_json(args.output / f"{name}.summary.json", {"requests": count, "elapsed": time.monotonic() - started})
+        for profile in ("baseline", "hybrid"):
+            name = f"{key}-soak-{profile}"
+            slots = 4 if key == "26b" and profile == "hybrid" else 1
+            context = 8192 if profile == "baseline" else 2048
+            mode = "off" if profile == "baseline" else "hybrid"
+            with server(args, args.models[key], mode, name, mtp=key == "12b", slots=slots, context=context) as (port, process):
+                started = time.monotonic()
+                count = 0
+                prompts = ["The capital of Norway is", "Write a Python function that adds two integers.\n",
+                           "An observatory studies stars. " * (900 if profile == "baseline" else 180) + "\nSummarize in one sentence:"]
+                with (args.output / f"{name}.jsonl").open("w") as output:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=slots) as pool:
+                        while time.monotonic() - started < args.soak_seconds / len(args.model_ids) / 2:
+                            results = list(pool.map(lambda p: completion(port, p),
+                                           [prompts[(count + i) % len(prompts)] for i in range(slots)]))
+                            output.write(json.dumps({"elapsed": time.monotonic() - started, "memory": snapshot(process.pid),
+                                        "results": results}, allow_nan=False) + "\n")
+                            output.flush()
+                            count += slots
+                            if process.poll() is not None:
+                                raise RuntimeError("Server died during soak")
+                write_json(args.output / f"{name}.summary.json", {"requests": count, "elapsed": time.monotonic() - started})
 
 
 def main():
