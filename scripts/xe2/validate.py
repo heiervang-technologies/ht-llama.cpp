@@ -1,0 +1,286 @@
+#!/usr/bin/env python3
+"""Reproducible local Xe2 validation. Results and server logs stay out of Git."""
+import argparse
+import concurrent.futures
+from contextlib import contextmanager
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import platform
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent
+MANIFEST = json.loads((HERE / "models.json").read_text())
+
+
+def write_json(path, data):
+    path.write_text(json.dumps(data, indent=2, allow_nan=False) + "\n")
+
+
+def environment(mode):
+    env = os.environ.copy()
+    for name in ("LLAMA_VK_GEMMA4_HYBRID_FA", "GGML_VK_DISABLE_MMVQ", "GGML_VK_FORCE_MMVQ"):
+        env.pop(name, None)
+    if mode == "hybrid":
+        env["LLAMA_VK_GEMMA4_HYBRID_FA"] = "1"
+    elif mode == "zero":
+        env["LLAMA_VK_GEMMA4_HYBRID_FA"] = "0"
+    return env
+
+
+def snapshot(pid=None):
+    data = {"time": time.time()}
+    for path in (Path("/sys/class/power_supply/AC/online"), Path("/sys/firmware/acpi/platform_profile")):
+        if path.exists():
+            data[str(path)] = path.read_text().strip()
+    data["temperatures"] = {str(p): p.read_text().strip() for p in Path("/sys/class/thermal").glob("thermal_zone*/temp")}
+    if pid:
+        try:
+            for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+                if line.startswith(("VmRSS:", "VmHWM:")):
+                    key, value = line.split(":", 1)
+                    data[key] = value.strip()
+        except FileNotFoundError:
+            pass
+    return data
+
+
+def run(args, command, name, env=None):
+    print(name, flush=True)
+    start = snapshot()
+    with (args.output / f"{name}.stdout").open("w") as out, (args.output / f"{name}.stderr").open("w") as err:
+        process = subprocess.Popen([str(x) for x in command], stdout=out, stderr=err, env=env)
+        samples = []
+        try:
+            while process.poll() is None:
+                samples.append(snapshot(process.pid))
+                time.sleep(1)
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=30)
+    write_json(args.output / f"{name}.run.json", {
+        "command": [str(x) for x in command], "start": start, "end": snapshot(),
+        "returncode": process.returncode, "samples": samples,
+        "tuning_environment": {k: v for k, v in (env or os.environ).items() if k.startswith(("LLAMA_VK_", "GGML_VK_"))},
+    })
+    if process.returncode:
+        raise RuntimeError(f"{name} failed; inspect {args.output / (name + '.stderr')}")
+
+
+def request(port, path, payload=None):
+    data = None if payload is None else json.dumps(payload).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=600) as response:
+        result = json.load(response)
+
+    def finite(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise RuntimeError("Non-finite server output")
+        if isinstance(value, dict):
+            for item in value.values():
+                finite(item)
+        if isinstance(value, list):
+            for item in value:
+                finite(item)
+    finite(result)
+    return result
+
+
+@contextmanager
+def server(args, model, mode, name, mtp=False, slots=1, cache="f16", context=2048):
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    command = [str(args.bin / "llama-server"), "-m", str(model), "-ngl", "999", "-c", str(context * slots),
+               "-np", str(slots), "-b", "2048", "-ub", "512", "-t", "4", "-tb", "4",
+               "-fa", "off" if mode == "off" else "on", "-ctk", cache, "-ctv", cache,
+               "--host", "127.0.0.1", "--port", str(port), "--jinja"]
+    if mtp:
+        command += ["--spec-draft-model", str(args.models["12b-mtp"]), "--spec-type", "draft-mtp",
+                    "--spec-draft-n-max", "16", "--spec-draft-p-min", "0.9", "--n-gpu-layers-draft", "999"]
+    write_json(args.output / f"{name}.command.json", command)
+    with (args.output / f"{name}.server.log").open("w") as log:
+        process = subprocess.Popen(command, stdout=log, stderr=log, env=environment(mode))
+        try:
+            deadline = time.monotonic() + 600
+            while True:
+                if process.poll() is not None:
+                    raise RuntimeError(f"Server exited: {name}")
+                try:
+                    request(port, "/health")
+                    break
+                except (urllib.error.URLError, TimeoutError):
+                    if time.monotonic() > deadline:
+                        raise RuntimeError(f"Server startup timed out: {name}")
+                    time.sleep(1)
+            yield port, process
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+
+
+def completion(port, prompt, cached=True):
+    result = request(port, "/completion", {"prompt": prompt, "n_predict": 64, "temperature": 0,
+                     "seed": 1234, "cache_prompt": cached, "return_tokens": True})
+    if not result.get("tokens") or result.get("truncated"):
+        raise RuntimeError("Empty or truncated completion")
+    return result
+
+
+def cancel_completion(port):
+    payload = {"prompt": "Write a long story about an observatory.", "n_predict": 512,
+               "temperature": 0, "stream": True}
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/completion", data=json.dumps(payload).encode(),
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=600) as response:
+        if not response.readline():
+            raise RuntimeError("Stream closed before cancellation test")
+    # Closing the response cancels this request. The next completion proves the
+    # slot can be reused; no process restart masks lifecycle failures.
+
+
+def chat_lifecycle(port):
+    results = []
+    for thinking in (False, True):
+        result = request(port, "/v1/chat/completions", {"messages": [
+            {"role": "system", "content": "Answer briefly."},
+            {"role": "user", "content": "What is two plus three?"}], "temperature": 0, "max_tokens": 256,
+            "chat_template_kwargs": {"enable_thinking": thinking}})
+        if not result.get("choices"):
+            raise RuntimeError("Missing chat result")
+        results.append(result)
+    tools = [{"type": "function", "function": {"name": "get_weather", "description": "Get weather for a city",
+             "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]
+    messages = [{"role": "user", "content": "Use get_weather to check Oslo's weather."}]
+    response = request(port, "/v1/chat/completions", {"messages": messages, "tools": tools,
+        "tool_choice": {"type": "function", "function": {"name": "get_weather"}}, "temperature": 0,
+        "max_tokens": 256, "chat_template_kwargs": {"enable_thinking": False}})
+    assistant = response["choices"][0]["message"]
+    calls = assistant.get("tool_calls", [])
+    if not calls or calls[0]["function"]["name"] != "get_weather":
+        raise RuntimeError("Expected structured weather tool call")
+    json.loads(calls[0]["function"]["arguments"])
+    messages.append(assistant)
+    for call in calls:
+        messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Oslo: sunny, 18 C."})
+    final = request(port, "/v1/chat/completions", {"messages": messages, "tools": tools, "tool_choice": "none",
+        "temperature": 0, "max_tokens": 256, "chat_template_kwargs": {"enable_thinking": False}})
+    if not final["choices"][0]["message"].get("content"):
+        raise RuntimeError("Missing response after tool result")
+    return {"thinking": results, "tool_call": response, "tool_result": final}
+
+
+def parity(args):
+    for key in args.model_ids:
+        reference = args.output / f"{key}.cpu-logits.bin"
+        for backend in ("cpu", "gpu"):
+            run(args, [args.bin / "test-gemma4-device", args.models[key], reference, backend],
+                f"{key}-parity-{backend}", environment("off"))
+
+
+def bench(args):
+    for key in args.model_ids:
+        for depth in args.depths:
+            for repeat in range(args.repetitions):
+                modes = ["off", "on", "hybrid"]
+                modes = modes[repeat % 3:] + modes[:repeat % 3]
+                for mode in modes:
+                    name = f"{key}-c{depth}-{mode}-r{repeat}"
+                    run(args, [args.bin / "llama-bench", "-m", args.models[key], "-ngl", "999",
+                        "-p", "512", "-n", "64", "-pg", "512,64", "-d", str(depth - 576),
+                        "-fa", "off" if mode == "off" else "on", "-ctk", "f16", "-ctv", "f16",
+                        "-ub", "512", "-b", "2048", "-t", "4", "-r", "1", "-o", "json"], name, environment(mode))
+
+
+def smoke(args):
+    prompt = "The capital of Norway is"
+    for key in args.model_ids:
+        baseline = None
+        for mode, mtp, cache in [("on", False, "f16"), ("zero", False, "f16"), ("hybrid", False, "f16"),
+                                 ("hybrid", False, "q8_0"), ("hybrid", False, "q4_0")] + (
+                                 [("hybrid", True, "f16")] if key == "12b" else []):
+            name = f"{key}-smoke-{mode}-{cache}-mtp{int(mtp)}"
+            with server(args, args.models[key], mode, name, mtp=mtp, cache=cache) as (port, process):
+                first = completion(port, prompt, False)
+                second = completion(port, prompt)
+                if first["tokens"] != second["tokens"]:
+                    raise RuntimeError(f"Prefix reuse changed greedy tokens: {name}")
+                if mode == "on":
+                    baseline = first["tokens"]
+                if mode == "zero" and first["tokens"] != baseline:
+                    raise RuntimeError("Hybrid=0 differs from unset")
+                chat = chat_lifecycle(port)
+                cancel_completion(port)
+                after_cancel = completion(port, prompt)
+                if after_cancel["tokens"] != first["tokens"]:
+                    raise RuntimeError(f"Cancellation/reuse changed greedy tokens: {name}")
+                write_json(args.output / f"{name}.json", {"first": first, "cached": second, "chat": chat,
+                           "after_cancel": after_cancel, "memory": snapshot(process.pid)})
+
+
+def soak(args):
+    for key in args.model_ids:
+        name = f"{key}-soak"
+        slots = 1 if key == "12b" else 4
+        with server(args, args.models[key], "hybrid", name, mtp=key == "12b", slots=slots) as (port, process):
+            started = time.monotonic()
+            count = 0
+            prompts = ["The capital of Norway is", "Write a Python function that adds two integers.\n",
+                       "An observatory studies stars. " * 180 + "\nSummarize in one sentence:"]
+            with (args.output / f"{name}.jsonl").open("w") as output:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=slots) as pool:
+                    while time.monotonic() - started < args.soak_seconds / len(args.model_ids):
+                        results = list(pool.map(lambda p: completion(port, p),
+                                       [prompts[(count + i) % len(prompts)] for i in range(slots)]))
+                        output.write(json.dumps({"elapsed": time.monotonic() - started, "memory": snapshot(process.pid),
+                                    "results": results}, allow_nan=False) + "\n")
+                        output.flush()
+                        count += slots
+                        if process.poll() is not None:
+                            raise RuntimeError("Server died during soak")
+            write_json(args.output / f"{name}.summary.json", {"requests": count, "elapsed": time.monotonic() - started})
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("stage", choices=["parity", "bench", "smoke", "soak"])
+    parser.add_argument("--models-dir", type=Path, default=os.environ.get("GGUFS"))
+    parser.add_argument("--bin", type=Path, default=REPO / "build-vulkan/bin")
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--model-ids", nargs="+", choices=["12b", "26b"], default=["12b", "26b"])
+    parser.add_argument("--depths", nargs="+", type=int, default=[2048, 8192, 16384, 32768])
+    parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument("--soak-seconds", type=int, default=3600)
+    args = parser.parse_args()
+    if args.models_dir is None or min(args.depths) < 576 or args.repetitions < 1 or args.soak_seconds < 1:
+        parser.error("Set GGUFS or --models-dir; depths >=576 and counts positive")
+    args.bin = args.bin.resolve()
+    args.output.mkdir(parents=True, exist_ok=True)
+    args.models = {m["id"]: args.models_dir / Path(m["file"]).name for m in MANIFEST["models"]}
+    for m in MANIFEST["models"]:
+        if m["id"] not in args.model_ids and not (m["id"] == "12b-mtp" and "12b" in args.model_ids and args.stage in ("smoke", "soak")):
+            continue
+        with args.models[m["id"]].open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != m["sha256"]:
+                raise RuntimeError(f"Model checksum mismatch: {m['id']}")
+    write_json(args.output / f"{args.stage}.metadata.json", {"platform": platform.platform(), "models": MANIFEST,
+        "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
+        "diff": subprocess.check_output(["git", "diff"], cwd=REPO, text=True), "environment": snapshot(),
+        "devices": subprocess.check_output([str(args.bin / "llama-bench"), "--list-devices"], text=True, stderr=subprocess.STDOUT)})
+    globals()[args.stage](args)
+
+
+if __name__ == "__main__":
+    main()
