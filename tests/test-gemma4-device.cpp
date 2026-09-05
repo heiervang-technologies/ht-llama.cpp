@@ -1,7 +1,7 @@
 #include "common.h"
 #include "ggml-backend.h"
+#include "gguf.h"
 #include "llama.h"
-#include "../src/llama-vocab.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,16 +13,27 @@
 
 static const std::vector<int> lengths = {1, 2, 16, 31, 32, 63, 64, 128, 1152};
 
-static std::vector<float> logits(llama_context * ctx, const llama_vocab * vocab) {
-    const int n_vocab = llama_vocab_n_tokens(vocab);
+static std::vector<bool> suppression_mask(const char * path, int n_vocab) {
+    std::vector<bool> suppressed(n_vocab, false);
+    auto * metadata = gguf_init_from_file(path, {true, nullptr});
+    GGML_ASSERT(metadata);
+    const int64_t key = gguf_find_key(metadata, "tokenizer.ggml.suppress_tokens");
+    if (key >= 0) {
+        GGML_ASSERT(gguf_get_arr_type(metadata, key) == GGUF_TYPE_INT32);
+        const auto * tokens = static_cast<const int32_t *>(gguf_get_arr_data(metadata, key));
+        for (size_t i = 0; i < gguf_get_arr_n(metadata, key); ++i) {
+            if (tokens[i] >= 0 && tokens[i] < n_vocab) { suppressed[tokens[i]] = true; }
+        }
+    }
+    gguf_free(metadata);
+    return suppressed;
+}
+
+static std::vector<float> logits(llama_context * ctx, const std::vector<bool> & suppressed) {
     const float * data = llama_get_logits_ith(ctx, -1);
     GGML_ASSERT(data);
-    std::vector<float> result(data, data + n_vocab);
-    std::vector<bool> suppressed(n_vocab, false);
-    for (llama_token token : vocab->get_suppress_tokens()) {
-        if (token >= 0 && token < n_vocab) { suppressed[token] = true; }
-    }
-    for (int i = 0; i < n_vocab; ++i) {
+    std::vector<float> result(data, data + suppressed.size());
+    for (size_t i = 0; i < suppressed.size(); ++i) {
         if (suppressed[i]) {
             GGML_ASSERT(std::isinf(result[i]) && result[i] < 0);
         } else {
@@ -67,6 +78,7 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(model);
     const auto * vocab = llama_model_get_vocab(model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
+    const auto suppressed = suppression_mask(argv[1], n_vocab);
     std::string text;
     while (text.size() < 30000) {
         text += "The observatory records the stars each night. Explain how the telescope measures their positions.\n";
@@ -116,7 +128,7 @@ int main(int argc, char ** argv) {
         for (size_t i = 0; i < lengths.size(); ++i) {
             llama_memory_clear(llama_get_memory(ctx), true);
             GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data(), lengths[i])) == 0);
-            auto result = logits(ctx, vocab);
+            auto result = logits(ctx, suppressed);
             if (cpu) {
                 reference[i] = result;
             } else if (config.cache == GGML_TYPE_F16) {
@@ -131,7 +143,7 @@ int main(int argc, char ** argv) {
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + 20, lengths[i] - start)) == 0);
                 GGML_ASSERT(llama_memory_seq_rm(memory, 0, start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + start, lengths[i] - start)) == 0);
-                compare(logits(ctx, vocab), result, (std::string(config.name) + " reused KV").c_str());
+                compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str());
             }
         }
         llama_free(ctx);
