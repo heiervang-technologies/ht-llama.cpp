@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -149,6 +150,15 @@ def server(args, model, mode, name, mtp=False, slots=1, cache="f16", context=204
                 process.wait()
 
 
+def formatted_prompt(port, text):
+    result = request(port, "/apply-template", {"messages": [{"role": "user", "content": text}],
+                     "chat_template_kwargs": {"enable_thinking": False}})
+    prompt = result.get("prompt")
+    if not isinstance(prompt, str) or not prompt:
+        raise RuntimeError("Missing formatted prompt")
+    return prompt
+
+
 def completion(port, prompt, cached=True):
     result = request(port, "/completion", {"prompt": prompt, "n_predict": 64, "temperature": 0,
                      "seed": 1234, "cache_prompt": cached, "return_tokens": True})
@@ -158,7 +168,7 @@ def completion(port, prompt, cached=True):
 
 
 def cancel_completion(port):
-    payload = {"prompt": "Write a long story about an observatory.", "n_predict": 512,
+    payload = {"prompt": formatted_prompt(port, "Write a long story about an observatory."), "n_predict": 512,
                "temperature": 0, "stream": True}
     req = urllib.request.Request(f"http://127.0.0.1:{port}/completion", data=json.dumps(payload).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -178,6 +188,9 @@ def chat_lifecycle(port):
             "chat_template_kwargs": {"enable_thinking": thinking}})
         if not result.get("choices"):
             raise RuntimeError("Missing chat result")
+        content = result["choices"][0]["message"].get("content", "")
+        if not re.search(r"\b(?:five|5)\b", content, re.IGNORECASE):
+            raise RuntimeError("Chat failed the arithmetic answer check")
         results.append(result)
     tools = [{"type": "function", "function": {"name": "get_weather", "description": "Get weather for a city",
              "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}]
@@ -189,7 +202,9 @@ def chat_lifecycle(port):
     calls = assistant.get("tool_calls", [])
     if not calls or calls[0]["function"]["name"] != "get_weather":
         raise RuntimeError("Expected structured weather tool call")
-    json.loads(calls[0]["function"]["arguments"])
+    arguments = json.loads(calls[0]["function"]["arguments"])
+    if arguments.get("city", "").casefold() != "oslo":
+        raise RuntimeError("Weather tool call used the wrong city")
     messages.append(assistant)
     for call in calls:
         messages.append({"role": "tool", "tool_call_id": call["id"], "content": "Oslo: sunny, 18 C."})
@@ -202,7 +217,7 @@ def chat_lifecycle(port):
 
 def parity(args):
     for key in args.model_ids:
-        reference = args.output / f"{key}.cpu-logits.bin"
+        reference = args.output / f"{key}.chat.cpu-logits.bin"
         for backend in ("cpu", "gpu"):
             run(args, [args.bin / "test-gemma4-device", args.models[key], reference, backend],
                 f"{key}-parity-{backend}", environment("off"))
@@ -226,17 +241,27 @@ def bench(args):
 
 
 def smoke(args):
-    prompt = "The capital of Norway is"
+    query = "What is the capital of Norway? Answer briefly."
     for key in args.model_ids:
         baseline = None
         hybrid_target = None
-        for mode, mtp, cache in [("on", False, "f16"), ("zero", False, "f16"), ("hybrid", False, "f16"),
-                                 ("hybrid", False, "q8_0"), ("hybrid", False, "q4_0")] + (
-                                 [("hybrid", True, "f16")] if key == "12b" else []):
+        configs = [("on", "on", False, "f16"), ("zero", "zero", False, "f16"),
+                   ("hybrid", "hybrid", False, "f16"), ("q8", "hybrid", False, "q8_0"),
+                   ("q4", "hybrid", False, "q4_0")]
+        if key == "12b":
+            configs.append(("mtp", "hybrid", True, "f16"))
+        for config, mode, mtp, cache in configs:
+            if config not in args.smoke_configs:
+                continue
             name = f"{key}-smoke-{mode}-{cache}-mtp{int(mtp)}"
             with server(args, args.models[key], mode, name, mtp=mtp, cache=cache) as (port, process):
+                prompt = formatted_prompt(port, query)
                 first = completion(port, prompt, False)
                 second = completion(port, prompt)
+                evidence = {"first": first, "cached": second, "passed": False}
+                write_json(args.output / f"{name}.json", evidence)
+                if "oslo" not in first.get("content", "").casefold():
+                    raise RuntimeError(f"Completion failed the capital answer check: {name}")
                 if first["tokens"] != second["tokens"]:
                     raise RuntimeError(f"Prefix reuse changed greedy tokens: {name}")
                 if mode == "on":
@@ -253,10 +278,12 @@ def smoke(args):
                 chat = chat_lifecycle(port)
                 cancel_completion(port)
                 after_cancel = completion(port, prompt)
+                evidence.update(chat=chat, after_cancel=after_cancel, memory=snapshot(process.pid))
+                write_json(args.output / f"{name}.json", evidence)
                 if after_cancel["tokens"] != first["tokens"]:
                     raise RuntimeError(f"Cancellation/reuse changed greedy tokens: {name}")
-                write_json(args.output / f"{name}.json", {"first": first, "cached": second, "chat": chat,
-                           "after_cancel": after_cancel, "memory": snapshot(process.pid)})
+                evidence["passed"] = True
+                write_json(args.output / f"{name}.json", evidence)
 
 
 def soak(args):
@@ -270,8 +297,9 @@ def soak(args):
                 started = time.monotonic()
                 count = 0
                 drafted = accepted = 0
-                prompts = ["The capital of Norway is", "Write a Python function that adds two integers.\n",
+                prompts = ["What is the capital of Norway? Answer briefly.", "Write a Python function that adds two integers.\n",
                            "An observatory studies stars. " * (900 if profile == "baseline" else 180) + "\nSummarize in one sentence:"]
+                prompts = [formatted_prompt(port, p) for p in prompts]
                 with (args.output / f"{name}.jsonl").open("w") as output:
                     with concurrent.futures.ThreadPoolExecutor(max_workers=slots) as pool:
                         while time.monotonic() - started < args.soak_seconds / len(args.model_ids) / 2:
@@ -301,10 +329,15 @@ def main():
     parser.add_argument("--model-ids", nargs="+", choices=["12b", "26b"], default=["12b", "26b"])
     parser.add_argument("--depths", nargs="+", type=int, default=[2048, 8192, 16384, 32768])
     parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument("--smoke-configs", nargs="+", choices=["on", "zero", "hybrid", "q8", "q4", "mtp"],
+                        default=["on", "zero", "hybrid", "q8", "q4", "mtp"])
     parser.add_argument("--soak-seconds", type=int, default=3600)
     args = parser.parse_args()
     if args.models_dir is None or min(args.depths) < 576 or args.repetitions < 1 or args.soak_seconds < 1:
         parser.error("Set GGUFS or --models-dir; depths >=576 and counts positive")
+    if args.stage == "smoke" and (("zero" in args.smoke_configs and "on" not in args.smoke_configs) or
+                                  ("mtp" in args.smoke_configs and "hybrid" not in args.smoke_configs)):
+        parser.error("The zero comparison requires on; the MTP comparison requires hybrid")
     args.bin = args.bin.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     args.models = {m["id"]: args.models_dir / Path(m["file"]).name for m in MANIFEST["models"]}
@@ -318,7 +351,7 @@ def main():
     write_json(args.output / f"{args.stage}-{'-'.join(args.model_ids)}.metadata.json", {
         "platform": platform.platform(), "packages": packages, "models": MANIFEST,
         "settings": {"model_ids": args.model_ids, "depths": args.depths, "repetitions": args.repetitions,
-                     "soak_seconds": args.soak_seconds, "models_dir": str(args.models_dir)},
+                     "soak_seconds": args.soak_seconds, "smoke_configs": args.smoke_configs, "models_dir": str(args.models_dir)},
         "git": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
         "diff": subprocess.check_output(["git", "diff"], cwd=REPO, text=True), "environment": snapshot(),
         "server_version": subprocess.check_output([str(args.bin / "llama-server"), "--version"], text=True, stderr=subprocess.STDOUT),

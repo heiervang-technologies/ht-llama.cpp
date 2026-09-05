@@ -54,7 +54,8 @@ Each benchmark command measures pp512, tg64, and combined pp512+tg64, starting
 at depth `context - 576`. The combined test ends at the named context envelope;
 standalone pp/tg finish slightly earlier. Raw JSON records the actual sizes.
 
-Parity uses full CPU logits at 1/2/16, 31/32, 63/64, 128, and 1152 prompt tokens;
+Parity uses full CPU logits after continuation batches of 1/2/16, 31/32,
+63/64, 128, and 1152 tokens following a GGUF-templated chat prefix;
 F16 GPU paths must satisfy the backend FA test tolerance (NMSE < 5e-4).
 Declared suppressed tokens must retain their intentional negative-infinity
 logits; all other logits must be finite. Suppressed entries are excluded from NMSE.
@@ -68,7 +69,9 @@ must remain finite and reproduce logits after dirtying, freeing, and reusing
 a suffix beyond the sliding window. CPU reference files belong to the exact
 manifest model and are generated afresh by the runner.
 
-Smoke checks repeated-prefix greedy tokens, the unset/zero switch, quantized
+Completion and soak requests use `/apply-template` with thinking disabled.
+Raw, untemplated text is not a meaningful instruction-model lifecycle check.
+Smoke requires correct capital/arithmetic answers and checks repeated-prefix greedy tokens, the unset/zero switch, quantized
 cache fallback, thinking modes, a complete tool-call/result cycle, stream
 cancellation and slot reuse, and the matching 12B MTP assistant. The default
 soak lasts a total hour: 15 minutes per target/profile combination. Baseline
@@ -81,10 +84,11 @@ Inspect warm RSS trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.
 
-`--model-ids`, `--depths`, `--repetitions`, and `--soak-seconds` permit targeted
+`--model-ids`, `--smoke-configs`, `--depths`, `--repetitions`, and `--soak-seconds` permit targeted
 debugging. Shortened runs are not the full acceptance suite. Outputs include
 commands, model hashes, Git revision/diff, device descriptions, and subprocess
-logs. Any missing model, checksum mismatch, failed assertion, invalid response,
+logs. Failed smoke comparisons retain their response evidence with `passed: false`.
+Any missing model, checksum mismatch, failed assertion, invalid response,
 or subprocess failure stops the relevant stage with a nonzero exit.
 
 For CPU memory-safety validation, configure a separate Debug build with

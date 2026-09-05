@@ -1,4 +1,5 @@
 #include "common.h"
+#include "chat.h"
 #include "ggml-backend.h"
 #include "gguf.h"
 #include "llama.h"
@@ -94,12 +95,24 @@ int main(int argc, char ** argv) {
     const auto * vocab = llama_model_get_vocab(model);
     const int n_vocab = llama_vocab_n_tokens(vocab);
     const auto suppressed = suppression_mask(argv[1], n_vocab);
-    std::string text;
-    while (text.size() < 30000) {
-        text += "The observatory records the stars each night. Explain how the telescope measures their positions.\n";
+    auto templates = common_chat_templates_init(model, "");
+    common_chat_templates_inputs chat;
+    common_chat_msg message;
+    message.role = "user";
+    message.content = "Write an observing log with numbered entries. Explain calibration, weather, star positions, and uncertainty.";
+    chat.messages.push_back(message);
+    chat.enable_thinking = false;
+    chat.chat_template_kwargs["enable_thinking"] = "false";
+    const auto formatted = common_chat_templates_apply(templates.get(), chat);
+    auto prefix = common_tokenize(vocab, formatted.prompt, true, true);
+    std::string text = "The observing log separates measurements from interpretation. Each entry records the exposure and the checks used to assess its reliability.\n\n";
+    for (int i = 1; i <= 128; ++i) {
+        text += "Entry " + std::to_string(i) + ": At minute " + std::to_string(i * 3) +
+                ", the telescope recorded " + std::to_string(1000 + i * 17) +
+                " counts. The observer checked tracking, background light, and calibration before comparing this frame with the reference exposure.\n";
     }
-    auto tokens = common_tokenize(vocab, text, true, true);
-    GGML_ASSERT(tokens.size() > 1200);
+    auto tokens = common_tokenize(vocab, text, false, true);
+    GGML_ASSERT(tokens.size() > 1200 && prefix.size() + lengths.back() < 2048);
 
     std::vector<std::vector<float>> reference(lengths.size(), std::vector<float>(n_vocab));
     if (!cpu) {
@@ -153,6 +166,7 @@ int main(int argc, char ** argv) {
         }
         for (size_t i = 0; i < lengths.size(); ++i) {
             llama_memory_clear(llama_get_memory(ctx), true);
+            GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(prefix.data(), prefix.size())) == 0);
             GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data(), lengths[i])) == 0);
             auto result = logits(ctx, suppressed);
             if (!cpu) {
@@ -161,6 +175,8 @@ int main(int argc, char ** argv) {
             }
             if (cpu) {
                 reference[i] = result;
+                std::printf("cpu n=%d: reference recorded\n", lengths[i]);
+                std::fflush(stdout);
             } else if (config.cache == GGML_TYPE_F16) {
                 passed &= compare(result, reference[i], (std::string(config.name) + " n=" + std::to_string(lengths[i])).c_str());
             }
@@ -178,9 +194,9 @@ int main(int argc, char ** argv) {
             if (lengths[i] > 1024) {
                 auto memory = llama_get_memory(ctx);
                 const int start = 1100;
-                GGML_ASSERT(llama_memory_seq_rm(memory, 0, start, -1));
+                GGML_ASSERT(llama_memory_seq_rm(memory, 0, prefix.size() + start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + 20, lengths[i] - start)) == 0);
-                GGML_ASSERT(llama_memory_seq_rm(memory, 0, start, -1));
+                GGML_ASSERT(llama_memory_seq_rm(memory, 0, prefix.size() + start, -1));
                 GGML_ASSERT(llama_decode(ctx, llama_batch_get_one(tokens.data() + start, lengths[i] - start)) == 0);
                 passed &= compare(logits(ctx, suppressed), result, (std::string(config.name) + " reused KV").c_str());
             }
