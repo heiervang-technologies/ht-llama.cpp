@@ -355,6 +355,9 @@ def soak(args):
                             output.write(json.dumps({"elapsed": time.monotonic() - started, "memory": snapshot(process.pid),
                                         "results": results}, allow_nan=False) + "\n")
                             output.flush()
+                            for index, result in enumerate(results):
+                                if (count + index) % len(prompts) == 0 and "oslo" not in result.get("content", "").casefold():
+                                    raise RuntimeError(f"Soak failed the capital answer check: {name}")
                             count += slots
                             if process.poll() is not None:
                                 raise RuntimeError("Server died during soak")

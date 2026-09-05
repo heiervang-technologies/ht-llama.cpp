@@ -90,7 +90,8 @@ uses 8K context and one slot, with long prompts spanning multiple prefill batche
 hybrid uses 2K per slot, one slot for 12B and four concurrent slots for 26B.
 Both 12B phases use MTP. Logs retain responses, timing, temperature, power profile, RSS, and per-client
 DRM memory accounting. GPU allocations on this UMA device are not all reflected
-in process RSS. Each MTP soak phase must actually draft and accept tokens.
+in process RSS. Each MTP soak phase must actually draft and accept tokens. The soak also
+checks the capital answer each time that prompt recurs.
 Inspect warm RSS trends and MTP engagement/acceptance in server logs before
 accepting the soak; request success alone does not prove bounded memory or
 that speculative decoding engaged.
