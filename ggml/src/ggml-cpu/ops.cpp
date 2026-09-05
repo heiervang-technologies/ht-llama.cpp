@@ -1,4 +1,5 @@
 #include "ops.h"
+#include "copy.h"
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
@@ -373,7 +374,7 @@ static void ggml_compute_forward_dup_bytes(
     if (ggml_is_contiguous(dst)) {
         size_t id = 0;
         char * dst_ptr = (char *) dst->data;
-        const size_t rs = ne00 * type_size;
+        const size_t rs = ggml_row_size(src0->type, ne00);
 
         if (nb00 == type_size) {
             // src0 is contiguous on first dimension, copy by rows
@@ -558,6 +559,8 @@ static void ggml_compute_forward_dup_from_q(
 void ggml_compute_forward_dup(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
+
+    GGML_ASSERT(ggml_cpu_copy_layout_supported(dst));
 
     const ggml_tensor * src0 = dst->src[0];
 
