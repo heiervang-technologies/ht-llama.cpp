@@ -89,10 +89,26 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                             }},
                             {"type", "image_url"},
                         });
+                    } else if (type == "input_audio") {
+                        // Same part as Chat Completions: {"type": "input_audio",
+                        // "input_audio": {"data": <base64>, "format": "wav"|"mp3"}}.
+                        // A flat {"data", "format"} is accepted too.
+                        json audio = input_item.contains("input_audio") ? input_item.at("input_audio") : input_item;
+                        if (!audio.is_object() || !audio.contains("data")) {
+                            throw std::invalid_argument("'input_audio' requires 'data'");
+                        }
+                        json chat_audio = {{"data", audio.at("data")}};
+                        if (audio.contains("format")) {
+                            chat_audio["format"] = audio.at("format");
+                        }
+                        chatcmpl_content.push_back({
+                            {"input_audio", chat_audio},
+                            {"type", "input_audio"},
+                        });
                     } else if (type == "input_file") {
                         throw std::invalid_argument("'input_file' is not supported by llamacpp at this moment");
                     } else {
-                        throw std::invalid_argument("'type' must be one of 'input_text', 'input_image', or 'input_file'");
+                        throw std::invalid_argument("'type' must be one of 'input_text', 'input_image', 'input_audio', or 'input_file'");
                     }
                 }
 

@@ -1807,6 +1807,47 @@ static void test_convert_responses_to_chatcmpl() {
         assert_equals(std::string("You are a helpful assistant."), sys_msg.at("content").get<std::string>());
     }
 
+    // Test input_audio parts become Chat Completions input_audio parts (nested and flat)
+    {
+        json input = json::parse(R"({
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "What is said?"},
+                    {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}},
+                    {"type": "input_audio", "data": "SUQz", "format": "mp3"}
+                ]
+            }],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        const auto & content = result.at("messages")[0].at("content");
+        assert_equals((size_t)3, content.size());
+        assert_equals(std::string("input_audio"), content[1].at("type").get<std::string>());
+        assert_equals(std::string("UklGRg=="), content[1].at("input_audio").at("data").get<std::string>());
+        assert_equals(std::string("wav"), content[1].at("input_audio").at("format").get<std::string>());
+        assert_equals(std::string("input_audio"), content[2].at("type").get<std::string>());
+        assert_equals(std::string("SUQz"), content[2].at("input_audio").at("data").get<std::string>());
+        assert_equals(std::string("mp3"), content[2].at("input_audio").at("format").get<std::string>());
+    }
+
+    // Test input_audio without data is rejected
+    {
+        json input = json::parse(R"({
+            "input": [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"format": "wav"}}]}],
+            "model": "test-model"
+        })");
+        bool threw = false;
+        try {
+            server_chat_convert_responses_to_chatcmpl(input);
+        } catch (const std::invalid_argument &) {
+            threw = true;
+        }
+        assert_equals(true, threw);
+    }
+
     // Test with max_output_tokens conversion
     {
         json input = json::parse(R"({
