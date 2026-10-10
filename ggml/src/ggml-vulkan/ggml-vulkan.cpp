@@ -8753,6 +8753,14 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 }
 
 // Device tuning
+static bool ggml_vk_gemma4_hybrid_device(const vk_device & device) {
+    // PCI ID observed on the validated Ultra 5 238V. Do not extrapolate the
+    // Linux measurements to other Xe2 devices or the Windows driver.
+    return device->vendor_id == VK_VENDOR_ID_INTEL &&
+           device->properties.deviceID == 0x64a0 &&
+           device->driver_id == vk::DriverId::eIntelOpenSourceMESA;
+}
+
 static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_t n, uint32_t k, ggml_type src0_type) {
     if (device->mmvq_mode == 1) {
         return true;
@@ -8806,7 +8814,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             // Lunar Lake Xe2 benefits from integer-dot MMVQ for Q4_0 decode as
             // well.  The generic Intel exclusion below was tuned on Alchemist.
             if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K ||
-                src0_type == GGML_TYPE_Q4_0 || src0_type == GGML_TYPE_Q6_K) {
+                (src0_type == GGML_TYPE_Q4_0 && ggml_vk_gemma4_hybrid_device(device)) || src0_type == GGML_TYPE_Q6_K) {
                 return true;
             }
         }
@@ -17806,11 +17814,24 @@ static ggml_backend_dev_t ggml_backend_vk_reg_get_device(ggml_backend_reg_t reg,
     return devices[device];
 }
 
+static bool ggml_backend_vk_gemma4_hybrid_device(ggml_backend_dev_t dev) {
+    auto * ctx = static_cast<ggml_backend_vk_device_context *>(dev->context);
+    return ggml_vk_gemma4_hybrid_device(ggml_vk_get_device(ctx->device));
+}
+
+static void * ggml_backend_vk_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
+    UNUSED(reg);
+    if (strcmp(name, "ggml_backend_vk_gemma4_hybrid_device") == 0) {
+        return reinterpret_cast<void *>(ggml_backend_vk_gemma4_hybrid_device);
+    }
+    return nullptr;
+}
+
 static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ ggml_backend_vk_reg_get_proc_address,
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {

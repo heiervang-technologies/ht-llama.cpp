@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-attention-policy.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -2192,14 +2193,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     const bool k_is_tbq = k->type == GGML_TYPE_TBQ3_0 || k->type == GGML_TYPE_TBQ4_0;
     const bool v_is_tbq = v->type == GGML_TYPE_TBQ3_0 || v->type == GGML_TYPE_TBQ4_0;
     const bool any_tbq  = k_is_tbq || v_is_tbq;
-    // On Intel Xe2, Gemma 4's D=512 global prompt attention and small-batch
-    // decode are faster as the decomposed matmul/softmax graph, while D=256
-    // local prompt layers can still benefit from Flash Attention.
-    // Keep this opt-in because graph construction is backend-agnostic.
     const bool gemma4_model = arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT;
-    const bool gemma4_hybrid_fa =
-        gemma4_model && getenv("LLAMA_VK_GEMMA4_HYBRID_FA") != nullptr &&
-        (q->ne[2] < 32 || (q->ne[0] >= 512 && q->ne[2] >= 64));
+    const bool gemma4_hybrid_fa = llama_gemma4_decompose_attention(
+        cparams.gemma4_hybrid_fa, cparams.auto_fa, cparams.flash_attn, gemma4_model,
+        k->type, v->type, cparams.n_ctx_seq, cparams.n_seq_max, q->ne[0], q->ne[2]);
     const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr && !gemma4_hybrid_fa;
     const enum ggml_type tbq_attn_type = use_flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
 

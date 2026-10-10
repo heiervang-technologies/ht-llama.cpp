@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "llama-arch.h"
+#include "llama-attention-policy.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
@@ -322,6 +323,27 @@ llama_context::llama_context(
                     ggml_backend_buffer_name    (buf_output.get()),
                     ggml_backend_buffer_get_size(buf_output.get()) / 1024.0 / 1024.0);
         }
+    }
+
+    // Resolve the optional device policy once. Partial offload and non-Vulkan
+    // devices retain stock behavior; no graph-time environment changes.
+    if (!hparams.vocab_only && llama_gemma4_hybrid_requested(getenv("LLAMA_VK_GEMMA4_HYBRID_FA")) &&
+        (model.arch == LLM_ARCH_GEMMA4 || model.arch == LLM_ARCH_GEMMA4_ASSISTANT) &&
+        cparams.offload_kqv && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR) {
+        cparams.gemma4_hybrid_fa = true;
+        for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+            auto dev = model.dev_layer(il);
+            auto reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            using device_policy_fn = bool (*)(ggml_backend_dev_t);
+            auto policy = reg ? reinterpret_cast<device_policy_fn>(
+                ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_gemma4_hybrid_device")) : nullptr;
+            if (!policy || !policy(dev)) {
+                cparams.gemma4_hybrid_fa = false;
+                break;
+            }
+        }
+        LLAMA_LOG_INFO("%s: Gemma 4 hybrid device eligibility = %s (experimental F16, single-sequence, <=2048 context)\n",
+                       __func__, cparams.gemma4_hybrid_fa ? "yes" : "no");
     }
 
     // init the memory module

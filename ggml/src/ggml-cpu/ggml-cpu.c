@@ -12,6 +12,7 @@
 #include "binary-ops.h"
 #include "vec.h"
 #include "ops.h"
+#include "copy.h"
 #include "ggml.h"
 #include "common.h"
 
@@ -3319,6 +3320,16 @@ struct ggml_threadpool * ggml_threadpool_new(struct ggml_threadpool_params * tpp
 
 enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cplan * cplan) {
     ggml_cpu_init();
+
+    // Check before any worker can write output, including callers that bypass
+    // backend scheduling or execute a previously created graph plan.
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        if (!ggml_cpu_copy_layout_supported(cgraph->nodes[i])) {
+            GGML_LOG_ERROR("%s: unsupported quantized copy layout for %s\n",
+                           __func__, cgraph->nodes[i]->name);
+            return GGML_STATUS_FAILED;
+        }
+    }
 
     GGML_ASSERT(cplan);
     GGML_ASSERT(cplan->n_threads > 0);

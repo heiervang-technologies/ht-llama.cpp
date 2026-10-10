@@ -8213,6 +8213,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // CPY - different src/dst shapes (reshaping via CPY)
+    for (auto type : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
+        test_cases.emplace_back(new test_cpy(type, type, {256, 8, 4, 1}, {64, 4, 32, 1}, {0, 2, 1, 3}));
+    }
+
     // Use permutations of {3, 5, 7, 32}. Total elements: 3*5*7*32 = 3360.
     // Each src permutation is tested against canonical sorted and reverse dst (skip self).
     {
