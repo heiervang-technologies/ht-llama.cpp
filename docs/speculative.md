@@ -176,6 +176,9 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 --spec-draft-p-min, --draft-p-min       P
                                         minimum speculative decoding probability (greedy) (default: 0.00)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)
+--spec-draft-backend-sampling, --no-spec-draft-backend-sampling
+                                        offload draft sampling to the backend (default: enabled)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft  N
                                         max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)
                                         (env: LLAMA_ARG_N_GPU_LAYERS_DRAFT)
@@ -368,3 +371,5 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 
 To measure the end-to-end effect of speculative decoding (throughput, latency, and draft acceptance) across diverse prompts, see the SPEED-Bench client in [tools/server/bench/speed-bench](../tools/server/bench/speed-bench/README.md).
 It runs against a running `llama-server` and can compare a baseline run against a speculative-decoding run.
+
+For a measured `draft-mtp` baseline-vs-speculative comparison on a Pascal (sm_61) GPU, including two hardware-specific cautions, see [benchmarks/pascal-p5200-mtp.md](benchmarks/pascal-p5200-mtp.md).

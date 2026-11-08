@@ -1,0 +1,12 @@
+0.00.914.909 E llama_init_from_model: failed to initialize the context: Gemma4Assistant requires ctx_other to be set (this warning is normal during memory fitting)
+0.01.012.700 W srv    load_model: [spec] failed to measure draft model memory: failed to create llama_context from model
+0.02.787.723 W load: special_eog_ids contains '<|tool_response>', removing '</s>' token from EOG list
+0.03.669.099 W load: special_eog_ids contains '<|tool_response>', removing '</s>' token from EOG list
+0.06.297.997 W load: special_eog_ids contains '<|tool_response>', removing '</s>' token from EOG list
+0.06.459.503 W common_speculative_init: draft model is specified but 'draft' speculative type is not explicitly enabled - enabling it
+0.06.459.547 I common_speculative_impl_draft_simple: adding speculative implementation 'draft-simple'
+0.06.459.549 I common_speculative_impl_draft_simple: - n_max=3, n_min=0, p_min=0.000000
+0.06.459.552 I common_speculative_impl_draft_simple: - gpu_layers=-2, cache_k=f16, cache_v=f16, ctx_tgt=yes, ctx_dft=yes, devices=[default]
+0.06.466.766 I srv    load_model: speculative decoding context initialized
+0.07.206.856 E decode: failed to initialize batch
+0.07.206.857 E llama_decode: failed to decode, ret = -1
