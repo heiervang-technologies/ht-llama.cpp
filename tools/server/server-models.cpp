@@ -872,11 +872,30 @@ std::vector<common_lora_adapter_info> server_models::get_discovered_adapters() {
     return discovered_adapters;
 }
 
+void server_models::reserve_apply(const server_model_meta & meta) {
+    if (meta.per_device_bytes.size() > reserved_per_device.size()) {
+        reserved_per_device.resize(meta.per_device_bytes.size(), 0);
+    }
+    for (size_t i = 0; i < meta.per_device_bytes.size(); i++) {
+        reserved_per_device[i] += meta.per_device_bytes[i];
+    }
+}
+
+void server_models::reserve_release(const server_model_meta & meta) {
+    for (size_t i = 0; i < meta.per_device_bytes.size() && i < reserved_per_device.size(); i++) {
+        reserved_per_device[i] -= meta.per_device_bytes[i];
+        if (reserved_per_device[i] < 0) {
+            reserved_per_device[i] = 0; // defensive: an over-release must never leave a phantom reserve
+        }
+    }
+}
+
 void server_models::unload_lru(const std::string & candidate_name) {
     while (true) {
         size_t count_active = 0;
         bool mem_fits = true;
         std::vector<int64_t> candidate_bytes;
+        std::vector<int64_t> reserved_snapshot;
 
         {
             std::unique_lock<std::mutex> lk(mutex);
@@ -887,16 +906,19 @@ void server_models::unload_lru(const std::string & candidate_name) {
                 }
             }
 
-            // 2. Fetch candidate VRAM bytes
+            // 2. Fetch candidate VRAM bytes and the in-flight reserve (both under the lock)
             auto map_it = mapping.find(candidate_name);
             if (map_it != mapping.end()) {
                 candidate_bytes = map_it->second.meta.per_device_bytes;
             }
+            reserved_snapshot = reserved_per_device;
         }
 
         bool count_ok = (base_params.models_max <= 0) || (count_active < (size_t)base_params.models_max);
 
-        // 3. Query physical free memory for GPUs
+        // 3. Query physical free memory for GPUs, then subtract the in-flight reserve for
+        // models that are LOADING but whose cudaMalloc is not yet visible to cudaMemGetInfo.
+        // Without this subtraction a second same-device admit reads stale-high free and OOMs (#66).
         std::vector<int64_t> projected_free;
         for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -906,6 +928,9 @@ void server_models::unload_lru(const std::string & candidate_name) {
                 ggml_backend_dev_memory(dev, &free, &total);
                 projected_free.push_back(free);
             }
+        }
+        for (size_t id = 0; id < projected_free.size() && id < reserved_snapshot.size(); id++) {
+            projected_free[id] -= reserved_snapshot[id];
         }
 
         // 4. Check if candidate memory footprint fits and collect constrained devices
@@ -931,7 +956,10 @@ void server_models::unload_lru(const std::string & candidate_name) {
         {
             std::unique_lock<std::mutex> lk(mutex);
             for (const auto & m : mapping) {
-                if (m.second.meta.is_running()) {
+                // Only LOADED/SLEEPING models are evictable. A model still in LOADING has an
+                // active reserve and a half-spawned child — evicting it to make room for another
+                // load thrashes and races the child teardown, so it is never an eviction target.
+                if (m.second.meta.is_running() && m.second.meta.status != SERVER_MODEL_STATUS_LOADING) {
                     bool helps_memory = false;
                     if (!mem_fits) {
                         for (size_t id : constrained_devices) {
@@ -1271,6 +1299,13 @@ void server_models::load(const std::string & name, const load_options & opts) {
         {"status", server_model_status_to_string(inst.meta.status)},
     });
 
+    // Reserve this model's per-device VRAM now that the child is spawned and committed in
+    // LOADING state, but before its cudaMalloc becomes visible to cudaMemGetInfo. Applied here
+    // (past all throw points, still under `lk`) so it cannot leak on a failed spawn, and so no
+    // update_status() can release it early — the monitoring thread blocks on `mutex` until this
+    // load returns. Released in update_status() when the model leaves LOADING. See #66.
+    reserve_apply(inst.meta);
+
     mapping[name] = std::move(inst);
     cv.notify_all();
 }
@@ -1332,6 +1367,7 @@ void server_models::update_status(const std::string & name, const update_status_
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         auto & meta = it->second.meta;
+        const server_model_status old_status = meta.status;
         meta.status      = args.status;
         meta.exit_code   = args.exit_code;
         if (!args.loaded_info.is_null()) {
@@ -1339,6 +1375,15 @@ void server_models::update_status(const std::string & name, const update_status_
         }
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
+        }
+        // Release the in-flight VRAM reserve when the model leaves LOADING — to LOADED on a
+        // successful boot, or back to UNLOADED on a failed load. update_status() is never called
+        // with args.status == LOADING (the child's "loading" state is a no-op in handle_child_state),
+        // so any old_status == LOADING here is a genuine exit. Idempotent against the double-UNLOADED
+        // path (the crash handler and the monitoring thread can both fire): the second call observes
+        // old_status != LOADING and does nothing. See heiervang-technologies/ht-llama.cpp#66.
+        if (old_status == SERVER_MODEL_STATUS_LOADING && args.status != SERVER_MODEL_STATUS_LOADING) {
+            reserve_release(meta);
         }
     }
     // broadcast status change to SSE

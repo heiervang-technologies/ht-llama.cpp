@@ -194,6 +194,20 @@ private:
     // unload least recently used models if the limit is reached or memory is tight
     void unload_lru(const std::string & candidate_name);
 
+    // In-flight VRAM reserve for models in the LOADING state, indexed by system-GPU
+    // order (identical to server_model_meta::per_device_bytes and to the projected_free
+    // vector built in unload_lru). A model's per-device footprint is reserved when it
+    // enters LOADING — before the child process's cudaMalloc becomes visible to
+    // cudaMemGetInfo — and released when it leaves LOADING (to LOADED or, on a failed
+    // load, back to UNLOADED). Without this, two same-device admits fired close together
+    // both read stale-high free memory and co-load onto the same GPU -> OOM.
+    // See heiervang-technologies/ht-llama.cpp#66. Guarded by `mutex`.
+    std::vector<int64_t> reserved_per_device;
+
+    // apply/release the in-flight reserve for a model. Caller MUST hold `mutex`.
+    void reserve_apply(const server_model_meta & meta);
+    void reserve_release(const server_model_meta & meta);
+
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
 
