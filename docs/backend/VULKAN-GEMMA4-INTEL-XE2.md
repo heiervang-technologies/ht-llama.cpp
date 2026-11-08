@@ -1,9 +1,37 @@
 # Gemma 4 on Intel Xe2 Vulkan: architecture, Flash Attention, and tuning
 
-Status: engineering notes and local measurements, 2026-08-29.  The target used for
+Status: historical measurements from 2026-08-29; safety hardening 2026-09-05.
+The target used for
 measurements is a Core Ultra 5 238V / Lunar Lake Arc 130V/140V iGPU, Linux `xe`,
 Mesa 26.1.5 ANV, Vulkan 1.4, 32-wide subgroups, 48 KiB shared memory, FP16/BF16,
 integer dot product, KHR cooperative matrix, and unified system memory.
+
+## Safety and validation update (2026-09-05)
+
+The hybrid experiment now requires the exact value
+`LLAMA_VK_GEMMA4_HYBRID_FA=1`; unset, `0`, and other values disable it.
+Eligibility is resolved once per context and requires all model layers on the
+validated Lunar Lake PCI device `8086:64a0` with Mesa Vulkan and KV offload.
+Only F16 K **and** V, a single sequence, and configured context at most 2048
+tokens use the experimental policy. Longer contexts, multiple slots, partial
+offload, other backends/devices, and quantized caches retain stock selection.
+Flash Attention's `auto` capability probe always runs without hybrid rewriting.
+
+This restriction fixes a real unsafe combination: hybrid decomposition with
+quantized V created a transposed quantized copy unsupported by Vulkan. The CPU
+fallback treated blocks as scalar elements and wrote beyond the output tensor.
+CPU scheduling and direct/planned graph execution now reject unsupported
+quantized copy layouts before writing. Valid reshaped quantized copies also
+have a corrected row-byte calculation. The Q4_0 MMVQ exception is restricted
+to this Lunar Lake/Mesa device; prior dispatch is preserved elsewhere.
+
+The benchmark tables below are historical, not fresh acceptance evidence.
+Their original Xe2 model hashes were not recorded. The pinned, checksummed
+artifacts and repeatable validation commands in [`scripts/xe2`](../../scripts/xe2/README.md)
+establish a new baseline without claiming byte-identical reproduction.
+The [acceptance record](VULKAN-GEMMA4-INTEL-XE2-VALIDATION.md) separates passing
+preset checks from failed controls and unfinished measurements. Keep hybrid
+opt-in until its parity, lifecycle tests, depth benchmarks, and soak pass. Do not infer long-context gains from the short runs.
 
 This document is about making each usable Gemma 4 member perform well.  It does
 not recommend replacing one family member with another: the dense, unified,
@@ -190,7 +218,8 @@ should remain in a deployment A/B; the 26B prompt result clearly favored adaptiv
 ### Adaptive attention retained in this branch
 
 When `LLAMA_VK_GEMMA4_HYBRID_FA=1` is set and `--flash-attn on` is requested,
-the graph builder applies the policy to both `gemma4` and `gemma4-assistant`:
+the graph builder applies the policy to eligible `gemma4` and
+`gemma4-assistant` contexts described in the safety update above:
 
 - fewer than 32 query tokens: decomposed attention for decode and speculative
   verification;
@@ -199,9 +228,9 @@ the graph builder applies the policy to both `gemma4` and `gemma4-assistant`:
 - 64 or more query tokens: FA for D=256 local layers and decomposed attention
   for D=512 global layers.
 
-The environment gate is intentional: graph construction does not know which
-backend will ultimately execute each node, so making this Xe2 result the default
-would risk regressing CUDA, Metal, or a future faster Vulkan driver.  This is a
+The environment gate is intentional: the context checks backend/device
+eligibility, but making this experimental result the default would still risk
+regression with future drivers or unmeasured workloads. This is a
 shape-aware scheduler win rather than a new mathematical attention algorithm.
 
 Absolute iGPU rates move with package power, temperature, display activity, and
@@ -288,7 +317,8 @@ prefill; compare with all-off for 12B):
 ```bash
 LLAMA_VK_GEMMA4_HYBRID_FA=1 ./build-vulkan/bin/llama-server \
   --model MODEL.gguf --n-gpu-layers all \
-  --flash-attn on --ubatch-size 512
+  --flash-attn on --ubatch-size 512 --ctx-size 2048 --parallel 1 \
+  --cache-type-k f16 --cache-type-v f16
 ```
 
 All-off baseline:
